@@ -344,8 +344,8 @@ export async function applyLocalSkips(cfg = config(), plan, state = {}) {
                         found = index.rel.has(keeperRel);
                     }
                 }
-                // 名稱後備：分類庫已有同名檔。分軌同名可能來自不同 take，不能只靠檔名
-                if (!found && file.kind !== 'stems') found = index.names.has(path.basename(String(file.path)).toLowerCase());
+                // 名稱後備：分類庫（成品MP3／採樣包／…）已有同名檔；分軌檔名含 take 編號，同名即同一軌
+                if (!found) found = index.names.has(path.basename(String(file.path)).toLowerCase());
             }
             if (found) {
                 file.skip = true;
@@ -1962,6 +1962,7 @@ export async function organize({ dryRun = true, root = 'ai音樂', typeFolders =
 }
 
 export { FILE_TYPES, config, cacheRead, cacheWrite, cacheClear };
+
 
 
 

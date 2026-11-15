@@ -1624,7 +1624,7 @@
           // alias 只跳過 MP3（完整音檔重複）；分軌等同名檔案可能來自不同 take
           let skip = (aliased && file.kind === 'mp3') || S.fsRel.has(rel);
           if (!skip && removedRel.has(rel)) skip = S.fsRel.has(removedRel.get(rel));
-          if (!skip && file.kind !== 'stems') skip = S.fsNames.has(String(file.filename || '').toLowerCase());
+          if (!skip) skip = S.fsNames.has(String(file.filename || '').toLowerCase());
           if (skip) {
             file.skip = true;
             fsSkipped += 1;
@@ -1890,6 +1890,7 @@
   });
   console.info('[ACE 批量下載] v' + (chrome.runtime.getManifest?.().version || '') + ' 已載入');
 })();
+
 
 
 

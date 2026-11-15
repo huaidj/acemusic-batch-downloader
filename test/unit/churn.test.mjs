@@ -93,3 +93,25 @@ test('collectSamples：WAV 分軌放 採樣包WAV，不混進 採樣包', async 
   assert.equal(fs.existsSync(path.join(root, '採樣包', 'Vocals', 'WAV Song - Vocals.wav')), false);
 });
 
+
+test('applyLocalSkips：採樣包已有同名分軌時跳過，不再重複下載', async () => {
+  const root = path.join(process.env.ACE_DOWNLOAD_DIR, 'ai音樂');
+  makeFile(path.join(root, '採樣包', 'Vocals', 'Skip Test - Vocals.mp3'), 'stem-bytes');
+  await ACE.collectDownloadIndex(undefined, { refresh: true });
+  const plan = {
+    tasks: [{
+      task_id: 'so_skip_test',
+      files: [
+        { kind: 'stems', path: 'ai音樂/Skip Test/Stems/Skip Test - Vocals.mp3', filename: 'Skip Test - Vocals.mp3' },
+        { kind: 'mp3', path: 'ai音樂/Skip Test/Audio/Skip Test.mp3', filename: 'Skip Test.mp3' },
+      ],
+    }],
+    total: 2,
+    toDownload: 2,
+    skipped: 0,
+  };
+  const skipped = await ACE.applyLocalSkips(undefined, plan, { aliases: {}, removedPaths: {} });
+  assert.equal(skipped, 1);
+  assert.equal(plan.tasks[0].files[0].skip, true);
+  assert.equal(plan.tasks[0].files[1].skip, undefined);
+});
