@@ -140,6 +140,14 @@ export function summarizeSong(song, index) {
 
 const escRe = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/** 站點 error 可能是物件 { code, message }；取 message 避免 [object Object] */
+function siteErrorDetail(data, status) {
+    const error = data && (data.error || data.message);
+    if (!error) return 'HTTP ' + status;
+    if (typeof error === 'string') return error;
+    return error.message || error.code || JSON.stringify(error);
+}
+
 /** 掃描下載資料夾，回傳 { rel:Set<相對路徑小寫>, names:Set<檔名小寫> } */
 export async function collectDownloadIndex(cfg = config(), { refresh = false } = {}) {
     const ttlMs = Number(process.env.ACE_FS_INDEX_TTL_MS || 180000);
@@ -220,24 +228,42 @@ export function songDownloadSummary(song, index) {
 async function createApiFile(cfg, session, songId, kind) {
     const endpoint = `/api/songs/${encodeURIComponent(songId)}/download`;
     const deadline = Date.now() + 180000;
-    let res = await aceFetch(cfg, session, endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ kind }),
-    });
-    while (res.status === 202) {
-        if (Date.now() > deadline) throw new Error(kind + ' 生成逾時');
-        await sleep(1500);
-        res = await aceFetch(cfg, session, `${endpoint}?kind=${encodeURIComponent(kind)}`, {
-            headers: { Accept: 'application/json' },
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        let res = await aceFetch(cfg, session, endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({ kind }),
         });
-    }
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data || !data.url) {
-        const detail = (data && (data.error || data.message)) || `HTTP ${res.status}`;
+        while (res.status === 202) {
+            if (Date.now() > deadline) throw new Error(kind + ' 生成逾時');
+            await sleep(1500);
+            res = await aceFetch(cfg, session, `${endpoint}?kind=${encodeURIComponent(kind)}`, {
+                headers: { Accept: 'application/json' },
+            });
+        }
+        const data = await res.json().catch(() => null);
+        if (res.ok && data && data.url) return absolutize(cfg, data.url);
+        const detail = siteErrorDetail(data, res.status);
+        const code = data && data.error && data.error.code;
+        if (res.status === 401 || /log ?in|login/i.test(detail)) throw new Error('登入已過期，請重新整理頁面並按「同步 Agent」');
+        if (res.status === 404 && code === 'no_download') {
+            const err = new Error('站點不提供此檔案（no_download）');
+            err.code = 'NOT_AVAILABLE';
+            throw err;
+        }
+        if (res.status === 429 || code === 'rate_limited' || /too often|too many/i.test(detail)) {
+            if (attempt < 1) {
+                await sleep(60000);
+                continue;
+            }
+            const err = new Error('站點限流（429）：' + detail);
+            err.code = 'RATE_LIMIT';
+            throw err;
+        }
+        if (res.status === 402) throw new Error('目前方案不含 ' + kind + ' 下載（HTTP 402）：' + detail);
         throw new Error('無法取得 ' + kind + '：' + detail);
     }
-    return absolutize(cfg, data.url);
+    throw new Error('站點限流，請稍後再試');
 }
 
 async function resolveFileUrl(cfg, session, songId, kind) {
@@ -250,7 +276,8 @@ async function resolveFileUrl(cfg, session, songId, kind) {
     }
     if (!res.ok) {
         if (res.status === 402) throw new Error('目前方案不含 ' + kind + ' 下載（HTTP 402）');
-        if (kind === 'wav' && res.status === 404) { const err = new Error('此歌曲的模型不提供 WAV（站點 404）'); err.code = 'WAV_UNSUPPORTED'; throw err; }
+        if (res.status === 401) throw new Error('登入已過期，請重新整理頁面再試');
+        if (kind === 'wav' && (res.status === 404 || res.status === 400)) { const err = new Error('此歌曲的模型不提供 WAV（站點 ' + res.status + '）'); err.code = 'WAV_UNSUPPORTED'; throw err; }
         return direct;
     }
     const data = await res.json().catch(() => null);
@@ -397,6 +424,8 @@ export async function runDownload({ songs, options = {}, concurrency = 4, onProg
             const entry = prepEntries[index];
             prepProgress.active += 1;
             try {
+                // 站點 MIDI 生成有速率限制：MIDI 間隔 2.5 秒
+                if (entry.file.source === 'api') await sleep(entry.file.apiKind === 'midi' ? 2500 : 600);
                 entry.url =
                     entry.file.source === 'api'
                         ? await createApiFile(cfg, session, entry.task.task_id, entry.file.apiKind)
@@ -441,7 +470,7 @@ export async function runDownload({ songs, options = {}, concurrency = 4, onProg
                 if (onProgress) onProgress({ done, skipped, failed, total, current: file.path, bytes });
                 await saveState(cfg, plan, state);
             } catch (err) {
-                if (err && err.code === 'WAV_UNSUPPORTED') {
+                if (err && (err.code === 'WAV_UNSUPPORTED' || err.code === 'NOT_AVAILABLE' || err.code === 'RATE_LIMIT')) {
                     skipped += 1;
                     if (onProgress) onProgress({ done, skipped, failed, total, current: file.path, bytes, skippedReason: err.message });
                     continue;
@@ -750,6 +779,8 @@ export async function collectFullWavs({ root = 'ai音樂', folder = '成品WAV',
     const files = walkFiles(rootDir, 4, [], 60000).filter((file) => {
         if (!/\.wav$/i.test(file)) return false;
         if (file.toLowerCase().startsWith(outDir.toLowerCase())) return false;
+        // 「歌名 - Vocals.wav」是分軌，交給 collectSamples 放 採樣包WAV；成品WAV 只收完整歌曲
+        if (/ - /i.test(path.basename(file))) return false;
         const rel = path.relative(rootDir, file);
         const top = rel.split(path.sep)[0];
         return !protectedTop.has(top);
@@ -1453,6 +1484,8 @@ export async function dedupeContent({ root = 'ai音樂', commit = false, include
     report.ok = report.errors.length === 0;
     report.groupCount = report.groups.length;
     report.duplicateCount = report.duplicateFiles.length;
+    report.hardlinkDuplicates = report.duplicateFiles.filter((item) => item.hardlink).length;
+    report.realDuplicateFiles = report.duplicateCount - report.hardlinkDuplicates;
     report.finishedAt = new Date().toISOString();
     return report;
 }
@@ -1962,6 +1995,7 @@ export async function organize({ dryRun = true, root = 'ai音樂', typeFolders =
 }
 
 export { FILE_TYPES, config, cacheRead, cacheWrite, cacheClear };
+
 
 
 

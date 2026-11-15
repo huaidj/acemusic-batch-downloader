@@ -115,3 +115,14 @@ test('applyLocalSkips：採樣包已有同名分軌時跳過，不再重複下�
   assert.equal(plan.tasks[0].files[0].skip, true);
   assert.equal(plan.tasks[0].files[1].skip, undefined);
 });
+
+test('collectFullWavs：WAV 分軌不會被當成完整歌曲收進 成品WAV', async () => {
+  const root = path.join(process.env.ACE_DOWNLOAD_DIR, 'ai音樂');
+  const src = path.join(root, 'WAV Stem Song', 'Stems', 'WAV Stem Song - Vocals.wav');
+  makeFile(src, 'RIFF-wav-stem-2');
+  await ACE.collectFullWavs({ root: 'ai音樂' });
+  assert.equal(fs.existsSync(path.join(root, '成品WAV', 'WAV Stem Song - Vocals.wav')), false);
+  assert.equal(fs.existsSync(src), true);
+  await ACE.collectSamples({ root: 'ai音樂' });
+  assert.ok(fs.existsSync(path.join(root, '採樣包WAV', 'Vocals', 'WAV Stem Song - Vocals.wav')));
+});

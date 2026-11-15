@@ -140,7 +140,7 @@ https://github.com/yutianyu111602-glitch/acemusic-batch-downloader
 
 | Version | Date | Changes | Status |
 |---------|------|---------|--------|
-| 1.6.3 | 2026-11-16 | 修正分軌重複下載：採樣包已有同名分軌時跳過；WAV 分軌分流、成品WAV、狀態誤判修正。 | Draft |
+| 1.6.4 | 2026-11-16 | 登入過期／429 限流清楚提示並中止、MIDI 生成降速重試、站點不提供檔案改為跳過（不再顯示 [object Object]）、WAV 分軌不進成品WAV、去重報表區分 hardlink。 | Draft |
 
 ## Review Notes
 
@@ -154,6 +154,8 @@ https://github.com/yutianyu111602-glitch/acemusic-batch-downloader
 ### Rejection History
 
 （尚無）
+
+
 
 
 

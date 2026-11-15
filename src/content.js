@@ -125,6 +125,19 @@
     return s;
   }
 
+  /** 站點 API 的 error 可能是物件 { code, message }，字串化前先取 message，避免 [object Object] */
+  function siteErrorDetail(data, status) {
+    const error = data && (data.error || data.message);
+    if (!error) return `HTTP ${status}`;
+    if (typeof error === 'string') return error;
+    return error.message || error.code || JSON.stringify(error);
+  }
+
+  function isAuthError(err) {
+    const message = String((err && err.message) || err || '');
+    return /登入已過期|Please log in|HTTP 401/i.test(message);
+  }
+
   function storageGet(keys) {
     return new Promise((resolve) => {
       try {
@@ -1036,6 +1049,8 @@
   function songDownloadStatus(song) {
     const rawTitle = (song.meta && song.meta.title) || '';
     const title = N.songFolderLabel(rawTitle);
+    // 分軌檔名用「這首歌的資料夾名」開頭（同名多 take 也能精確歸屬）
+    const folderLabel = (S.folderByTask && S.folderByTask[song.task_id]) || title;
     // 檔名可能用完整標題（songFolderLabel 會在 '[' 截斷），兩種都比對
     const titleCandidates = [...new Set([title, N.sanitizeComponent(rawTitle, 120)].filter(Boolean))];
     const group = P.pickStemGroup(song.stems);
@@ -1068,7 +1083,10 @@
           else if (ext === 'wav') wav = true;
           else if (ext === 'mid' || ext === 'midi') midi = true;
           else if (ext === 'musicxml') musicxml = true;
-        } else if (labels.has(suffix)) stemsFound.add(labels.get(suffix));
+        } else if (labels.has(suffix)) {
+          const prefix = name.replace(/\.[^.]+$/, '').split(' - ')[0].trim().toLowerCase();
+          if (!folderLabel || prefix === String(folderLabel).toLowerCase()) stemsFound.add(labels.get(suffix));
+        }
       }
     }
     const done = S.doneKinds.get(song.task_id) || new Set();
@@ -1494,27 +1512,47 @@
   async function createApiFile(songId, kind) {
     const endpoint = `/api/songs/${encodeURIComponent(songId)}/download`;
     const deadline = Date.now() + 180000;
-    let response = await fetch(endpoint, {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind }),
-    });
-    while (response.status === 202) {
-      if (Date.now() > deadline) throw new Error(`${kind} 生成逾時`);
-      await sleep(1500);
-      response = await fetch(`${endpoint}?kind=${encodeURIComponent(kind)}`, {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      let response = await fetch(endpoint, {
+        method: 'POST',
         credentials: 'same-origin',
-        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind }),
       });
-    }
-    const data = await response.json().catch(() => null);
-    if (!response.ok || !data || !data.url) {
-      const detail = (data && (data.error || data.message)) || `HTTP ${response.status}`;
+      while (response.status === 202) {
+        if (Date.now() > deadline) throw new Error(`${kind} 生成逾時`);
+        await sleep(1500);
+        response = await fetch(`${endpoint}?kind=${encodeURIComponent(kind)}`, {
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
+      }
+      const data = await response.json().catch(() => null);
+      if (response.ok && data && data.url) return new URL(data.url, location.origin).href;
+      const detail = siteErrorDetail(data, response.status);
+      const code = data && data.error && data.error.code;
+      if (response.status === 401 || /log ?in|login/i.test(detail)) throw new Error('登入已過期，請重新整理頁面並按「同步 Agent」');
+      // 站點對某些歌曲不提供 MIDI／MusicXML（no_download）：跳過，不算失敗
+      if (response.status === 404 && code === 'no_download') {
+        const err = new Error('站點不提供此檔案（no_download）');
+        err.code = 'NOT_AVAILABLE';
+        throw err;
+      }
+      // 站點限流：等一分鐘再試，最多三次；仍失敗才中止整個 job
+      if (response.status === 429 || code === 'rate_limited' || /too often|too many/i.test(detail)) {
+        if (attempt < 2) {
+          flash(`站點限流，等待 60 秒後重試（${kind}）`);
+          await sleep(60000);
+          continue;
+        }
+        const err = new Error('站點限流（429）：' + detail);
+        err.code = 'RATE_LIMIT';
+        throw err;
+      }
       if (response.status === 402) throw new Error('目前方案不含此下載：' + detail);
-      throw new Error(String(detail));
+      throw new Error(detail);
     }
-    return new URL(data.url, location.origin).href;
+    throw new Error('站點限流，請稍後再試');
   }
 
   /** MP3 / WAV：先問站點（?as=parts）拿正確的檔案 URL；伺服器要自己產檔時用原連結 */
@@ -1528,10 +1566,11 @@
     }
     if (!response.ok) {
       if (response.status === 402) throw new Error('目前方案不含此下載（HTTP 402）');
-      if (response.status === 401 || response.status === 403) throw new Error('站點拒絕下載（HTTP ' + response.status + '）');
-      // WAV 只有部分模型（例如 amusic-v1.1）支援；不支援時跳過，不算失敗
-      if (kind === 'wav' && response.status === 404) {
-        const err = new Error('此歌曲的模型不提供 WAV（站點 404）');
+      if (response.status === 401) throw new Error('登入已過期，請重新整理頁面再試');
+      if (response.status === 403) throw new Error('站點拒絕下載（HTTP 403）');
+      // WAV 只有部分模型支援；400/404 都視為「這首沒有 WAV」→ 跳過，不算失敗
+      if (kind === 'wav' && (response.status === 404 || response.status === 400)) {
+        const err = new Error('此歌曲的模型不提供 WAV（站點 ' + response.status + '）');
         err.code = 'WAV_UNSUPPORTED';
         throw err;
       }
@@ -1657,7 +1696,7 @@
 
     const concurrency = clamp(Math.round(Number(S.options.concurrency) || 4), 1, 6);
     const apiEntries = entries.filter((entry) => entry.file.source !== 'url');
-    const apiConcurrency = clamp(Math.min(3, apiEntries.length), 1, 3);
+    const apiConcurrency = clamp(Math.min(2, apiEntries.length), 1, 2);
 
     S.running = true;
     S.cancelled = false;
@@ -1698,6 +1737,8 @@
           S.progress.activePrep = countActivePrep();
           renderProgressSoon();
           try {
+            // 站點對 MIDI 生成有速率限制：MIDI 間隔 2.5 秒、MusicXML 0.6 秒
+            if (entry.file.source === 'api') await sleep(entry.file.apiKind === 'midi' ? 2500 : 600);
             const planned = String(entry.file.sourceUrl || '');
             // MP3 若 planner 已給 local_audio（上傳型歌曲）就直接用，不要再問 /file?kind=mp3（會回 JSON）
             const genericFileUrl = !planned || /\/api\/songs\/[^/]+\/file\?kind=(mp3|wav)\b/i.test(planned);
@@ -1708,7 +1749,21 @@
                   ? await resolveFileUrl(entry.task.task_id, entry.file.kind)
                   : planned;
           } catch (err) {
-            if (err && err.code === 'WAV_UNSUPPORTED') {
+            if (isAuthError(err)) {
+              if (!S.cancelled) {
+                S.cancelled = true;
+                flash('登入已過期，請重新整理 acemusic.ai 頁面再試');
+              }
+              return;
+            }
+            if (err && err.code === 'RATE_LIMIT') {
+              if (!S.cancelled) {
+                S.cancelled = true;
+                flash('站點限流，請等一分鐘後再試');
+              }
+              return;
+            }
+            if (err && (err.code === 'WAV_UNSUPPORTED' || err.code === 'NOT_AVAILABLE')) {
               entry.unsupported = true;
               if (!S.cancelled && S.running) {
                 S.progress.skipped = (Number(S.progress.skipped) || 0) + 1;
@@ -1804,6 +1859,13 @@
           S.progress.done = done;
           saveHistorySoon();
         } catch (err) {
+          if (isAuthError(err)) {
+            if (!S.cancelled) {
+              S.cancelled = true;
+              flash('登入已過期，請重新整理 acemusic.ai 頁面再試');
+            }
+            return;
+          }
           if (S.cancelled) return;
           if (!(err && err.counted)) {
             failed += 1;
