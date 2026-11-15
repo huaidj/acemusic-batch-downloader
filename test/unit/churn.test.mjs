@@ -83,3 +83,13 @@ test('collectFullWavs：歌名資料夾的 WAV 搬到 成品WAV，自訂資料�
   assert.equal(fs.existsSync(src), false);
   assert.equal(fs.existsSync(custom), true, '自訂資料夾的 WAV 不搬');
 });
+
+test('collectSamples：WAV 分軌放 採樣包WAV，不混進 採樣包', async () => {
+  const root = path.join(process.env.ACE_DOWNLOAD_DIR, 'ai音樂');
+  const src = path.join(root, 'WAV Song', 'Stems', 'WAV Song - Vocals.wav');
+  makeFile(src, 'RIFF-wav-stem');
+  await ACE.collectSamples({ root: 'ai音樂' });
+  assert.ok(fs.existsSync(path.join(root, '採樣包WAV', 'Vocals', 'WAV Song - Vocals.wav')));
+  assert.equal(fs.existsSync(path.join(root, '採樣包', 'Vocals', 'WAV Song - Vocals.wav')), false);
+});
+

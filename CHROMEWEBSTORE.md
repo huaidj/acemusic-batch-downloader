@@ -140,7 +140,7 @@ https://github.com/yutianyu111602-glitch/acemusic-batch-downloader
 
 | Version | Date | Changes | Status |
 |---------|------|---------|--------|
-| 1.6.1 | 2026-11-16 | WAV 自動集中到「成品WAV」、只對支援模型排 WAV、修正同名／`[` 標題的下載狀態誤判、修正分軌被去重 alias 誤跳過。 | Draft |
+| 1.6.2 | 2026-11-16 | WAV 分軌自動放入「採樣包WAV」、成品WAV 集中、分軌 alias 跳過修正、狀態誤判修正。 | Draft |
 
 ## Review Notes
 
@@ -154,5 +154,6 @@ https://github.com/yutianyu111602-glitch/acemusic-batch-downloader
 ### Rejection History
 
 （尚無）
+
 
 

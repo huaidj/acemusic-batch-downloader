@@ -806,6 +806,7 @@ export async function collectFullWavs({ root = 'ai音樂', folder = '成品WAV',
 export async function collectSamples({ root = 'ai音樂', folder = '採樣包', cfg = config() } = {}) {
     const rootDir = path.join(cfg.downloadDir, toWin(root));
     const outDir = path.join(rootDir, folder);
+    const wavOutDir = path.join(rootDir, '採樣包WAV');
     await fsp.mkdir(outDir, { recursive: true });
     const stemLabelLookup = new Map(Object.values(N.STEM_TYPE_NAMES).map((value) => [String(value).toLowerCase(), String(value)]));
     const typeFolderFor = (base) => {
@@ -826,7 +827,8 @@ export async function collectSamples({ root = 'ai音樂', folder = '採樣包', 
             if (!/\.(mp3|wav|flac|aiff?)$/i.test(full)) continue;
             const base = path.basename(full);
             if (!/ - /i.test(base)) continue;
-            const typeDir = path.join(outDir, typeFolderFor(base));
+            const isWav = /\.wav$/i.test(base);
+            const typeDir = path.join(isWav ? wavOutDir : outDir, typeFolderFor(base));
             await fsp.mkdir(typeDir, { recursive: true });
             const target = path.join(typeDir, base);
             try {
@@ -840,7 +842,7 @@ export async function collectSamples({ root = 'ai音樂', folder = '採樣包', 
             }
         }
     }
-    const excludeTop = new Set([folder, '採樣', '_成品MP3', '_未對應', 'sample', 'WAI', 'WAMI', '俱樂部版', '舊版對照', '成品MP3', '成品WAV', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他', '音頻分類']);
+    const excludeTop = new Set([folder, '採樣包WAV', '採樣', '_成品MP3', '_未對應', 'sample', 'WAI', 'WAMI', '俱樂部版', '舊版對照', '成品MP3', '成品WAV', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他', '音頻分類']);
     const files = walkFiles(rootDir, 3, [], 30000);
     const report = { ok: true, folder: outDir, total: 0, copied: 0, skipped: 0, migrated: migrated.length, failed: [], bytes: 0 };
     const manifestPath = path.join(outDir, '_manifest.json');
@@ -860,12 +862,13 @@ export async function collectSamples({ root = 'ai音樂', folder = '採樣包', 
         if (!/ - /i.test(base)) continue; // 只要分軌/採樣，不要完整成品
         const dirParts = rel.slice(1, -1);
         if (dirParts.some((part) => /^(MIDI|Audio)$/i.test(part))) continue;
-        const typeDir = path.join(outDir, typeFolderFor(base));
+        const isWav = /\.wav$/i.test(base);
+        const typeDir = path.join(isWav ? wavOutDir : outDir, typeFolderFor(base));
         const target = path.join(typeDir, base);
         const key = base.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
-        pending.push({ from: full, to: target, song: rel[0], file: base, type: path.basename(typeDir) });
+        pending.push({ from: full, to: target, song: rel[0], file: base, type: path.basename(path.dirname(target)), container: /\\.wav$/i.test(base) ? '採樣包WAV' : folder });
     }
     report.total = pending.length;
     for (const item of pending) {
@@ -884,6 +887,7 @@ export async function collectSamples({ root = 'ai音樂', folder = '採樣包', 
             manifest.set(item.type + '/' + item.file, {
                 file: item.file,
                 type: item.type,
+                container: item.container || folder,
                 song: item.song,
                 source: item.from,
                 size,
@@ -943,7 +947,7 @@ export async function classifyByAttributes({ root = 'ai音樂', move = true, cfg
         pdf: '其他',
     };
     const AUDIO_EXT = new Set(['mp3', 'wav', 'flac', 'aiff', 'aif', 'ogg', 'm4a']);
-    const EXCLUDE_TOP = new Set([...Object.values(CATEGORY), '成品MP3', '成品WAV', '採樣包', '採樣', '_未對應', 'sample', 'WAI', '俱樂部版']);
+    const EXCLUDE_TOP = new Set([...Object.values(CATEGORY), '成品MP3', '成品WAV', '採樣包', '採樣包WAV', '採樣', '_未對應', 'sample', 'WAI', '俱樂部版']);
     const files = walkFiles(rootDir, 3, [], 30000);
     const byCategory = new Map();
     for (const full of files) {
@@ -1214,7 +1218,7 @@ function PROJECT_ROOT_FOR_AI() {
  */
 export async function dedupeSongCopies({ root = 'ai音樂', cfg = config() } = {}) {
     const rootDir = path.join(cfg.downloadDir, toWin(root));
-    const CATEGORY_DIRS = ['成品MP3', '成品WAV', '採樣包', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他'];
+    const CATEGORY_DIRS = ['成品MP3', '成品WAV', '採樣包', '採樣包WAV', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他'];
     const normalize = (name) => name.replace(/\.[^.]+$/, '').replace(/\s*\(\d+\)\s*$/, '').toLowerCase();
     const index = new Map(); // key: normExt|size -> categoryPath
     for (const dir of CATEGORY_DIRS) {
@@ -1251,11 +1255,11 @@ export async function dedupeSongCopies({ root = 'ai音樂', cfg = config() } = {
     return report;
 }
 
-const DEDUPE_CATEGORY_DIRS = ['成品MP3', '成品WAV', '採樣包', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他', '音頻分類'];
+const DEDUPE_CATEGORY_DIRS = ['成品MP3', '成品WAV', '採樣包', '採樣包WAV', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他', '音頻分類'];
 const DEDUPE_PROTECTED_TOP = new Set([...DEDUPE_CATEGORY_DIRS, '_未對應']);
 // 使用者手動整理的自訂資料夾：預設不動，--include-custom 才納入
 const DEDUPE_CUSTOM_TOP = new Set(['sample', 'WAI', 'WAMI', '俱樂部版', '舊版對照']);
-const CONTENT_KEEPER_PRIORITY = { 成品WAV: 0, 成品MP3: 0, 採樣包: 1, _未對應: 3 };
+const CONTENT_KEEPER_PRIORITY = { 成品WAV: 0, 成品MP3: 0, 採樣包: 1, 採樣包WAV: 2, _未對應: 3 };
 
 function keeperRank(rel) {
     const parts = rel.split(path.sep);
@@ -1958,6 +1962,9 @@ export async function organize({ dryRun = true, root = 'ai音樂', typeFolders =
 }
 
 export { FILE_TYPES, config, cacheRead, cacheWrite, cacheClear };
+
+
+
 
 
 
