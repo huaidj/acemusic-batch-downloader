@@ -1034,7 +1034,10 @@
 
   /** 每首歌目前的下載進度：{have,total,allDone,any,known,detail,mp3} */
   function songDownloadStatus(song) {
-    const title = N.songFolderLabel((song.meta && song.meta.title) || '');
+    const rawTitle = (song.meta && song.meta.title) || '';
+    const title = N.songFolderLabel(rawTitle);
+    // 檔名可能用完整標題（songFolderLabel 會在 '[' 截斷），兩種都比對
+    const titleCandidates = [...new Set([title, N.sanitizeComponent(rawTitle, 120)].filter(Boolean))];
     const group = P.pickStemGroup(song.stems);
     const labels = new Map();
     if (group) {
@@ -1047,9 +1050,13 @@
     let wav = false;
     let cover = false;
     if (S.fsAt) {
-      const re = new RegExp('^' + escRe(title) + '(?: \\(\\d+\\))?(?: - (.+))?\\.([a-z0-9]+)$', 'i');
+      const reges = titleCandidates.map((candidate) => new RegExp('^' + escRe(candidate) + '(?: \\(\\d+\\))?(?: - (.+))?\\.([a-z0-9]+)$', 'i'));
       for (const name of S.fsNames) {
-        const match = re.exec(name);
+        let match = null;
+        for (const re of reges) {
+          match = re.exec(name);
+          if (match) break;
+        }
         if (!match) continue;
         const suffix = match[1] ? match[1].trim().toLowerCase() : '';
         const ext = match[2].toLowerCase();
@@ -1072,6 +1079,13 @@
       else if (key === 'mp3') mp3 = true;
       else if (key === 'wav') wav = true;
       else if (key === 'cover') cover = true;
+    }
+    // 同名歌曲（多個 take）：檔名無法區分 task，MP3/WAV 只信這首歌自己的下載紀錄
+    const ambiguous = Array.isArray(S.songs)
+      && S.songs.filter((other) => N.songFolderLabel((other.meta && other.meta.title) || '') === title).length > 1;
+    if (ambiguous) {
+      mp3 = done.has('mp3');
+      wav = done.has('wav');
     }
     const stemsTotal = group ? group.tracks.length : 0;
     const stemsHave = stemsTotal ? Math.min(stemsTotal, stemsFound.size) : 0;
@@ -1607,9 +1621,10 @@
         for (const file of task.files) {
           if (file.skip) continue;
           const rel = String(file.path).toLowerCase();
-          let skip = aliased || S.fsRel.has(rel);
+          // alias 只跳過 MP3（完整音檔重複）；分軌等同名檔案可能來自不同 take
+          let skip = (aliased && file.kind === 'mp3') || S.fsRel.has(rel);
           if (!skip && removedRel.has(rel)) skip = S.fsRel.has(removedRel.get(rel));
-          if (!skip) skip = S.fsNames.has(String(file.filename || '').toLowerCase());
+          if (!skip && file.kind !== 'stems') skip = S.fsNames.has(String(file.filename || '').toLowerCase());
           if (skip) {
             file.skip = true;
             fsSkipped += 1;

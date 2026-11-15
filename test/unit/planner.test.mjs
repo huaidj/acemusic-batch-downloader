@@ -24,6 +24,7 @@ const songsFixture = () => [
     task_id: 'song-a',
     capability: 'music_generate',
     status: 'succeeded',
+    model: 'acemusic-v1.1',
     local_audio: '/data/mock/song-a.mp3',
     meta: { title: 'Neon Drive' },
     stems: {
@@ -314,4 +315,14 @@ test('buildDownloadPlan：mp3 優先抓 local_audio、wav 走站點 file API（o
     'https://acemusic.ai/api/songs/song-a/file?kind=wav',
   ]);
   assert.ok(task.files.every((f) => f.source === 'file'));
+});
+
+
+test('buildDownloadPlan：WAV 只排支援的模型（ace-step 不排，避免 404）', () => {
+  const v11 = { ...songsFixture()[0], model: 'acemusic-v1.1' };
+  const step = { ...songsFixture()[0], model: 'ace-step-1.5-xl' };
+  const a = planFor({ stems: false, midi: false, wav: true }, {}, [v11]);
+  const b = planFor({ stems: false, midi: false, wav: true }, {}, [step]);
+  assert.deepEqual(Array.from(a.tasks[0].files, (f) => f.kind), ['wav']);
+  assert.equal(b.tasks.reduce((sum, task) => sum + task.files.length, 0), 0);
 });

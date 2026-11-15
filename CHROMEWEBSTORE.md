@@ -20,7 +20,7 @@ ACE Music 批量下載器
 • 批次下載分軌（Vocals、Drums、Bass、Guitar、Keys…）、MIDI、MusicXML、MP3、WAV 與封面
 • 自動命名與分資料夾，例如「歌名/歌名 - Vocals.mp3」「歌名/歌名 - MIDI.mid」
 • 每首歌顯示已下載／部分／未下載，可只看未下載
-• 一鍵整理：舊檔改名、成品 MP3 集中、採樣包依樂器分類、依檔案類型分類、內容去重、音頻屬性分類（BPM／調性／能量）
+• 一鍵整理：舊檔改名、成品 MP3／成品 WAV 集中、採樣包依樂器分類、依檔案類型分類、內容去重、音頻屬性分類（BPM／調性／能量）
 • 不會重複下載已存在的檔案；可選「強制重下」
 • 可選的本機整理工具，用於修正檔名與移動檔案；不安裝也能正常下載
 • 遊戲化附加：本機 CLI／MCP 可讓進階使用者用 agent 操作同一份資料
@@ -140,7 +140,7 @@ https://github.com/yutianyu111602-glitch/acemusic-batch-downloader
 
 | Version | Date | Changes | Status |
 |---------|------|---------|--------|
-| 1.6.0 | 2026-11-16 | 恢復 WAV 下載（模型支援時）；不支援自動跳過。內容去重、分類、agent CLI/MCP/Hub。 | Draft |
+| 1.6.1 | 2026-11-16 | WAV 自動集中到「成品WAV」、只對支援模型排 WAV、修正同名／`[` 標題的下載狀態誤判、修正分軌被去重 alias 誤跳過。 | Draft |
 
 ## Review Notes
 
@@ -154,4 +154,5 @@ https://github.com/yutianyu111602-glitch/acemusic-batch-downloader
 ### Rejection History
 
 （尚無）
+
 

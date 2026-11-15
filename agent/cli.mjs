@@ -28,7 +28,7 @@ async function hubTry(pathname, { method = 'GET', body, timeoutMs = 1200 } = {})
 }
 
 function usage() {
-    console.log(`ACE Music 批量下載器 CLI  v1.6.0
+    console.log(`ACE Music 批量下載器 CLI  v1.6.1
 
 用法：
   node cli.mjs doctor                         檢查登入狀態與環境
@@ -592,6 +592,7 @@ main().catch((err) => {
     console.error('錯誤：' + ((err && err.message) || err));
     process.exit(1);
 });
+
 
 
 

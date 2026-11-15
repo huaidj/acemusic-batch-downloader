@@ -30,6 +30,14 @@
     return !!song && song.status === 'succeeded' && !!song.local_audio;
   }
 
+  /** 站點目前只有 acemusic-v1.1 模型提供 WAV；其他模型抓 ?kind=wav 會 404 */
+  const WAV_MODELS = Object.freeze(['acemusic-v1.1', 'acemusic-v1.2', 'acemusic-v1.3']);
+  function supportsWav(song) {
+    const model = String((song && song.model) || '');
+    if (!model) return false;
+    return WAV_MODELS.some((m) => model === m || model.startsWith(m + '-') || model.startsWith(m + '.'));
+  }
+
   /** 站點判定 MIDI / MusicXML 可用的條件（見 public/app.js dlOptions） */
   function midiAvailable(song) {
     return isDone(song) && (song.capability === 'music_generate' || song.capability === 'music_transcribe');
@@ -154,7 +162,7 @@
         });
       }
 
-      if (opts.types.has('wav') && isDone(song)) {
+      if (opts.types.has('wav') && isDone(song) && supportsWav(song)) {
         push({
           key: 'wav',
           kind: 'wav',
@@ -213,6 +221,7 @@
     normalizeOptions,
     isDone,
     midiAvailable,
+    supportsWav,
     pickStemGroup,
     absolutize,
     buildDownloadPlan,

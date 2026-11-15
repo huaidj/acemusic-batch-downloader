@@ -163,7 +163,7 @@ node agent/cli.mjs doctor --json
 重複清理（歷史遺留）：
 
 ```powershell
-node agent/cli.mjs dedupe-content            # 預覽：全庫相同內容（size→sha256），keeper 優先 成品MP3 > 採樣包 > 歌名資料夾
+node agent/cli.mjs dedupe-content            # 預覽：全庫相同內容（size→sha256），keeper 優先 成品WAV＝成品MP3 > 採樣包 > 歌名資料夾
 node agent/cli.mjs dedupe-content --commit    # 搬移副本到 %LOCALAPPDATA%\AceMusicDL\organize-backups\content-*
 node agent/cli.mjs dedupe-folders --commit    # 移除空資料夾
 ```
@@ -171,7 +171,7 @@ node agent/cli.mjs dedupe-folders --commit    # 移除空資料夾
 ## 7. 已知行為（v1.3.0）
 
 - `classify-audio`：只把「成功」的分析結果寫進快取；暫時失敗的檔案下次會重新分析。真的解不出音訊的檔案會列在 `音頻分類\_manifest.json` 的 `unanalyzable`（含原因），**不會**讓整趟整理變成失敗，也不會重試到天荒地老。
-- `tidy-all`／`watch`：`ok:false` 現在只代表有步驟發生「管線級」錯誤（例如 python 起不來）；單純幾首歌分析不了不算失敗。`watch --status` 會回 `alive`／`stale`／`running` 三個判定欄位，`stale:true` 就是上次中斷留下的紀錄。
+- `tidy-all` 的步驟新增 `wav`：歌名資料夾內的 WAV 會搬到 `成品WAV/`（`俱樂部版`／`sample` 等自訂資料夾不動），之後才做內容去重與空殼清理。`n- `tidy-all`／`watch`：`ok:false` 現在只代表有步驟發生「管線級」錯誤（例如 python 起不來）；單純幾首歌分析不了不算失敗。`watch --status` 會回 `alive`／`stale`／`running` 三個判定欄位，`stale:true` 就是上次中斷留下的紀錄。
 - `mixdesk` 是獨立子系統（電台混音台），不屬於擴充功能；生成閉環預設只支援 `adapter=mock`，ACE 付費生成會明確拒絕，不會偷呼叫付費 API。
 - 下載索引上限已提高到 200,000 筆（舊版 4,000 在 Downloads 長大後會截斷，導致誤判未下載而重複下載）。若你手動搬動大量檔案，可 `node agent/cli.mjs cache clear` 讓索引重建。
 - `dedupe-folders` 只處理「內容完全相同」的副本與空資料夾；同名不同內容的歌不會被合併。
@@ -198,5 +198,6 @@ node agent\cli.mjs hub --stop         # 關閉
  
 MCP 工具會自動偵測 hub（`ACE_HUB_URL`），偵測不到就本地回落；`ace_hub_status` 可查是否連上。
 `ACE_HUB_PORT`、`ACE_HUB_TOKEN`（選用）、`ACE_HUB_SNAPSHOT_TTL_MS` 可調。
+
 
 

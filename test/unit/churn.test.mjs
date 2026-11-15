@@ -70,3 +70,16 @@ test('collectSamples：完整歌曲（含 " - " 的標題）不得被收進採�
   assert.equal(copied.includes('Artist Name - Song Title.mp3'), false, '完整歌曲不可進採樣包');
   assert.equal(copied.includes('Song Title - Vocals.mp3'), true, '分軌應進採樣包');
 });
+
+test('collectFullWavs：歌名資料夾的 WAV 搬到 成品WAV，自訂資料夾不動', async () => {
+  const root = path.join(process.env.ACE_DOWNLOAD_DIR, 'ai音樂');
+  const src = path.join(root, 'Churn Test (9)', 'Audio', 'Churn Test (9).wav');
+  const custom = path.join(root, '俱樂部版', '俱樂部測試.wav');
+  makeFile(src, 'RIFF-src');
+  makeFile(custom, 'RIFF-custom');
+  const report = await ACE.collectFullWavs({ root: 'ai音樂' });
+  assert.ok(report.moved >= 1);
+  assert.ok(fs.existsSync(path.join(root, '成品WAV', 'Churn Test (9).wav')));
+  assert.equal(fs.existsSync(src), false);
+  assert.equal(fs.existsSync(custom), true, '自訂資料夾的 WAV 不搬');
+});

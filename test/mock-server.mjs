@@ -40,7 +40,7 @@ export const SONGS = [
     task_id: 'song-a',
     capability: 'music_generate',
     status: 'succeeded',
-    model: 'ace-step-v2',
+    model: 'acemusic-v1.1',
     created_at: TS('2026-11-15T10:00:00Z'),
     local_audio: '/data/mock/song-a.mp3',
     local_play: '/data/mock/song-a.mp3',
@@ -394,3 +394,4 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
     console.log(`mock server placeholder on http://127.0.0.1:${port}`);
   });
 }
+
