@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ace-music-downloader": {
+      "command": "node",
+      "args": ["F:\\code\\acemusic-batch-downloader\\agent\\mcp.mjs"]
+    }
+  }
+}

@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ACE MIX DESK — AI 電台混音台</title>
+<style>
+  :root { color-scheme: dark; --bg:#0b0d12; --panel:#12151d; --line:#232836; --text:#e7e9f2; --dim:#8a90a6; --accent:#7c9cff; --ok:#7ee2a8; --warn:#ffd08a; --bad:#ff8a9a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:radial-gradient(1200px 600px at 20% -10%, #1a2133 0%, var(--bg) 55%); color:var(--text); font:13px/1.5 "Segoe UI", "Noto Sans TC", sans-serif; }
+  header { display:flex; align-items:center; gap:14px; padding:14px 22px; border-bottom:1px solid var(--line); background:rgba(12,14,20,.85); position:sticky; top:0; backdrop-filter:blur(10px); z-index:5; }
+  header h1 { font-size:16px; margin:0; letter-spacing:2px; }
+  header .sub { color:var(--dim); font-size:11px; letter-spacing:1px; }
+  header .spacer { flex:1; }
+  .pill { border:1px solid var(--line); border-radius:999px; padding:3px 10px; color:var(--dim); font-size:11px; }
+  .pill.ok { color:var(--ok); border-color:#2c5a43; }
+  main { display:grid; grid-template-columns: 320px minmax(420px,1fr) 380px; gap:14px; padding:14px 18px 26px; align-items:start; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+  .card h2 { font-size:12px; letter-spacing:1.5px; color:var(--dim); margin:0 0 10px; text-transform:uppercase; }
+  .row { display:flex; align-items:center; gap:8px; }
+  .muted { color:var(--dim); }
+  .small { font-size:11px; }
+  button { background:#1b2030; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 10px; font-size:12px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:#22305a; border-color:#3b5bb5; }
+  button.warn { border-color:#6b4a22; }
+  select, input[type=number], textarea { background:#0f1219; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 8px; font-size:12px; font-family:inherit; }
+  textarea { width:100%; min-height:120px; resize:vertical; line-height:1.45; }
+  .track-list { display:flex; flex-direction:column; gap:6px; max-height:360px; overflow:auto; }
+  .track { border:1px solid var(--line); border-radius:9px; padding:8px; display:flex; align-items:center; gap:8px; cursor:pointer; background:#0f1219; }
+  .track.active { border-color:var(--accent); background:#141b2d; }
+  .track .title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .badge { font-size:10px; padding:1px 6px; border-radius:999px; border:1px solid var(--line); color:var(--dim); }
+  .badge.opening{color:#9cc7ff;border-color:#2d4c7a} .badge.build{color:#ffe39c;border-color:#6a5a26} .badge.peak{color:#ff9db0;border-color:#6d2c3a} .badge.cooldown{color:#9ce8d8;border-color:#26564d} .badge.transition{color:#c6b3ff;border-color:#45376f}
+  .now { display:flex; flex-direction:column; gap:10px; }
+  .now .title { font-size:22px; font-weight:600; letter-spacing:.5px; }
+  .meters { display:flex; gap:8px; flex-wrap:wrap; }
+  .meter { border:1px solid var(--line); border-radius:8px; padding:6px 9px; min-width:86px; background:#0e1118; }
+  .meter b { display:block; font-size:15px; }
+  .meter span { color:var(--dim); font-size:10px; letter-spacing:1px; }
+  audio { width:100%; margin-top:10px; }
+  .slot-line { display:flex; gap:6px; margin-top:9px; flex-wrap:wrap; }
+  .slot { flex:1; text-align:center; border:1px solid var(--line); border-radius:8px; padding:6px 2px; font-size:11px; color:var(--dim); }
+  .slot.on { border-color:var(--accent); color:var(--accent); background:#141b2d; }
+  .pending { border:1px dashed #5f4422; border-radius:9px; padding:8px; margin-bottom:8px; background:#15120c; }
+  .decision { border:1px solid #2c5a43; border-radius:9px; padding:8px; margin-bottom:8px; background:#0e1712; }
+  .refs { display:flex; flex-direction:column; gap:4px; max-height:150px; overflow:auto; border:1px solid var(--line); border-radius:8px; padding:6px; }
+  .refs label { display:flex; gap:6px; align-items:center; font-size:11.5px; color:var(--text); }
+  .badge-list { display:flex; gap:5px; flex-wrap:wrap; margin-top:4px; }
+  .log { max-height:180px; overflow:auto; font-size:11px; color:var(--dim); display:flex; flex-direction:column; gap:2px; }
+  .prompt { border-left:2px solid var(--accent); padding-left:8px; margin:6px 0; white-space:pre-wrap; font-size:11.5px; color:#d9dcec; }
+  .prompt .row { white-space:normal; }
+  button { white-space:nowrap; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .hint { color:var(--dim); font-size:11px; }
+  .toast { position:fixed; bottom:18px; right:18px; padding:8px 14px; border-radius:9px; background:#1b2030; border:1px solid var(--line); color:var(--text); font-size:12px; opacity:0; transition:opacity .2s; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ACE MIX DESK</h1>
+  <span class="sub">AI 生成音樂混音台 · 數據路由中心</span>
+  <span class="spacer"></span>
+  <span class="pill" id="libRoot">library</span>
+  <span class="pill ok" id="agentPill">agent: heuristic ready</span>
+</header>
+
+<main>
+  <!-- 左：曲庫 -->
+  <section class="card">
+    <h2>曲庫 / Queue</h2>
+    <div class="row" style="margin-bottom:8px">
+      <input id="indexLimit" type="number" min="0" value="30" style="width:64px" title="索引分析數量（0=全部）" />
+      <button class="primary" id="btnIndex">索引曲庫</button>
+      <button id="btnNext">下一首 →</button>
+      <button id="btnClosedLoop" title="預先監聽 → 提示詞 → mock 生成 → 新歌回流">跑一輪閉環</button>
+    </div>
+    <div class="hint" id="counts" style="margin-bottom:8px">—</div>
+    <div class="track-list" id="trackList"></div>
+  </section>
+
+  <!-- 中：播放器 -->
+  <section class="card now">
+    <h2>NOW PLAYING</h2>
+    <div class="title" id="nowTitle">尚未播放</div>
+    <div class="muted small" id="nowMeta">—</div>
+    <div class="meters">
+      <div class="meter"><b id="mBpm">—</b><span>BPM</span></div>
+      <div class="meter"><b id="mKey">—</b><span>KEY</span></div>
+      <div class="meter"><b id="mEnergy">—</b><span>ENERGY</span></div>
+      <div class="meter"><b id="mDur">—</b><span>DURATION</span></div>
+    </div>
+    <audio id="player" controls preload="none"></audio>
+    <div class="slot-line" id="slotLine"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="btnPrelisten">對這首做預先監聽（Agent）</button>
+      <button id="btnAutoDecide">用啟發式立即決策</button>
+    </div>
+    <div class="hint" style="margin-top:8px">預先監聽＝送給 Agent 分析：放電台哪裡、下一段提示詞來源、是否推薦為目標曲、參考哪三首。</div>
+  </section>
+
+  <!-- 右：Agent 決策 / 提示詞 -->
+  <section class="card">
+    <h2>Agent 決策 / 提示詞</h2>
+    <div id="pendingBox"></div>
+    <div id="decisionBox"></div>
+    <h2 style="margin-top:12px">提示詞庫</h2>
+    <div id="promptBox" class="small"></div>
+  </section>
+</main>
+
+<main style="grid-template-columns: 320px minmax(420px,1fr) 380px; padding-top:0">
+  <section class="card">
+    <h2>電台事件 / 路由日誌</h2>
+    <div class="log" id="eventLog"></div>
+  </section>
+  <section class="card">
+    <h2>決策表單（Agent 回傳格式）</h2>
+    <div class="grid2">
+      <label class="small">fitSlot
+        <select id="slotSelect">
+          <option value="opening">opening 暖場</option>
+          <option value="build" selected>build 推進</option>
+          <option value="peak">peak 高潮</option>
+          <option value="cooldown">cooldown 降溫</option>
+          <option value="transition">transition 過渡</option>
+        </select>
+      </label>
+      <label class="small">目標推薦
+        <input type="checkbox" id="targetCheck" /> 選為下一首生成目標
+      </label>
+    </div>
+    <div class="small" style="margin:6px 0 4px">參考曲目（最多 3 首）</div>
+    <div class="refs" id="refsBox"></div>
+    <textarea id="promptArea" placeholder="提示詞（可自由寫；留空會用啟發式模板）"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="primary" id="btnSubmit">送出決策</button>
+      <button id="btnFill">填入啟發式內容</button>
+      <span class="hint" id="formHint"></span>
+    </div>
+  </section>
+  <section class="card">
+    <h2>使用方式</h2>
+    <div class="small muted" style="line-height:1.7">
+      1. 先按「索引曲庫」（0＝全部）分析 BPM/調性/能量。<br/>
+      2. 點一首歌 → 「對這首做預先監聽」建立 pending，或「用啟發式立即決策」。<br/>
+      3. Agent（DSH/MCP）可用 <code>mixdesk_pending</code> 取得任務，用 <code>mixdesk_submit_prelisten</code> 回傳決策。<br/>
+      4. 「送出決策」會寫入提示詞庫；之後接生成任務形成閉環。
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { data: null, selected: null, fill: null, refs: new Set() };
+let player = document.getElementById('player');
+let currentTrack = null;
+
+function toast(text) { const el = $('toast'); el.textContent = text; el.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove('show'), 2600); }
+const fmt = (n, d = 1) => (n == null ? '—' : Number(n).toFixed(d));
+const mmss = (sec) => (sec == null ? '—' : Math.floor(sec / 60) + ':' + String(Math.round(sec % 60)).padStart(2, '0'));
+
+async function api(path, options = {}) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+async function refresh() {
+  try {
+    state.data = await api('/api/state');
+    render();
+  } catch (err) { toast('讀取狀態失敗：' + err.message); }
+}
+
+function render() {
+  const d = state.data; if (!d) return;
+  $('libRoot').textContent = '曲庫 ' + d.counts.tracks + ' 首';
+  $('counts').textContent = `曲目 ${d.counts.tracks} · 決策 ${d.counts.decisions} · 提示詞 ${d.counts.prompts} · 生成 ${d.counts.generations ?? 0} · 待辦 ${d.counts.pending}`;
+  const now = d.nowPlaying;
+  $('nowTitle').textContent = now ? now.title : '尚未播放';
+  $('nowMeta').textContent = now ? `slot: ${now.slot} · ${now.id}` : '—';
+  $('mBpm').textContent = now ? fmt(now.bpm) : '—';
+  $('mKey').textContent = now ? (now.key || '—') : '—';
+  $('mEnergy').textContent = now ? (now.energy == null ? '—' : Number(now.energy).toFixed(3)) : '—';
+  $('mDur').textContent = now ? mmss(now.duration) : '—';
+  if (now && (!currentTrack || currentTrack.id !== now.id)) {
+    currentTrack = now;
+    player.src = '/media/' + encodeURIComponent(now.id);
+  }
+  const activeSlot = d.station && d.station.slot;
+  $('slotLine').innerHTML = (d.slots || []).map((slot) => `<div class="slot ${slot === activeSlot ? 'on' : ''}">${slot}</div>`).join('');
+  $('trackList').innerHTML = d.queue.map((track) => `
+    <div class="track ${state.selected === track.id ? 'active' : ''}" data-id="${track.id}">
+      <span class="title" title="${escapeHtml(track.title)}">${escapeHtml(track.title)}</span>
+      <span class="badge ${track.slot}">${track.slot || '-'}</span>
+      <span class="muted small">${fmt(track.bpm)}/${track.key || '-'}</span>
+    </div>`).join('') || '<div class="hint">曲庫是空的，先索引。</div>';
+  document.querySelectorAll('.track').forEach((el) => el.addEventListener('click', () => selectTrack(el.dataset.id)));
+  $('pendingBox').innerHTML = d.pending.length
+    ? d.pending.map((pending) => `<div class="pending"><div class="row"><b>${escapeHtml(pending.title)}</b><span class="spacer"></span><button data-pending="${pending.trackId}">啟發式決策</button></div><div class="hint">pending ${pending.id} · BPM ${fmt(pending.track.bpm)} · ${pending.track.key || '-'}</div></div>`).join('')
+    : '<div class="hint">沒有待分析的預先監聽任務。</div>';
+  document.querySelectorAll('[data-pending]').forEach((btn) => btn.addEventListener('click', () => autoDecide(btn.dataset.pending)));
+  const lastDecisions = d.events.filter((event) => event.type === 'decision.applied').slice(-2);
+  $('decisionBox').innerHTML = lastDecisions.length ? lastDecisions.map((event) => `<div class="decision small">已套用決策 ${event.payload.decisionId}：${escapeHtml(event.payload.trackId)} → ${event.payload.slot}</div>`).join('') : '';
+  const prompts = (d.prompts || []).slice(-3);
+  const generations = (d.generations || []).slice(-3);
+  $('promptBox').innerHTML =
+    (prompts
+      .map(
+        (prompt) => `
+    <div class="prompt">
+      <div class="row"><b>${escapeHtml(prompt.id)}</b><span class="hint">${escapeHtml(prompt.status || 'draft')}</span><span class="spacer"></span>
+      <button data-gen="${escapeHtml(prompt.id)}" title="用 mock adapter 離線生成並回流索引" ${prompt.status === 'done' ? 'disabled' : ''}>生成</button></div>
+      <div>${escapeHtml(String(prompt.prompt).slice(0, 220))}</div>
+    </div>`,
+      )
+      .join('') || '<div class="hint">尚無提示詞。</div>') +
+    (generations.length
+      ? '<div class="hint" style="margin-top:6px">最近生成：' +
+        generations
+          .map((gen) => `${escapeHtml(gen.id)} ${escapeHtml(gen.status)}${gen.resultTrackId ? ' → ' + escapeHtml(gen.resultTrackId) : ''}${gen.error ? '（' + escapeHtml(gen.error) + '）' : ''}`)
+          .join(' · ') +
+        '</div>'
+      : '');
+  document.querySelectorAll('[data-gen]').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        const data = await api('/api/generate', { method: 'POST', body: JSON.stringify({ promptId: btn.dataset.gen, adapter: 'mock' }) });
+        toast('生成完成 → ' + (data.generation.resultTrackId || '未回流'));
+      } catch (err) {
+        toast('生成失敗：' + err.message);
+      }
+      refresh();
+    }),
+  );
+  $('eventLog').innerHTML = (d.events || []).slice(-25).reverse().map((event) => `<div>${new Date(event.at).toLocaleTimeString()} · ${event.type}</div>`).join('');
+  renderRefs();
+}
+
+function escapeHtml(text) { return String(text == null ? '' : text).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])); }
+
+function renderRefs() {
+  const d = state.data; if (!d) return;
+  const pool = d.queue.filter((track) => track.id !== state.selected).slice(0, 20);
+  $('refsBox').innerHTML = pool.map((track) => `<label><input type="checkbox" data-ref="${track.id}" ${state.refs.has(track.id) ? 'checked' : ''}/> ${escapeHtml(track.title)} <span class="muted">${fmt(track.bpm)} ${track.key || ''}</span></label>`).join('') || '<div class="hint">先索引曲庫。</div>';
+  document.querySelectorAll('[data-ref]').forEach((cb) => cb.addEventListener('change', () => {
+    const id = cb.dataset.ref;
+    if (cb.checked) { if (state.refs.size >= 3) { cb.checked = false; toast('參考曲最多 3 首'); return; } state.refs.add(id); }
+    else state.refs.delete(id);
+  }));
+  $('formHint').textContent = state.selected ? '目標：' + state.selected : '請先點選曲目';
+}
+
+async function selectTrack(id) {
+  state.selected = id;
+  state.refs = new Set();
+  render();
+  try {
+    const data = await api('/api/prelisten', { method: 'POST', body: JSON.stringify({ trackId: id, auto: false }) });
+    toast(data.pending ? '已建立預先監聽任務（pending）' : '已存在任務');
+    refresh();
+  } catch (err) { /* 由按鈕操作即可 */ }
+}
+
+async function autoDecide(trackId) {
+  try { await api('/api/prelisten', { method: 'POST', body: JSON.stringify({ trackId, auto: true }) }); toast('已用啟發式決策'); refresh(); }
+  catch (err) { toast('決策失敗：' + err.message); }
+}
+
+$('btnIndex').addEventListener('click', async () => {
+  try { const limit = Number($('indexLimit').value || 0); toast('索引中…'); const data = await api('/api/index', { method: 'POST', body: JSON.stringify({ limit }) }); toast(`索引完成：${data.total} 首（分析 ${data.analyzed}）`); refresh(); }
+  catch (err) { toast('索引失敗：' + err.message); }
+});
+$('btnNext').addEventListener('click', async () => {
+  try { const data = await api('/api/queue', { method: 'POST', body: JSON.stringify({}) }); if (data.track) { await api('/api/play', { method: 'POST', body: JSON.stringify({ trackId: data.track.id }) }); toast('下一首：' + data.track.title); refresh(); } }
+  catch (err) { toast('失敗：' + err.message); }
+});
+$('btnClosedLoop').addEventListener('click', async () => {
+  const btn = $('btnClosedLoop');
+  btn.disabled = true;
+  try {
+    const data = await api('/api/closed-loop', { method: 'POST', body: JSON.stringify({ adapter: 'mock' }) });
+    toast(`閉環完成：${data.decisionId} → ${data.promptId} → ${data.generation.status}${data.generation.resultTrackId ? '（回流 ' + data.generation.resultTrackId + '）' : ''}`);
+  } catch (err) { toast('閉環失敗：' + err.message); }
+  btn.disabled = false;
+  refresh();
+});
+$('btnPrelisten').addEventListener('click', async () => {
+  if (!state.selected) return toast('先點一首歌');
+  try { await api('/api/prelisten', { method: 'POST', body: JSON.stringify({ trackId: state.selected, auto: false }) }); toast('已建立 pending，等 Agent 分析'); refresh(); }
+  catch (err) { toast('失敗：' + err.message); }
+});
+$('btnAutoDecide').addEventListener('click', () => { if (state.selected) autoDecide(state.selected); else toast('先點一首歌'); });
+$('btnFill').addEventListener('click', async () => {
+  if (!state.selected) return toast('先點一首歌');
+  try {
+    const data = await api('/api/prelisten', { method: 'POST', body: JSON.stringify({ trackId: state.selected, auto: true, decidedBy: 'heuristic-preview' }) });
+    const dec = data.decision;
+    $('slotSelect').value = dec.fitSlot;
+    $('targetCheck').checked = !!(dec.targetRecommendation && dec.targetRecommendation.selected);
+    $('promptArea').value = dec.prompt;
+    state.refs = new Set((dec.references || []).map((ref) => ref.trackId));
+    renderRefs();
+    toast('已填入啟發式決策');
+    refresh();
+  } catch (err) { toast('失敗：' + err.message); }
+});
+$('btnSubmit').addEventListener('click', async () => {
+  if (!state.selected) return toast('先點一首歌');
+  const prompt = $('promptArea').value.trim();
+  if (!prompt) return toast('提示詞不能為空');
+  const refs = [...state.refs].slice(0, 3).map((id) => ({ trackId: id }));
+  try {
+    await api('/api/decisions', { method: 'POST', body: JSON.stringify({
+      trackId: state.selected,
+      decidedBy: 'ui',
+      fitSlot: $('slotSelect').value,
+      prompt,
+      references: refs,
+      targetRecommendation: { selected: $('targetCheck').checked, reason: 'UI 表單設定' },
+      promptSource: 'UI 手動/Agent 回填',
+    }) });
+    toast('決策已寫入');
+    refresh();
+  } catch (err) { toast('送出失敗：' + err.message); }
+});
+player.addEventListener('ended', async () => {
+  try { const data = await api('/api/queue', { method: 'POST', body: JSON.stringify({}) }); if (data.track) { await api('/api/play', { method: 'POST', body: JSON.stringify({ trackId: data.track.id }) }); player.play().catch(() => {}); refresh(); } }
+  catch (err) { toast('自動接歌失敗：' + err.message); }
+});
+refresh();
+setInterval(refresh, 2500);
+</script>
+</body>
+</html>

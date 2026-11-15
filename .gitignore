@@ -1,0 +1,32 @@
+# dependencies
+node_modules/
+
+# build / release artifacts
+dist/
+
+# local runtime & internal state
+.loopx/
+*.bak
+*.bak-*
+_tmp/
+test/.tmp/
+test/artifacts/
+test/spike/.tmp/
+test/spike/*.log
+
+# internal docs (not part of the public repo)
+CONTRACT.md
+VERIFICATION.md
+test/FINDINGS.md
+test/spike/
+
+# python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# logs
+*.log

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ACE Music 批量下載器 — 隱私政策</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; background: #0b0d14; color: #e7e9f3; font: 16px/1.7 system-ui, "Segoe UI", "Noto Sans TC", sans-serif; }
+    main { max-width: 760px; margin: 0 auto; padding: 48px 24px 80px; }
+    h1 { font-size: 1.7rem; margin: 0 0 6px; }
+    .muted { color: #9aa0b5; font-size: .9rem; }
+    h2 { font-size: 1.1rem; margin-top: 34px; border-left: 3px solid #6c8cff; padding-left: 10px; }
+    a { color: #8fb0ff; }
+    ul { padding-left: 1.2rem; }
+    code { background: #151a26; padding: 1px 5px; border-radius: 4px; }
+    footer { margin-top: 48px; color: #9aa0b5; font-size: .85rem; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>隱私政策／Privacy Policy</h1>
+  <p class="muted">ACE Music 批量下載器・最後更新 2026-11-16</p>
+
+  <p>ACE Music 批量下載器（以下稱「本擴充功能」）只在使用者自己的瀏覽器內運作，處理使用者自己在 acemusic.ai 的歌曲與登入狀態。</p>
+
+  <h2>收集與使用</h2>
+  <ul>
+    <li><strong>登入狀態（Cookie）</strong>：讀取使用者自己 acemusic.ai 的登入 Cookie，用來呼叫站點自己的 API（列出歌曲、產生 MIDI／MusicXML、下載檔案）。Cookie 只存在本機 <code>chrome.storage.local</code>；按下「同步 Agent」時另寫入本機檔案 <code>%LOCALAPPDATA%\AceMusicDL\session.json</code> 供本機 CLI／MCP 使用。</li>
+    <li><strong>歌曲資料</strong>：歌名、分軌、時長、封面網址等，只用來顯示與建立下載清單，儲存在本機快取。</li>
+    <li><strong>下載紀錄</strong>：檔案路徑與狀態，存在本機，用於避免重複下載與整理。</li>
+  </ul>
+
+  <h2>傳輸對象</h2>
+  <ul>
+    <li>只與 <code>acemusic.ai</code>／<code>www.acemusic.ai</code> 通訊（使用者正在使用的站點）。</li>
+    <li>不連接任何第三方伺服器、分析服務或廣告網路。</li>
+    <li>不販售、不分享、不用於信用評估或與核心功能無關的用途。</li>
+  </ul>
+
+  <h2>本機檔案</h2>
+  <ul>
+    <li>下載的檔案寫入使用者的 Downloads 資料夾。</li>
+    <li>選用的本機整理工具（native messaging host）只在使用者按下整理按鈕時，於 Downloads 目錄內移動／改名檔案。</li>
+    <li>Agent 匯出的登入狀態只存放在本機 <code>%LOCALAPPDATA%\AceMusicDL\</code>，不會上傳。</li>
+  </ul>
+
+  <h2>資料刪除</h2>
+  <ul>
+    <li>移除擴充功能即清除其 <code>chrome.storage.local</code> 資料。</li>
+    <li>可手動刪除 <code>%LOCALAPPDATA%\AceMusicDL\</code> 與 <code>Downloads\ai音樂\</code>。</li>
+  </ul>
+
+  <h2>聯絡</h2>
+  <p>隱私相關問題請開 <a href="https://github.com/yutianyu111602-glitch/acemusic-batch-downloader/issues">GitHub Issue</a>。</p>
+
+  <footer>本擴充功能與 ACE Music／ACE Studio 無隸屬關係，為非官方工具。</footer>
+</main>
+</body>
+</html>
