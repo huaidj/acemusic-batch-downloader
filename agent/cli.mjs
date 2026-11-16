@@ -359,9 +359,16 @@ async function main() {
         if (args.flags.status) {
             try {
                 const health = (await hubRequest('/health', { base, timeoutMs: 2500 })).data;
-                const overview = (await hubRequest('/overview', { base, timeoutMs: 2500 })).data;
-                const counts = overview && overview.counts;
-                const payload = { ok: true, url: base, hub: health, counts: counts || null, overviewError: counts ? undefined : (overview && overview.error) || 'overview 無資料' };
+                // health 有回應就是「在跑」；overview 慢（剛啟動、首次快照建立中）不代表 Hub 沒在跑
+                let overview = null;
+                let overviewErr = '';
+                try {
+                    overview = (await hubRequest('/overview', { base, timeoutMs: 2500 })).data;
+                } catch (err) {
+                    overviewErr = /timeout/i.test(String(err && err.message)) ? '首次快照建立中，稍後再查' : String((err && err.message) || err);
+                }
+                const counts = (overview && overview.counts) || (health && health.counts);
+                const payload = { ok: true, url: base, hub: health, counts: counts || null, overviewError: counts ? undefined : overviewErr || (overview && overview.error) || 'overview 無資料' };
                 if (args.flags.json) return printJson(payload);
                 console.log(`Hub 運行中：${base}（v${health.version}，pid ${health.pid}，${Math.round(health.uptimeMs / 1000)}s）`);
                 if (counts) console.log(`  歌曲 ${counts.songs}（已下載 ${counts.downloaded}／部分 ${counts.partial}／未下載 ${counts.undownloaded}）`);
