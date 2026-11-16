@@ -37,6 +37,8 @@ function usage() {
   node cli.mjs events [--since seq] [--type t]  中樞事件（新歌、自動下載、下載完成）
   node cli.mjs wait [--timeout 秒]             等待下一首新歌（需 Hub＋開著站點分頁）
   node cli.mjs probe                           站點健康（唯讀）
+  node cli.mjs backups [--keep-days 7] [--keep-last 1] [--max-mb N] [--prune --commit]  整理備份清單／清理（預設只預覽）
+  node cli.mjs masters                         母帶清單（俱樂部版／舊版對照，唯讀）
   node cli.mjs list [--query 關鍵字] [--undownloaded] [--json] 列出可下載歌曲
   node cli.mjs download --all [選項]           下載全部歌曲
   node cli.mjs download --song <task_id> ...   下載指定歌曲（可重複）
@@ -160,6 +162,36 @@ async function main() {
             console.log(`  ${label.padEnd(18)} ${String(c.files).padStart(5)} 檔${c.bytes != null ? `　${(c.bytes / 1048576).toFixed(1)} MB` : ''}`);
         }
         if (result.otherFolderCount) console.log(`  （另有 ${result.otherFolderCount} 個未分類資料夾，例如歌名資料夾）`);
+        return;
+    }
+
+    if (cmd === 'backups') {
+        // 預設只預覽；--prune --commit 才刪。規則：保留最近 --keep-last 個（1），其餘超過 --keep-days 天（7）或總量超過 --max-mb 才刪
+        const result = await ACE.pruneBackups(cfg, {
+            keepDays: args.flags['keep-days'] != null ? Number(args.flags['keep-days']) : 7,
+            keepLast: args.flags['keep-last'] != null ? Number(args.flags['keep-last']) : 1,
+            maxBytes: args.flags['max-mb'] ? Number(args.flags['max-mb']) * 1048576 : 0,
+            commit: !!(args.flags.prune && args.flags.commit),
+        });
+        if (args.flags.json) return printJson(result);
+        const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
+        if (!result.exists) return console.log('沒有備份資料夾：' + result.root);
+        console.log(`備份：${result.backups.length} 個，共 ${mb(result.bytesTotal)}（${result.root}）`);
+        for (const b of result.backups) console.log(`  ${result.prune.some((p) => p.name === b.name) ? '✂' : ' '} ${b.name.padEnd(44)} ${String(b.files).padStart(4)} 檔 ${mb(b.bytes).padStart(10)}  ${b.ageDays} 天`);
+        if (result.committed) console.log(`已刪除 ${result.removed.length} 個，釋放 ${mb(result.bytesReclaimable)}${result.failed.length ? `；失敗 ${result.failed.length}` : ''}`);
+        else console.log(`依規則可刪 ${result.prune.length} 個（✂），可釋放 ${mb(result.bytesReclaimable)}。確認後加 --prune --commit 執行。`);
+        return;
+    }
+
+    if (cmd === 'masters') {
+        const result = await ACE.listMasters(cfg);
+        if (args.flags.json) return printJson(result);
+        if (!result.total) return console.log('沒有母帶檔（俱樂部版／舊版對照）');
+        for (const m of result.masters) {
+            const w = m.wav ? `　${m.wav.sampleRate / 1000}kHz/${m.wav.bitsPerSample}bit ${m.wav.codec}${m.wav.durationSec ? ' ' + m.wav.durationSec + 's' : ''}` : '';
+            console.log(`  [${m.folder}] ${m.name}　${(m.bytes / 1048576).toFixed(1)} MB${w}`);
+        }
+        console.log(result.note);
         return;
     }
 

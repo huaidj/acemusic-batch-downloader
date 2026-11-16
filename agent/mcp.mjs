@@ -101,6 +101,24 @@ const TOOLS = [
         },
     },
     {
+        name: 'ace_backups',
+        description: '整理備份（organize-backups）清單與「依規則可刪」預覽（唯讀；實際刪除請使用者用 CLI：backups --prune --commit）。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                keep_days: { type: 'number', description: '超過幾天可刪（預設 7）' },
+                keep_last: { type: 'number', description: '至少保留最近幾個（預設 1）' },
+                max_mb: { type: 'number', description: '總量上限 MB（超過由舊到新列為可刪）' },
+            },
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'ace_masters',
+        description: '母帶清單（俱樂部版／舊版對照）：每個版本的格式、取樣率、位元深度、長度。唯讀；不同版本不是重複。',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    },
+    {
         name: 'ace_probe',
         description: '站點健康（唯讀、不扣額度）：/api/status 是否可連、是否登入、方案、可用模型。',
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -310,6 +328,17 @@ async function callTool(name, args) {
             } catch {
                 return await ACE.libraryOverview(undefined, { withSizes: !!args.sizes });
             }
+        }
+        case 'ace_backups': {
+            return await ACE.pruneBackups(undefined, {
+                keepDays: args.keep_days != null ? Number(args.keep_days) : 7,
+                keepLast: args.keep_last != null ? Number(args.keep_last) : 1,
+                maxBytes: args.max_mb ? Number(args.max_mb) * 1048576 : 0,
+                commit: false, // MCP 只預覽；刪除留給使用者
+            });
+        }
+        case 'ace_masters': {
+            return await ACE.listMasters();
         }
         case 'ace_probe': {
             return await ACE.probeSite();

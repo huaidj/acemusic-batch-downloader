@@ -168,6 +168,11 @@ function startPageWatch() {
 
 async function getSnapshot() {
   if (snapshot && Date.now() - snapshotAt < SNAPSHOT_TTL) return snapshot;
+  // stale-while-revalidate：有舊快照就立刻回，背景重算（讀取永遠是毫秒級，不等站點）
+  if (snapshot) {
+    refreshSnapshot().catch(() => {});
+    return snapshot;
+  }
   try {
     return await refreshSnapshot();
   } catch (err) {

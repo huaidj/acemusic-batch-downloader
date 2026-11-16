@@ -146,6 +146,178 @@ export async function libraryOverview(cfg = config(), { withSizes = false } = {}
     };
 }
 
+/* ------------------------------------------------------------------ *
+ * 備份保留（organize-backups）：預設只預覽；commit 才刪
+ * ------------------------------------------------------------------ */
+function dirStats(dir) {
+    let files = 0;
+    let bytes = 0;
+    const stack = [dir];
+    while (stack.length) {
+        const cur = stack.pop();
+        let entries = [];
+        try {
+            entries = fs.readdirSync(cur, { withFileTypes: true });
+        } catch {
+            continue;
+        }
+        for (const entry of entries) {
+            const full = path.join(cur, entry.name);
+            if (entry.isDirectory()) stack.push(full);
+            else {
+                files += 1;
+                try {
+                    bytes += fs.statSync(full).size;
+                } catch {
+                    /* ignore */
+                }
+            }
+        }
+    }
+    return { files, bytes };
+}
+
+/**
+ * 列出備份並計算「依規則會刪哪些」。規則：保留最近 keepLast 個（預設 1）；其餘超過 keepDays 天
+ * 或總量超過 maxBytes（由舊到新刪）才列為可刪。commit=true 才真的刪（移除整個備份資料夾）。
+ */
+export async function pruneBackups(cfg = config(), { keepDays = 7, keepLast = 1, maxBytes = 0, commit = false, now = Date.now() } = {}) {
+    const root = path.join(cfg.stateDir, 'organize-backups');
+    let names = [];
+    try {
+        names = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    } catch {
+        return { ok: true, root, exists: false, backups: [], prune: [], keep: [], bytesTotal: 0, bytesReclaimable: 0, committed: false };
+    }
+    const backups = names
+        .map((name) => {
+            const dir = path.join(root, name);
+            const mtimeMs = fs.statSync(dir).mtimeMs;
+            return { name, dir, mtime: new Date(mtimeMs).toISOString(), mtimeMs, ageDays: Math.round(((now - mtimeMs) / 86400000) * 10) / 10, ...dirStats(dir) };
+        })
+        .sort((a, b) => b.mtimeMs - a.mtimeMs); // 新 → 舊
+    const keep = new Set(backups.slice(0, Math.max(0, keepLast)).map((b) => b.name));
+    const prune = new Set();
+    for (const b of backups) {
+        if (!keep.has(b.name) && keepDays >= 0 && b.ageDays > keepDays) prune.add(b.name);
+    }
+    if (maxBytes > 0) {
+        let total = backups.filter((b) => !prune.has(b.name)).reduce((s, b) => s + b.bytes, 0);
+        for (const b of [...backups].reverse()) {
+            if (total <= maxBytes) break;
+            if (keep.has(b.name) || prune.has(b.name)) continue;
+            prune.add(b.name);
+            total -= b.bytes;
+        }
+    }
+    const pruneList = backups.filter((b) => prune.has(b.name));
+    const removed = [];
+    const failed = [];
+    if (commit) {
+        for (const b of pruneList) {
+            try {
+                fs.rmSync(b.dir, { recursive: true, force: true });
+                removed.push(b.name);
+            } catch (err) {
+                failed.push({ name: b.name, error: String((err && err.message) || err) });
+            }
+        }
+        await appendLog(`prune-backups removed=${removed.join(',') || '-'} failed=${failed.length}`);
+    }
+    const strip = ({ mtimeMs, ...rest }) => rest;
+    return {
+        ok: failed.length === 0,
+        root,
+        exists: true,
+        rules: { keepDays, keepLast, maxBytes },
+        backups: backups.map(strip),
+        prune: pruneList.map(strip),
+        keep: backups.filter((b) => !prune.has(b.name)).map((b) => b.name),
+        bytesTotal: backups.reduce((s, b) => s + b.bytes, 0),
+        bytesReclaimable: pruneList.reduce((s, b) => s + b.bytes, 0),
+        committed: !!commit,
+        removed,
+        failed,
+    };
+}
+
+/* ------------------------------------------------------------------ *
+ * 母帶清單（唯讀）：俱樂部版／舊版對照的音檔格式；不刪任何檔
+ * ------------------------------------------------------------------ */
+export function readWavInfo(file) {
+    let fd;
+    try {
+        fd = fs.openSync(file, 'r');
+        const head = Buffer.alloc(4096);
+        const n = fs.readSync(fd, head, 0, head.length, 0);
+        if (n < 12 || head.toString('ascii', 0, 4) !== 'RIFF' || head.toString('ascii', 8, 12) !== 'WAVE') return null;
+        let off = 12;
+        let fmt = null;
+        let dataBytes = 0;
+        while (off + 8 <= n) {
+            const id = head.toString('ascii', off, off + 4);
+            const size = head.readUInt32LE(off + 4);
+            if (id === 'fmt ' && off + 24 <= n) {
+                fmt = {
+                    format: head.readUInt16LE(off + 8),
+                    channels: head.readUInt16LE(off + 10),
+                    sampleRate: head.readUInt32LE(off + 12),
+                    byteRate: head.readUInt32LE(off + 16),
+                    bitsPerSample: head.readUInt16LE(off + 22),
+                };
+            } else if (id === 'data') {
+                dataBytes = size;
+                break;
+            }
+            off += 8 + size + (size % 2);
+        }
+        if (!fmt) return null;
+        const durationSec = fmt.byteRate ? Math.round((dataBytes / fmt.byteRate) * 10) / 10 : null;
+        return { ...fmt, durationSec, codec: fmt.format === 3 ? 'float' : fmt.format === 1 ? 'pcm' : 'fmt' + fmt.format };
+    } catch {
+        return null;
+    } finally {
+        if (fd != null) fs.closeSync(fd);
+    }
+}
+
+export async function listMasters(cfg = config(), { folders = ['俱樂部版', '舊版對照'] } = {}) {
+    const root = path.join(cfg.downloadDir, 'ai音樂');
+    const out = [];
+    for (const folder of folders) {
+        const dir = path.join(root, folder);
+        let entries = [];
+        try {
+            entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch {
+            continue;
+        }
+        for (const entry of entries) {
+            if (!entry.isFile()) continue;
+            const ext = path.extname(entry.name).toLowerCase();
+            if (!['.wav', '.mp3', '.flac', '.aif', '.aiff', '.m4a'].includes(ext)) continue;
+            const full = path.join(dir, entry.name);
+            const size = fs.statSync(full).size;
+            const base = path.basename(entry.name, ext);
+            // 「歌名_HD_48k24」→ song=歌名、version=HD_48k24（第一個版本標記之後全算版本）
+            const m = /^(.*?)_((?:ClubHD|Club|HD|Master|Ext|Radio)(?:_.*)?)$/i.exec(base);
+            out.push({
+                folder,
+                file: full,
+                name: entry.name,
+                song: m ? m[1] : base,
+                version: m ? m[2] : null,
+                ext: ext.slice(1),
+                bytes: size,
+                wav: ext === '.wav' ? readWavInfo(full) : undefined,
+            });
+        }
+    }
+    const bySong = {};
+    for (const item of out) (bySong[item.song] = bySong[item.song] || []).push(item.name);
+    return { ok: true, root, total: out.length, note: '唯讀清單；不同版本（HD／Club…）不是重複，是否刪除由使用者決定', masters: out, bySong };
+}
+
 /** 站點健康（唯讀）：/api/status 的方案／模型；不回傳個資 */
 export async function probeSite(cfg = config()) {
     const started = Date.now();
