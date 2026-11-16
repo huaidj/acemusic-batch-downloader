@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { config, readJson, writeJson, exists, toWin, sleep, appendLog, cacheRead, cacheWrite, cacheClear, cachePeek } from './config.mjs';
 import { loadShared } from './shared.mjs';
+import { inspectAudioFile, validateAudioBuffer } from './audio-library.mjs';
 
 const { N, P, PR } = loadShared();
 const SNAPSHOT_NAME = 'library-snapshot';
@@ -786,7 +787,7 @@ async function resolveFileUrl(cfg, session, songId, kind) {
     if (!res.ok) {
         if (res.status === 402) throw new Error('目前方案不含 ' + kind + ' 下載（HTTP 402）');
         if (res.status === 401) throw new Error('登入已過期，請重新整理頁面再試');
-        if (kind === 'wav' && (res.status === 404 || res.status === 400)) { const err = new Error('此歌曲的模型不提供 WAV（站點 ' + res.status + '）'); err.code = 'WAV_UNSUPPORTED'; throw err; }
+        if (kind === 'wav' && (res.status === 404 || res.status === 400)) { const err = new Error('站點暫時找不到 WAV（HTTP ' + res.status + '），保留待補'); err.code = 'FILE_NOT_READY'; throw err; }
         return direct;
     }
     const data = await res.json().catch(() => null);
@@ -804,14 +805,16 @@ async function downloadToFile(cfg, session, url, relPath) {
     const target = path.join(cfg.downloadDir, toWin(relPath));
     await fsp.mkdir(path.dirname(target), { recursive: true });
     const res = await aceFetch(cfg, session, url, { headers: { Accept: '*/*' } });
-    if (!res.ok) throw new Error('HTTP ' + res.status + '：' + String(url).slice(-80));
+    if (!res.ok) throw new Error('檔案下載 HTTP ' + res.status);
     const contentType = String(res.headers.get('content-type') || '');
     if (/json|html/i.test(contentType)) {
-        const body = (await res.text()).slice(0, 300);
-        throw new Error('伺服器回傳非檔案內容（' + contentType + '）：' + body);
+        await res.body?.cancel();
+        throw new Error('伺服器回傳非檔案內容（' + contentType + '）');
     }
     const buffer = Buffer.from(await res.arrayBuffer());
     if (!buffer.length) throw new Error('檔案為空');
+    const extension = path.extname(relPath).slice(1).toLowerCase();
+    if (extension === 'wav' || extension === 'mp3') validateAudioBuffer(buffer, extension);
     const tmp = target + '.part';
     await fsp.writeFile(tmp, buffer);
     await fsp.rename(tmp, target);
@@ -888,6 +891,17 @@ export async function randomPrompt(cfg = config(), { model = 'acemusic-v1.1', mo
 }
 export async function buildPlanForSongs(cfg = config(), songs, options = {}) {
     const state = await loadState(cfg);
+    const existingHistory = {};
+    for (const [taskId, entry] of Object.entries(state.history || {})) {
+        const files = {};
+        for (const [kind, info] of Object.entries(entry.files || {})) {
+            const absolute = info.absolute || (info.path ? path.join(cfg.downloadDir, toWin(info.path)) : '');
+            if (!absolute || !exists(absolute)) continue;
+            if ((kind === 'wav' || kind === 'mp3') && (await inspectAudioFile(absolute)).validity === 'damaged') continue;
+            files[kind] = info;
+        }
+        existingHistory[taskId] = { ...entry, files };
+    }
     const types = options.types || ['stems', 'midi'];
     const lossyModels = (Array.isArray(types) ? types : [...types]).includes('wav') ? await getLossyModels(cfg) : null;
     const plan = P.buildDownloadPlan({
@@ -900,7 +914,7 @@ export async function buildPlanForSongs(cfg = config(), songs, options = {}) {
             origin: cfg.baseUrl,
             lossyModels,
         },
-        state,
+        state: { ...state, history: existingHistory },
         origin: cfg.baseUrl,
     });
     return { plan, state };
@@ -909,29 +923,26 @@ export async function buildPlanForSongs(cfg = config(), songs, options = {}) {
 /** 以本機檔案／去重紀錄／alias 套用跳過（給 runDownload 與 dry-run 共用） */
 export async function applyLocalSkips(cfg = config(), plan, state = {}) {
     const index = await collectDownloadIndex(cfg);
-    const aliases = state.aliases || {};
-    const removedPaths = state.removedPaths || {};
+    const verified = await readJson(path.join(cfg.stateDir, 'verified-audio.json'), {});
+    const verifiedByTask = new Map((Array.isArray(verified.files) ? verified.files : []).map((file) => [file.task_id + '|' + file.kind, file]));
     let skipped = 0;
     for (const task of plan.tasks) {
-        const aliased = !!aliases[task.task_id];
         for (const file of task.files) {
             if (file.skip) continue;
-            // alias 是「這首歌的完整音檔與 keeper 重複」，只跳過 MP3；
-            // 分軌／MIDI／MusicXML／封面是不同檔案，不能因整首重複就全部跳過
-            let found = aliased && file.kind === 'mp3';
+            const proof = verifiedByTask.get(task.task_id + '|' + file.kind);
+            let found = !!(proof && proof.absolute && exists(proof.absolute) && fs.statSync(proof.absolute).size === proof.bytes);
+            if (found && file.kind === 'wav') found = (await inspectAudioFile(proof.absolute)).validity === 'valid';
             if (!found) {
                 const rel = String(file.path).toLowerCase();
                 if (index.rel.has(rel)) {
                     found = true;
-                } else {
-                    const keeper = removedPaths[rel];
-                    if (keeper) {
-                        const keeperRel = path.relative(cfg.downloadDir, keeper).split(path.sep).join('/').toLowerCase();
-                        found = index.rel.has(keeperRel);
-                    }
                 }
                 // 名稱後備：分類庫（成品MP3／採樣包／…）已有同名檔；分軌檔名含 take 編號，同名即同一軌
-                if (!found) found = index.names.has(path.basename(String(file.path)).toLowerCase());
+                if (!found && file.kind !== 'mp3' && file.kind !== 'wav') found = index.names.has(path.basename(String(file.path)).toLowerCase());
+                if (found && (file.kind === 'mp3' || file.kind === 'wav')) {
+                    const actual = path.join(cfg.downloadDir, toWin(file.path));
+                    found = (await inspectAudioFile(actual)).validity !== 'damaged';
+                }
             }
             if (found) {
                 file.skip = true;
@@ -984,7 +995,7 @@ export async function runDownload({ songs, options = {}, concurrency = 4, onProg
             prepProgress.active += 1;
             try {
                 // 站點 MIDI 生成有速率限制：MIDI 間隔 2.5 秒
-                if (entry.file.source === 'api') await sleep(entry.file.apiKind === 'midi' ? 2500 : 600);
+                if (entry.file.source === 'api') await sleep(entry.file.apiKind === 'full' || entry.file.apiKind === 'midi' ? 2500 : 600);
                 entry.url =
                     entry.file.source === 'api'
                         ? await createApiFile(cfg, session, entry.task.task_id, entry.file.apiKind)
@@ -1158,42 +1169,110 @@ export async function extractFullMp3s({
     const all = songs || (await listSongs(cfg));
     const list = all.filter((song) => song && song.task_id && P.isDone(song));
     const orderedAll = [...list].sort(
-        (a, b) => (Number(a.created_at) || 0) - (Number(b.created_at) || 0) || songTitleFile(a).localeCompare(songTitleFile(b)),
+        (a, b) => (Number(a.created_at) || 0) - (Number(b.created_at) || 0) || songTitleFile(a).localeCompare(songTitleFile(b)) || String(a.task_id).localeCompare(String(b.task_id)),
     );
-    const ordered = Number(limit) > 0 ? orderedAll.slice(0, Number(limit)) : orderedAll;
     const state = await loadState(cfg).catch(() => ({ folderByTask: {} }));
     const outDir = path.join(cfg.downloadDir, toWin(root), folder);
     await fsp.mkdir(outDir, { recursive: true });
+    const manifestPath = path.join(outDir, '_manifest.json');
+    const previous = await readJson(manifestPath).catch(() => null);
+    const previousItems = previous && Array.isArray(previous.items) ? previous.items : [];
+    const browserHistory = await readJson(cfg.historyFile, { items: [] });
 
-    const used = new Map();
-    const items = ordered.map((song) => {
+    const audioUrlKey = (value) => {
+        try { const url = new URL(value, cfg.baseUrl); return url.origin + url.pathname; } catch { return ''; }
+    };
+    const localAudioOwners = new Map();
+    for (const song of list) {
+        if (!song.local_audio) continue;
+        const key = audioUrlKey(song.local_audio);
+        if (!localAudioOwners.has(key)) localAudioOwners.set(key, new Set());
+        localAudioOwners.get(key).add(song.task_id);
+    }
+    const isSongAudioUrl = (song, value) => {
+        try {
+            const url = new URL(value, cfg.baseUrl);
+            if (url.origin !== new URL(cfg.baseUrl).origin && audioUrlKey(value) !== audioUrlKey(song.local_audio || '')) return false;
+            if (url.pathname === `/data/${song.task_id}.mp3`) return true;
+            if (url.pathname === `/api/songs/${encodeURIComponent(song.task_id)}/file` && url.searchParams.get('kind') === 'mp3') return true;
+            const key = audioUrlKey(value);
+            return !!song.local_audio && key === audioUrlKey(song.local_audio) && localAudioOwners.get(key)?.size === 1;
+        } catch { return false; }
+    };
+    const pathOwners = new Map();
+    const filesByTask = new Map();
+    const addOwnedPath = (taskId, file, bytes = null) => {
+        if (!file || !/\.mp3$/i.test(file)) return;
+        const full = path.resolve(file);
+        const key = full.toLowerCase();
+        if (!pathOwners.has(key)) pathOwners.set(key, new Set());
+        pathOwners.get(key).add(taskId);
+        if (!filesByTask.has(taskId)) filesByTask.set(taskId, []);
+        filesByTask.get(taskId).push({ full, bytes });
+    };
+    for (const item of (browserHistory && Array.isArray(browserHistory.items) ? browserHistory.items : [])) {
+        if (item.state !== 'complete' || !item.filename || !/\.mp3$/i.test(item.filename)) continue;
+        for (const song of list) {
+            if (isSongAudioUrl(song, item.url) || isSongAudioUrl(song, item.finalUrl)) addOwnedPath(song.task_id, item.filename, item.fileSize);
+        }
+    }
+    for (const [taskId, item] of Object.entries(state.history || {})) {
+        const mp3 = item && item.files && item.files.mp3;
+        if (mp3) addOwnedPath(taskId, mp3.absolute || (mp3.path && path.join(cfg.downloadDir, toWin(mp3.path))));
+    }
+    const ownsPath = (song, full) => {
+        const owners = pathOwners.get(path.resolve(full).toLowerCase());
+        return owners && owners.size === 1 && owners.has(song.task_id);
+    };
+    const ownsSource = (song, entry) => {
+        if (!entry.source) return false;
+        return /^https?:/i.test(entry.source) || entry.source.startsWith('/')
+            ? isSongAudioUrl(song, entry.source)
+            : ownsPath(song, entry.source);
+    };
+    const usableFile = (full, expectedBytes = null) => {
+        try {
+            const stat = fs.statSync(full);
+            return stat.isFile() && stat.size > 0 && (!(Number(expectedBytes) > 0) || stat.size === Number(expectedBytes));
+        } catch { return false; }
+    };
+    const validName = (name) => typeof name === 'string' && name === path.basename(name) && /\.mp3$/i.test(name);
+    const filenameOwners = new Map();
+    for (const entry of previousItems) {
+        if (!entry.task_id || !validName(entry.file)) continue;
+        const key = entry.file.toLowerCase();
+        if (!filenameOwners.has(key)) filenameOwners.set(key, new Set());
+        filenameOwners.get(key).add(entry.task_id);
+    }
+    const verifiedTarget = (song, name) => previousItems.some((entry) => entry.task_id === song.task_id && entry.file === name && ownsSource(song, entry) && usableFile(path.join(outDir, name), entry.size));
+    const used = new Set();
+    const availableName = (song, name) => {
+        const key = name.toLowerCase();
+        const owners = filenameOwners.get(key);
+        if (used.has(key) || (owners && (owners.size !== 1 || !owners.has(song.task_id)))) return false;
+        // A file without task-specific provenance is an original to preserve, not a title match.
+        return !exists(path.join(outDir, name)) || verifiedTarget(song, name);
+    };
+
+    const assigned = orderedAll.map((song) => {
         const base = songTitleFile(song);
-        const key = base.toLowerCase();
-        const count = (used.get(key) || 0) + 1;
-        used.set(key, count);
-        return { song, title: songTitleText(song), filename: count === 1 ? `${base}.mp3` : `${base} (${count}).mp3` };
+        const oldNames = previousItems.filter((entry) => entry.task_id === song.task_id && validName(entry.file))
+            .sort((a, b) => Number(ownsSource(song, b)) - Number(ownsSource(song, a)) || String(b.at || '').localeCompare(String(a.at || '')) || a.file.localeCompare(b.file));
+        let filename = oldNames.find((entry) => availableName(song, entry.file))?.file;
+        for (let count = 1; !filename; count++) {
+            const candidate = count === 1 ? `${base}.mp3` : `${base} (${count}).mp3`;
+            if (availableName(song, candidate)) filename = candidate;
+        }
+        used.add(filename.toLowerCase());
+        return { song, title: songTitleText(song), filename };
     });
-
-    const files = walkFiles(cfg.downloadDir, 3, [], 20000);
-    const outDirLower = outDir.toLowerCase();
-    const libraryFiles = files.filter((full) => {
-        const fullLower = full.toLowerCase();
-        return !fullLower.startsWith(outDirLower) && !fullLower.includes('\\_未對應\\') && /\.mp3$/i.test(full);
-    });
-
-    const findExisting = (song, title) => {
-        const labels = new Set([N.sanitizeComponent(title, 80).toLowerCase()]);
-        const stateLabel = state.folderByTask && state.folderByTask[song.task_id];
-        if (stateLabel) labels.add(N.sanitizeComponent(String(stateLabel), 100).toLowerCase());
-        for (const full of libraryFiles) {
-            const base = path.basename(full).toLowerCase();
-            if (base.includes(' - ')) continue;
-            const stem = base.replace(/\.mp3$/, '');
-            for (const label of labels) {
-                if (!label) continue;
-                if (stem === label) return full;
-                if (new RegExp('^' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\(\\d+\\)$').test(stem)) return full;
-            }
+    const items = Number(limit) > 0 ? assigned.slice(0, Number(limit)) : assigned;
+    const findExisting = (song) => {
+        for (const item of filesByTask.get(song.task_id) || []) {
+            if (ownsPath(song, item.full) && usableFile(item.full, item.bytes)) return item.full;
+        }
+        for (const entry of previousItems) {
+            if (entry.task_id === song.task_id && validName(entry.file) && ownsSource(song, entry) && usableFile(path.join(outDir, entry.file), entry.size)) return path.join(outDir, entry.file);
         }
         return null;
     };
@@ -1209,10 +1288,8 @@ export async function extractFullMp3s({
         bytes: 0,
         startedAt: new Date().toISOString(),
     };
-    const manifestPath = path.join(outDir, '_manifest.json');
-    const previous = await readJson(manifestPath).catch(() => null);
     const manifest = new Map();
-    for (const entry of (previous && Array.isArray(previous.items) ? previous.items : [])) {
+    for (const entry of previousItems) {
         if (entry && entry.task_id) manifest.set(entry.task_id + '|' + entry.file, entry);
     }
     let done = 0;
@@ -1239,25 +1316,14 @@ export async function extractFullMp3s({
             if (!item) return;
             const target = path.join(outDir, item.filename);
             const temp = target + '.part';
-            // 內容去重／alias 跳過：目標已被去重搬走且 keeper 還在 → 不要再下載一次
-            const targetKey = target.toLowerCase();
-            const keeperPath = state.removedPaths && state.removedPaths[targetKey];
-            const aliased = state.aliases && state.aliases[item.song.task_id];
-            if (!force && !exists(target) && ((keeperPath && exists(keeperPath)) || (aliased && item.file.kind === 'mp3'))) {
-                report.skipped += 1;
-                report.deduped = (report.deduped || 0) + 1;
-                done += 1;
-                emit(item.title);
-                continue;
-            }
             let mode = '';
             let source = '';
             try {
-                if (!force && exists(target) && fs.statSync(target).size > 0) {
+                if (!force && verifiedTarget(item.song, item.filename)) {
                     report.skipped += 1;
                     mode = 'skipped';
                 } else {
-                    const found = force ? null : findExisting(item.song, item.title);
+                    const found = force ? null : findExisting(item.song);
                     if (found) {
                         await fsp.copyFile(found, temp);
                         await fsp.rename(temp, target);
@@ -1265,7 +1331,7 @@ export async function extractFullMp3s({
                         mode = 'copied';
                         report.copied += 1;
                     } else {
-                        const url = await resolveFullAudioUrl(cfg, session, item.song);
+                        const url = item.song.local_audio ? absolutize(cfg, item.song.local_audio) : await resolveFullAudioUrl(cfg, session, item.song);
                         const res = await aceFetch(cfg, session, url, { headers: { Accept: '*/*' } });
                         if (!res.ok) throw new Error('HTTP ' + res.status + '：' + String(url).slice(-70));
                         const contentType = String(res.headers.get('content-type') || '');

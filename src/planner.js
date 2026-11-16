@@ -317,6 +317,40 @@
     return { type, label, have: have ? 1 : 0, total: 1, done: !!have };
   }
 
+  /** 面板狀態只計這次勾選的類型；MP3／WAV 與其他檔案使用同一完成規則。 */
+  function downloadStatusForTypes(song, { types = [], downloaded = {}, unavailable = {}, lossyModels = null } = {}) {
+    const requested = new Set(types);
+    const detail = [];
+    const add = (kind, have, na = false) => detail.push(statusItem(kind, KIND_LABELS[kind], have, na));
+    const group = pickStemGroup(song && song.stems);
+    if (requested.has('stems') && group) {
+      const total = group.tracks.length;
+      const have = Math.max(0, Math.min(total, Number(downloaded.stems) || 0));
+      detail.push({ type: 'stems', label: KIND_LABELS.stems, have, total, done: have >= total });
+    }
+    for (const kind of ['midi', 'musicxml']) {
+      if (requested.has(kind) && midiAvailable(song)) add(kind, downloaded[kind], isUnavailable(unavailable, song.task_id, kind));
+    }
+    if (requested.has('mp3') && isDone(song)) add('mp3', downloaded.mp3);
+    if (requested.has('wav') && isDone(song)) {
+      add('wav', downloaded.wav, !supportsWav(song, lossyModels));
+      if (!supportsWav(song, lossyModels) && !downloaded.wav) detail[detail.length - 1].reason = '此模型不提供 WAV';
+    }
+    if (requested.has('cover') && song && song.local_cover) add('cover', downloaded.cover);
+    const have = detail.reduce((sum, item) => sum + item.have, 0);
+    const total = detail.reduce((sum, item) => sum + item.total, 0);
+    return { have, total, allDone: detail.every((item) => item.done), any: have > 0, detail };
+  }
+
+  /** 篩選與選擇共用同一範圍，隱藏歌曲不能被「全選」或舊勾選偷偷送出。 */
+  function filterDownloadSongs(songs, { onlyUndownloaded = false, onlyFavorites = false, statusForSong = () => ({}), isFavorite = () => false } = {}) {
+    return (songs || []).filter((song) => (!onlyUndownloaded || !statusForSong(song).allDone) && (!onlyFavorites || isFavorite(song.task_id)));
+  }
+
+  function selectedDownloadSongs(visibleSongs, selectedIds) {
+    return (visibleSongs || []).filter((song) => selectedIds && selectedIds.has(song.task_id));
+  }
+
   const api = {
     FILE_KINDS,
     buildNameIndex,
@@ -325,6 +359,9 @@
     markUnavailable,
     mergeUnavailable,
     statusItem,
+    downloadStatusForTypes,
+    filterDownloadSongs,
+    selectedDownloadSongs,
     KIND_LABELS,
     normalizeOptions,
     isDone,

@@ -205,7 +205,7 @@ scenario('S0_manifest_hooks_and_songlist', async () => {
   assert(manifest.background.type === undefined, 'background 不應有 "type":"module"（classic SW）');
   assert(manifest.permissions.includes('downloads') && manifest.permissions.includes('storage'), 'permissions 需含 downloads/storage');
   assert(manifest.hostPermissions.includes('https://acemusic.ai/*'), 'host_permissions 需含 acemusic.ai');
-  assertEqual(manifest.contentScripts[0].js.filter((file) => file !== 'src/testmode.js'), ['src/naming.js', 'src/planner.js', 'src/prompt-data.js', 'src/prompts.js', 'src/content.js'], 'content_scripts 載入順序');
+  assertEqual(manifest.contentScripts[0].js.filter((file) => file !== 'src/testmode.js'), ['src/naming.js', 'src/planner.js', 'src/prompt-data.js', 'src/prompts.js', 'src/diagnostics.js', 'src/content.js'], 'content_scripts 載入順序');
   assertEqual(manifest.contentScripts[0].run_at, 'document_idle', 'run_at');
   assertEqual(manifest.contentScripts[0].all_frames, false, 'all_frames');
 
@@ -284,7 +284,7 @@ scenario('S1_download_3_songs_stems_midi', async () => {
       downloadBtn: shadow.querySelector('[data-act="download"]').textContent.trim(),
     };
   });
-  assert(String(before.count || '').startsWith('已選 3 / 共 5 首'), `已選計數文字（實際：${before.count}）`);
+  assert(String(before.count || '').startsWith('已選 3 / 顯示 5 / 共 5 首'), `已選計數文字（實際：${before.count}）`);
   await clickDownload(page);
   const progress = await waitJobDone(page);
   assertEqual(progress.counts, { done: 9, failed: 0, skipped: 0, total: 9 }, 'S1 進度統計');
@@ -548,7 +548,7 @@ scenario('S14_rate_limit_stops_without_mass_failures', async () => {
   try {
     await freshPanel(page, mock.base);
     // 限流只停 MIDI／MusicXML 生成；同一個工作裡的 WAV 必須照常下載（之前會整個停掉）
-    await applyOptions(page, { stems: false, midi: true, wav: true, cover: false });
+    await applyOptions(page, { stems: false, midi: true, musicxml: true, wav: true, cover: false });
     await setRootFolder(page, 'rl-test');
     await selectSongs(page, ['song-a', 'song-b']);
     await clickDownload(page);
@@ -557,7 +557,8 @@ scenario('S14_rate_limit_stops_without_mass_failures', async () => {
     assert(!/^已停止/.test(progress.phaseLine || ''), `S14 限流不應停掉整個工作：${progress.phaseLine}`);
     assertFileMap(ROOT, { 'rl-test/Neon Drive/Neon Drive.wav': expectedBytes('AUDIO-WAV', 'song-a') }, 'S14 WAV 應照常下載');
     const statsText = await page.evaluate(() => document.getElementById('acedl-host').shadowRoot.querySelector('[data-stats]').textContent);
-    assert(/限流略過\s*2/.test(statsText), `S14 應顯示限流略過 2：${statsText}`);
+    assert(/限流略過\s*4/.test(statsText), `S14 剩餘四個生成項都必須結束為限流略過：${statsText}`);
+    assertEqual(progress.counts, { done: 1, failed: 0, skipped: 4, total: 5 }, 'S14 不能留下無 prep worker 處理的等待項目');
   } finally {
     mock.clearSiteErrors();
   }
@@ -725,6 +726,96 @@ scenario('S18_random_prompt_models_and_modes', async () => {
 
   assertEqual(await page.evaluate(() => window.__gen), 0, 'S18 絕不能按 Generate');
   await setPage('acemusic-v1.1', 'idea', 'ACE Music v1.1 Preview');
+});
+
+scenario('S19_invalidated_context_blocks_job_before_generation', async () => {
+  await freshPanel(page, mock.base);
+  await applyOptions(page, { stems: true, midi: true, musicxml: true, mp3: true, wav: true, force: true });
+  await setRootFolder(page, 'invalid-context-start');
+  await page.locator('[data-act="select-none"]').click();
+  await selectSongs(page, ['song-a', 'song-b']);
+  mock.clearLog();
+  // 在同一次頁面操作中斷線並開始，讓 preflight 本身面對失效 runtime。
+  await page.evaluate(() => {
+    document.documentElement.dataset.acedlTestInvalidated = '1';
+    document.getElementById('acedl-host').shadowRoot.querySelector('[data-act="download"]').click();
+  });
+  const progress = await waitJobDone(page, 5000);
+  assert(/刷新 ACE 頁面/.test(progress.phaseLine || ''), `S19 應持續顯示刷新頁面指引：${progress.phaseLine}`);
+  assertEqual(progress.counts.done, 0, 'S19 失效頁面不開始下載');
+  assert(progress.counts.failed <= 1 && progress.failedItems.length <= 1, 'S19 整體連線故障不能逐檔累積失敗');
+  await new Promise((r) => setTimeout(r, 2800));
+  assertEqual(mock.log.filter((e) => e.method === 'POST' && /\/download$/.test(e.path)).length, 0, 'S19 失效頁面不能送 MIDI／MusicXML 生成');
+  const flags = await page.evaluate(() => ({ ...document.documentElement.dataset }));
+  assertEqual(Number(flags.acedlTestDownloads || 0), 0, 'S19 preflight 應擋下所有下載');
+  assertEqual(Number(flags.acedlTestFallbackFetches || 0), 0, 'S19 不啟動 blob 備援');
+  assertEqual(relFiles(ROOT, 'invalid-context-start').length, 0, 'S19 不產生下載檔');
+});
+
+scenario('S20_invalidated_context_stops_inflight_job_once', async () => {
+  await freshPanel(page, mock.base);
+  await applyOptions(page, { stems: true, midi: true, musicxml: true, mp3: true, wav: true, force: true });
+  await setRootFolder(page, 'invalid-context-mid');
+  await page.locator('[data-opt="concurrency"]').selectOption('1');
+  await page.locator('[data-act="select-none"]').click();
+  await selectSongs(page, ['song-a', 'song-b']);
+  const before = await readStorage(context);
+  mock.clearLog();
+  await page.evaluate(() => {
+    document.documentElement.dataset.acedlTestInvalidateAfter = '1';
+    document.getElementById('acedl-host').shadowRoot.querySelector('[data-act="download"]').click();
+  });
+  const progress = await waitJobDone(page, 5000);
+  assert(/刷新 ACE 頁面/.test(progress.phaseLine || ''), `S20 應顯示斷線原因：${progress.phaseLine}`);
+  assertEqual(progress.counts.done, 1, 'S20 已完成的第一檔仍計為成功');
+  assert(progress.counts.failed <= 1 && progress.failedItems.length === 1, 'S20 只顯示一次整體連線故障');
+  assertEqual(progress.cancelVisible, false, 'S20 失效後工作應能結束');
+  await new Promise((r) => setTimeout(r, 2800));
+  assertEqual(mock.log.filter((e) => e.method === 'POST' && /\/download$/.test(e.path)).length, 0, 'S20 等待中的生成佇列不可在失效後繼續 POST');
+  const flags = await page.evaluate(() => ({ ...document.documentElement.dataset }));
+  assertEqual(Number(flags.acedlTestDownloads || 0), 2, 'S20 第一個失效送信後不重試也不再下載下一檔');
+  assertEqual(Number(flags.acedlTestBlobDownloads || 0), 0, 'S20 永久斷線不走 blob 下載備援');
+  assertEqual(Number(flags.acedlTestFallbackFetches || 0), 0, 'S20 永久斷線不抓備援 blob');
+  assertEqual(relFiles(ROOT, 'invalid-context-mid').length, 1, 'S20 保留完成的檔案');
+  const after = await readStorage(context);
+  for (const key of Object.keys(before.aceHistory || {})) assert(!!after.aceHistory[key], `S20 原有歷史不得丟失：${key}`);
+});
+
+scenario('S21_missing_wav_filter_excludes_hidden_selection', async () => {
+  const before = await readStorage(context);
+  const history = {};
+  // 獨立手寫 fixture：只有 song-a 缺 WAV；b/c 的 lossy 模型本來就無 WAV。
+  for (const [id, folder] of [['song-a', 'Neon Drive'], ['song-b', 'Paper Sky'], ['song-c', 'Rain Loop v2'], ['song-e1', 'Where Am I'], ['song-e2', 'Where Am I (2)']]) {
+    history[id] = { folder, files: { mp3: { path: `selected-missing/${folder}/${folder}.mp3`, filename: `${folder}.mp3`, at: 1, absolute: '' } } };
+    if (id === 'song-e1' || id === 'song-e2') history[id].files.wav = { path: `selected-missing/${folder}/${folder}.wav`, filename: `${folder}.wav`, at: 1, absolute: '' };
+  }
+  try {
+    await swEval(context, async (seed) => chrome.storage.local.set({ aceHistory: seed }), history);
+    await freshPanel(page, mock.base);
+    await applyOptions(page, { mp3: true, wav: true });
+    await setRootFolder(page, 'selected-missing');
+    const status = await page.locator('[data-song-id="song-a"] [data-download-status]').textContent();
+    assert(/缺 WAV/.test(status), `S21 MP3 已有但 WAV 缺失必須列出 WAV：${status}`);
+    const lossyStatus = await page.locator('[data-song-id="song-b"] [data-download-status]').getAttribute('title');
+    assert(/此模型不提供 WAV/.test(lossyStatus), `S21 lossy 模型應說明 WAV 不適用：${lossyStatus}`);
+    // 先選整個曲庫，再開過濾；隱藏的舊勾選也不能跟著出站。
+    await page.locator('[data-act="select-all"]').click();
+    await page.locator('[data-act="filter-undownloaded"]').click();
+    assertEqual(await page.locator('[data-song-id]').count(), 1, 'S21 只留下真正缺 WAV 的 song-a');
+    assertEqual(await page.locator('[data-song-id]').getAttribute('data-song-id'), 'song-a', 'S21 缺 WAV 的曲目身分');
+    await page.locator('[data-act="select-all"]').click();
+    const count = await page.locator('.count').textContent();
+    assert(/已選 1 \/ 顯示 1 \/ 共 5 首/.test(count), `S21 全選只應包含可見結果：${count}`);
+    mock.clearLog();
+    await clickDownload(page);
+    const progress = await waitJobDone(page, 10000);
+    assertEqual(progress.counts, { done: 1, failed: 0, skipped: 1, total: 2 }, 'S21 只補一個 WAV、跳過已下載 MP3');
+    const fileRequests = mock.log.filter((e) => /^\/api\/songs\/[^/]+\/(?:file|download)/.test(e.path));
+    assert(fileRequests.length > 0 && fileRequests.every((e) => e.path.startsWith('/api/songs/song-a/file?kind=wav')), `S21 隱藏歌曲不可送出下載：${JSON.stringify(fileRequests.map((e) => e.path))}`);
+    assertFileMap(ROOT, { 'selected-missing/Neon Drive/Neon Drive.wav': expectedBytes('AUDIO-WAV', 'song-a') }, 'S21 補 WAV');
+  } finally {
+    await swEval(context, async (saved) => chrome.storage.local.set({ aceHistory: saved.aceHistory || {}, aceSettings: saved.aceSettings || {} }), before);
+  }
 });
 
 scenario('S7_logged_out_shows_login_hint', async () => {

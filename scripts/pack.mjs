@@ -18,7 +18,8 @@ const isWin = process.platform === 'win32';
 const STORE_ITEMS = ['manifest.json', 'src', 'icons'];
 const FULL_ITEMS = [
   'manifest.json', 'src', 'icons', 'agent', 'native', 'mixdesk', 'docs',
-  'README.md', 'LICENSE', 'PRIVACY.md', 'CHROMEWEBSTORE.md', 'RELEASING.md', 'package.json',
+  'design', 'scripts/repair-wavs.mjs',
+  'README.md', 'CHANGELOG.md', 'LICENSE', 'PRIVACY.md', 'CHROMEWEBSTORE.md', 'RELEASING.md', 'package.json',
 ];
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.loopx', '.pack']);
 
@@ -51,10 +52,11 @@ function zip(fromDir, outFile) {
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
   rimraf(outFile);
   if (isWin) {
+    const psQuote = (value) => "'" + value.replace(/'/g, "''") + "'";
     execFileSync('powershell', [
       '-NoProfile',
       '-Command',
-      `Compress-Archive -Path "${path.join(fromDir, '*')}" -DestinationPath "${outFile}" -Force`,
+      `Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::CreateFromDirectory(${psQuote(fromDir)}, ${psQuote(outFile)})`,
     ], { stdio: 'inherit' });
   } else {
     execFileSync('zip', ['-qr', outFile, '.'], { cwd: fromDir, stdio: 'inherit' });

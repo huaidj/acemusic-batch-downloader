@@ -67,7 +67,32 @@ export function buildTestExtension({ tmpRoot, port, extraOrigins = [] }) {
   }
   const manifest = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'manifest.json'), 'utf8'));
   // 測試隔離：content.js 看到 __ACEDL_TEST_MODE__ 就不採用真機 host 的 fs/agent-state 跳過邏輯
-  fs.writeFileSync(path.join(extDir, 'src', 'testmode.js'), 'globalThis.__ACEDL_TEST_MODE__ = true;\n');
+  fs.writeFileSync(path.join(extDir, 'src', 'testmode.js'), `
+globalThis.__ACEDL_TEST_MODE__ = true;
+// 只在隔離測試副本注入失效的 content runtime；不影響真實擴充功能或使用者 profile。
+(() => {
+  const realSend = chrome.runtime.sendMessage.bind(chrome.runtime);
+  chrome.runtime.sendMessage = (msg, ...args) => {
+    const flags = document.documentElement.dataset;
+    if (msg && msg.type === 'ACE_DOWNLOAD_FILE') {
+      const sent = Number(flags.acedlTestDownloads || 0);
+      flags.acedlTestDownloads = String(sent + 1);
+      if (String(msg.url || '').startsWith('blob:')) flags.acedlTestBlobDownloads = String(Number(flags.acedlTestBlobDownloads || 0) + 1);
+      if (flags.acedlTestInvalidateAfter !== undefined && sent >= Number(flags.acedlTestInvalidateAfter)) flags.acedlTestInvalidated = '1';
+    }
+    if (flags.acedlTestInvalidated === '1') throw new Error('Extension context invalidated.');
+    return realSend(msg, ...args);
+  };
+  const realFetch = globalThis.fetch.bind(globalThis);
+  globalThis.fetch = (url, options) => {
+    if (options && options.credentials === 'include') {
+      const flags = document.documentElement.dataset;
+      flags.acedlTestFallbackFetches = String(Number(flags.acedlTestFallbackFetches || 0) + 1);
+    }
+    return realFetch(url, options);
+  };
+})();
+`);
   for (const cs of manifest.content_scripts || []) {
     if (!cs.js.includes('src/testmode.js')) cs.js.unshift('src/testmode.js');
   }

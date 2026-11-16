@@ -28,7 +28,7 @@ const song = {
   stems: {},
 };
 
-test('extractFullMp3s：removedPaths 指向仍存在的 keeper 時，不重新下載', async () => {
+test('extractFullMp3s：沒有 task 來源證據的 removedPaths 不可跳過另一首歌，保留 keeper', async (t) => {
   const root = path.join(process.env.ACE_DOWNLOAD_DIR, 'ai音樂');
   const outDir = path.join(root, '成品MP3');
   const keeper = path.join(outDir, 'Churn Test.mp3');
@@ -46,12 +46,18 @@ test('extractFullMp3s：removedPaths 指向仍存在的 keeper 時，不重新�
   fs.writeFileSync(path.join(process.env.ACE_STATE_DIR, 'session.json'), JSON.stringify({ cookie: 'sess=1', savedAt: Date.now(), ua: 'test' }));
 
   const second = { ...song, task_id: 'so_test_2', created_at: 2 };
+  const requested = [];
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    requested.push(String(url));
+    return new Response('task-audio-' + requested.length, { headers: { 'content-type': 'audio/mpeg' } });
+  });
   const report = await ACE.extractFullMp3s({ songs: [song, second], force: false });
-  assert.equal(report.downloaded, 0, '不得重新下載');
-  assert.equal(report.skipped >= 1, true, '應計入跳過');
-  assert.equal(report.deduped, 1, '第二首應標記為去重跳過');
-  assert.equal(fs.existsSync(target), false, '不可在成品MP3重建副本');
+  assert.equal(report.downloaded, 2, '沒有來源證據時應各自取得音檔');
+  assert.equal(requested.length, 2);
+  assert.equal(report.skipped, 0, '舊 alias 不能當作另一個 task 已下載的證據');
+  assert.equal(fs.existsSync(target), true, '補回另一首歌的獨立檔案');
   assert.equal(fs.existsSync(keeper), true, 'keeper 不可被動');
+  assert.equal(fs.readFileSync(keeper, 'utf8'), 'same-bytes', '不覆寫來源不明的原檔');
 });
 
 test('collectSamples：完整歌曲（含 " - " 的標題）不得被收進採樣包', async () => {

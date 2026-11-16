@@ -56,6 +56,9 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     history: {},
     running: false,
     cancelled: false,
+    runtimeInvalidated: false,
+    stopReason: '',
+    activeJob: null,
     progress: { done: 0, skipped: 0, failed: 0, total: 0, current: '', phase: 'idle', activeDl: 0, activePrep: 0, elapsedMs: 0 },
     failedList: [],
     els: {},
@@ -70,8 +73,10 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     fsAbs: new Set(),
     fsRel: new Set(),
     fsNames: new Set(),
+    fsSizes: new Map(),
     fsAt: 0,
     doneKinds: new Map(),
+    verifiedAudio: new Map(),
     agentAliases: {},
     removedPaths: {},
     removedRel: new Map(),
@@ -89,6 +94,27 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
   // e2e 測試會注入 __ACEDL_TEST_MODE__，避免真機 host 的檔案索引/去重紀錄污染測試
   const TEST_MODE = globalThis.__ACEDL_TEST_MODE__ === true;
+  let diagnosticsTimer = 0;
+  const diagnosticStorage = (() => { try { return sessionStorage; } catch (_) { return null; } })();
+  const DL = globalThis.AceDLDiagnostics?.createLogger({ storage: diagnosticStorage, onRecord: () => scheduleDiagnosticsExport() }) || { record() {}, snapshot: () => ({ events: [] }) };
+  function diagnosticProgress(extra = {}) {
+    const p = S.progress;
+    return { phase: p.phase, current: p.current, activePrep: p.activePrep, activeDl: p.activeDl,
+      elapsedMs: S.jobStartedAt ? Date.now() - S.jobStartedAt : 0,
+      counts: { done: p.done, failed: p.failed, skipped: p.skipped, total: p.total, rateLimited: p.rateLimited }, ...extra };
+  }
+  function scheduleDiagnosticsExport() {
+    if (diagnosticsTimer || TEST_MODE) return;
+    diagnosticsTimer = setTimeout(() => {
+      diagnosticsTimer = 0;
+      try {
+        if (!chrome.runtime.id) return; // sessionStorage survives extension invalidation and page refresh.
+        chrome.runtime.sendMessage({ type: 'ACE_SAVE_DIAGNOSTICS', data: DL.snapshot() }, () => { try { void chrome.runtime.lastError; } catch (_) { /* invalidated while sending */ } });
+      } catch (_) { /* retry after the next record/reload; never read cookies */ }
+    }, 5000);
+  }
+  DL.record('logger_ready');
+  setInterval(() => { if (S.running) DL.record('heartbeat', diagnosticProgress()); }, 30000);
 
   function el(tag, attrs, children) {
     const node = document.createElement(tag);
@@ -146,6 +172,95 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     return /登入已過期|Please log in|HTTP 401/i.test(message);
   }
 
+  const CONTEXT_INVALIDATED_MESSAGE = '擴充功能已更新或重新載入，請刷新 ACE 頁面後再下載；已完成的檔案會保留';
+
+  function isContextInvalidated(err) {
+    return !!(err && err.code === 'EXTENSION_CONTEXT_INVALIDATED') || /extension context invalidated|extension has been invalidated/i.test(String((err && err.message) || err || ''));
+  }
+
+  function contextInvalidatedError() {
+    const err = new Error(CONTEXT_INVALIDATED_MESSAGE);
+    err.code = 'EXTENSION_CONTEXT_INVALIDATED';
+    return err;
+  }
+
+  function stopForInvalidatedContext() {
+    if (S.runtimeInvalidated) return;
+    DL.record('context_invalidated', diagnosticProgress({ errorCode: 'EXTENSION_CONTEXT_INVALIDATED', error: CONTEXT_INVALIDATED_MESSAGE }));
+    S.runtimeInvalidated = true;
+    S.cancelled = true;
+    S.stopReason = CONTEXT_INVALIDATED_MESSAGE;
+    S.progress.phase = S.running ? 'cancelling' : 'cancelled';
+    // 這是整個頁面的連線故障，不是每個音檔各失敗一次。
+    S.failedList.push({ name: '下載已停止', error: CONTEXT_INVALIDATED_MESSAGE });
+    renderProgress();
+    flash(CONTEXT_INVALIDATED_MESSAGE);
+  }
+
+  function assertRuntimeUsable() {
+    if (S.runtimeInvalidated) throw contextInvalidatedError();
+    try {
+      if (!chrome.runtime.id) throw contextInvalidatedError();
+    } catch (err) {
+      if (isContextInvalidated(err)) {
+        stopForInvalidatedContext();
+        throw contextInvalidatedError();
+      }
+      throw err;
+    }
+  }
+
+  function assertJobActive(job) {
+    assertRuntimeUsable();
+    // 已停止的舊 prep 不得在下一批把 cancelled 清掉後恢復送出請求。
+    if (job !== S.activeJob || S.cancelled || !S.running) {
+      const err = new Error('下載工作已停止');
+      err.code = 'JOB_CANCELLED';
+      throw err;
+    }
+  }
+
+  async function waitForJob(ms, job) {
+    const deadline = Date.now() + ms;
+    do {
+      assertJobActive(job);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return;
+      await sleep(Math.min(100, remaining));
+    } while (true);
+  }
+
+  function withConnectionTimeout(promise, timeoutMs, job) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        clearInterval(watch);
+        fn(value);
+      };
+      const timer = setTimeout(() => finish(reject, new Error('擴充功能連線逾時，請刷新 ACE 頁面再試')), timeoutMs);
+      const watch = setInterval(() => {
+        try {
+          if (job) assertJobActive(job);
+          else assertRuntimeUsable();
+        } catch (err) {
+          finish(reject, err);
+        }
+      }, 100);
+      Promise.resolve(promise).then((value) => finish(resolve, value), (err) => finish(reject, err));
+    });
+  }
+
+  async function checkDownloadConnection(job = null) {
+    if (job) assertJobActive(job);
+    else assertRuntimeUsable();
+    const response = await withConnectionTimeout(sendMessage({ type: 'ACE_PING' }), 5000, job);
+    if (job) assertJobActive(job);
+    if (!response || !response.ok) throw new Error('無法連線擴充功能，請刷新 ACE 頁面再試');
+  }
+
   function storageGet(keys) {
     return new Promise((resolve) => {
       try {
@@ -168,14 +283,26 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
 
   function sendMessage(msg) {
     return new Promise((resolve, reject) => {
+      const fail = (err) => {
+        if (isContextInvalidated(err)) {
+          stopForInvalidatedContext();
+          reject(contextInvalidatedError());
+        } else reject(err);
+      };
       try {
+        assertRuntimeUsable();
         chrome.runtime.sendMessage(msg, (response) => {
-          const lastError = chrome.runtime.lastError;
-          if (lastError) reject(new Error(lastError.message));
-          else resolve(response);
+          try {
+            const lastError = chrome.runtime.lastError;
+            if (lastError) fail(new Error(lastError.message));
+            else if (response && !response.ok && isContextInvalidated(response.error)) fail(new Error(response.error));
+            else resolve(response);
+          } catch (err) {
+            fail(err);
+          }
         });
       } catch (err) {
-        reject(err);
+        fail(err);
       }
     });
   }
@@ -420,7 +547,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     const closeBtn = el('button', { class: 'iconbtn', type: 'button', 'data-act': 'close', title: '收起' }, ['✕']);
     const refreshBtn = el('button', { class: 'iconbtn', type: 'button', 'data-act': 'refresh', title: '重新整理歌單' }, ['↻']);
     const titleBox = el('div', { class: 'title', text: 'ACE 批量下載' });
-    const subBox = el('div', { class: 'sub', text: '分軌 · MIDI · WAV · 自動改名' });
+    const subBox = el('div', { class: 'sub', text: 'v1.7.4 · 分軌 · MIDI · WAV' });
     const alphaInput = el('input', { type: 'range', min: '40', max: '100', step: '5', 'data-ui': 'alpha', 'aria-label': '面板不透明度' });
     const alphaBox = el('label', { class: 'alpha', title: '面板不透明度（拖曳標題列可移動面板，雙擊標題列回到預設位置）' }, ['透明', alphaInput]);
     const header = el('header', { title: '拖曳移動；雙擊回到預設位置' }, [titleBox, subBox, alphaBox, refreshBtn, closeBtn]);
@@ -432,7 +559,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       cb.addEventListener('change', () => {
         S.options[type] = cb.checked;
         saveSettings();
-        updateCounts();
+        renderSongs();
       });
       optRows.append(el('label', { class: 'chk' }, [cb, typeLabels[type]]));
     }
@@ -550,7 +677,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       el('div', { class: 'track' }, [tidyBarFill]),
       tidyBarText,
     ]);
-    const footer = el('div', { class: 'footer' }, [downloadBtn, cancelBtn, toast, tidyBar, footHint]);
+    const diagnosticsBtn = el('button', { type: 'button', 'data-act': 'copy-diagnostics', text: '複製診斷' });
+    diagnosticsBtn.addEventListener('click', async () => {
+      const text = JSON.stringify(DL.snapshot(), null, 2);
+      if (await copyText(text)) return flash('診斷已複製（不含登入資料）');
+      const box = el('textarea', { readonly: true, rows: '8', value: text });
+      box.style.width = '100%';
+      footer.append(box);
+      box.focus(); box.select();
+      flash('請按 Ctrl+C 複製已選取的診斷文字');
+    });
+    const footer = el('div', { class: 'footer' }, [downloadBtn, cancelBtn, diagnosticsBtn, toast, tidyBar, footHint]);
 
     const playerBar = buildPlayer();
     const randomBox = buildRandom();
@@ -603,7 +740,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       fetchSongs();
     });
     selectAll.addEventListener('click', () => {
-      for (const song of S.songs) S.selected.add(song.task_id);
+      S.selected = new Set(visibleSongs().map((song) => song.task_id));
       renderSongs();
     });
     selectNone.addEventListener('click', () => {
@@ -611,12 +748,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       renderSongs();
     });
     downloadBtn.addEventListener('click', () => {
-      const picked = S.songs.filter((song) => S.selected.has(song.task_id));
+      const picked = selectedVisibleSongs();
       if (!picked.length) return flash('請先勾選歌曲');
       startJob(picked);
     });
     cancelBtn.addEventListener('click', () => {
       if (!S.running) return;
+      DL.record('cancel', diagnosticProgress());
       S.cancelled = true;
       S.progress.phase = 'cancelling';
       renderProgress();
@@ -1807,16 +1945,19 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     const abs = new Set();
     const rel = new Set();
     const names = new Set();
+    const sizes = new Map();
     for (const file of res.files) {
       const absLow = String((file && file.path) || '').toLowerCase();
-      if (!absLow) continue;
+      if (!absLow || Number(file.size) === 0) continue;
       abs.add(absLow);
+      sizes.set(absLow, Number(file.size));
       names.add(absLow.slice(absLow.lastIndexOf('\\') + 1));
       if (rootPrefix && absLow.startsWith(rootPrefix)) rel.add(absLow.slice(rootPrefix.length).split('\\').join('/'));
     }
     S.fsAbs = abs;
     S.fsRel = rel;
     S.fsNames = names;
+    S.fsSizes = sizes;
     S.fsAt = Date.now();
     await refreshDoneKinds();
     return true;
@@ -1846,8 +1987,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       else if (String(key).startsWith('stem:')) add(taskId, 'stem:' + String(key).slice(5));
     };
     for (const [taskId, entry] of Object.entries(S.history || {})) {
-      for (const key of Object.keys((entry && entry.files) || {})) addKey(taskId, key);
+      for (const [key, info] of Object.entries((entry && entry.files) || {})) {
+        if (historyFileExists(info)) addKey(taskId, key);
+      }
     }
+    S.doneKinds = done;
+    if (!S.host.ok) return;
     try {
       const res = await sendMessage({ type: 'ACE_HOST_READ', name: 'history' });
       const items = res && res.ok && res.data && Array.isArray(res.data.items) ? res.data.items : [];
@@ -1877,8 +2022,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       const hist = data.history || {};
       for (const [taskId, entry] of Object.entries(hist)) {
         for (const [key, info] of Object.entries((entry && entry.files) || {})) {
-          const absPath = String((info && info.absolute) || '').toLowerCase();
-          if (absPath && !S.fsAbs.has(absPath)) continue;
+          if (!historyFileExists(info)) continue;
           addKey(taskId, key);
         }
       }
@@ -1903,12 +2047,35 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     } catch (err) {
       /* ignore */
     }
-    // alias：被去重的歌曲沿用 keeper 的下載狀態（顯示「已下載」而不是「未下載」）
-    for (const [taskId, keeperId] of Object.entries(S.agentAliases || {})) {
-      const kinds = done.get(keeperId);
-      if (kinds) done.set(taskId, new Set(kinds));
-    }
+    S.verifiedAudio = new Map();
+    try {
+      const res = await sendMessage({ type: 'ACE_HOST_READ', name: 'verified-audio' });
+      const files = res && res.ok && res.data && Array.isArray(res.data.files) ? res.data.files : [];
+      for (const file of files) {
+        const absolute = String((file && file.absolute) || '').toLowerCase();
+        if (!file.task_id || !['mp3', 'wav'].includes(file.kind) || !S.fsAbs.has(absolute)) continue;
+        if (S.fsSizes.get(absolute) !== Number(file.bytes) || !file.sha256 || !file.verifiedAt) continue;
+        addKey(file.task_id, file.kind);
+        S.verifiedAudio.set(file.task_id + '|' + file.kind, file);
+      }
+    } catch (_) { /* 修復腳本尚未跑過也能使用下載器 */ }
+    // 舊 alias 可能源於同名誤複製，不能把另一首歌的所有檔案當成本曲已下載。
     S.doneKinds = done;
+  }
+
+  function historyFileExists(info) {
+    if (!info || !S.fsAt || TEST_MODE) return !!info;
+    const absolute = String(info.absolute || '').toLowerCase();
+    const relative = String(info.path || '').replace(/\\/g, '/').toLowerCase();
+    return absolute ? S.fsAbs.has(absolute) : !!relative && S.fsRel.has(relative);
+  }
+
+  function existingDownloadHistory() {
+    if (!S.fsAt || TEST_MODE) return S.history;
+    return Object.fromEntries(Object.entries(S.history || {}).map(([taskId, entry]) => [taskId, {
+      ...entry,
+      files: Object.fromEntries(Object.entries((entry && entry.files) || {}).filter(([, info]) => historyFileExists(info))),
+    }]));
   }
 
   /** 檔名索引（S.fsNames 換新集合才重建；每首歌查詢 O(1)，不再逐檔跑 regex） */
@@ -1922,6 +2089,20 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       nameIndexSize = S.fsNames.size;
     }
     return nameIndex;
+  }
+
+  let titleCountsFor = null;
+  let titleCounts = new Map();
+  function titleIsAmbiguous(title) {
+    if (titleCountsFor !== S.songs) {
+      titleCountsFor = S.songs;
+      titleCounts = new Map();
+      for (const other of S.songs) {
+        const key = N.songFolderLabel((other.meta && other.meta.title) || '').toLowerCase();
+        titleCounts.set(key, (titleCounts.get(key) || 0) + 1);
+      }
+    }
+    return (titleCounts.get(title.toLowerCase()) || 0) > 1;
   }
 
   /** 每首歌目前的下載進度：{have,total,allDone,any,known,detail,mp3} */
@@ -1968,41 +2149,38 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       else if (key === 'wav') wav = true;
       else if (key === 'cover') cover = true;
     }
-    // 同名歌曲（多個 take）：檔名無法區分 task，MP3/WAV 只信這首歌自己的下載紀錄
-    const ambiguous = Array.isArray(S.songs)
-      && S.songs.filter((other) => N.songFolderLabel((other.meta && other.meta.title) || '') === title).length > 1;
+    // 同名歌曲（多個 take）：共用標題不是身分證據，所有類型只信這首歌自己的下載紀錄。
+    const ambiguous = titleIsAmbiguous(title);
     if (ambiguous) {
+      stemsFound.clear();
+      for (const key of done) if (String(key).startsWith('stem:')) stemsFound.add(String(key).slice(5));
+      midi = done.has('midi');
+      musicxml = done.has('musicxml');
       mp3 = done.has('mp3');
       wav = done.has('wav');
+      cover = done.has('cover');
     }
-    const stemsTotal = group ? group.tracks.length : 0;
-    const stemsHave = stemsTotal ? Math.min(stemsTotal, stemsFound.size) : 0;
-    const detail = [];
-    if (stemsTotal) detail.push({ label: '分軌', have: stemsHave, total: stemsTotal, done: stemsHave >= stemsTotal });
-    const na = (kind) => P.isUnavailable(S.unavailable, song.task_id, kind);
-    if (P.midiAvailable(song)) detail.push(P.statusItem('midi', 'MIDI', midi, na('midi')));
-    if (P.midiAvailable(song)) detail.push(P.statusItem('musicxml', 'MusicXML', musicxml, na('musicxml')));
-    if (song.local_cover) detail.push({ label: '封面', have: cover ? 1 : 0, total: 1, done: cover });
-    const have = detail.reduce((sum, item) => sum + item.have, 0);
-    const total = detail.reduce((sum, item) => sum + item.total, 0);
-    const anyNa = detail.some((item) => item.na);
+    const status = P.downloadStatusForTypes(song, {
+      types: FILE_TYPES.filter((type) => S.options[type]),
+      downloaded: { stems: stemsFound.size, midi, musicxml, mp3, wav, cover },
+      unavailable: S.unavailable,
+      lossyModels: S.lossyModels,
+    });
     return {
-      have,
-      total,
-      allDone: have >= total && (total > 0 || anyNa),
-      any: have > 0,
+      ...status,
       mp3,
       wav,
-      detail,
       known: !!S.fsAt || S.doneKinds.size > 0,
     };
   }
 
   function downloadStatusLabel(status) {
     const detail = status.detail
-      .map((item) => (item.na ? `${item.label} 不可用（站點不提供）` : item.total > 1 ? `${item.label} ${item.have}/${item.total}` : `${item.label}${item.done ? '✓' : '✗'}`))
+      .map((item) => (item.na ? `${item.label} 不可用（${item.reason || '站點不提供'}）` : item.total > 1 ? `${item.label} ${item.have}/${item.total}` : `${item.label}${item.done ? '✓' : '✗'}`))
       .join('、');
     if (!status.known) return { text: '狀態未知', cls: 'dim', title: '本機整理工具未安裝，無法檢查已下載檔案' };
+    if (!status.detail.length) return { text: '所選類型不適用', cls: 'dim', title: '未勾選檔案類型，或這首歌沒有可下載的所選類型' };
+    if (!status.total) return { text: status.detail.map((item) => item.reason || `${item.label} 不可用`).join('／'), cls: 'dim', title: detail };
     if (status.allDone) return { text: '已下載', cls: 'ok', title: '已下載：' + detail };
     if (status.any) {
       // 直接說缺什麼（「部分 2/3」看不出缺哪項）
@@ -2023,7 +2201,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   function progressPercent() {
     const p = S.progress;
     if (!p.total) return 0;
-    return clamp(Math.round(((p.done + p.failed) / p.total) * 100), 0, 100);
+    return clamp(Math.round(((p.done + p.failed + (Number(p.skipped) || 0)) / p.total) * 100), 0, 100);
   }
 
   /* ------------------------------------------------------------------ *
@@ -2396,6 +2574,19 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     return nodes;
   }
 
+  function visibleSongs() {
+    return P.filterDownloadSongs(S.songs, {
+      onlyUndownloaded: S.onlyUndownloaded,
+      onlyFavorites: S.onlyFavorites,
+      statusForSong: songDownloadStatus,
+      isFavorite: isFav,
+    });
+  }
+
+  function selectedVisibleSongs(list = visibleSongs()) {
+    return P.selectedDownloadSongs(list, S.selected);
+  }
+
   function renderSongs() {
     const box = S.els.songsBox;
     if (!box) return;
@@ -2420,10 +2611,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       updateCounts();
       return;
     }
-    let list = S.onlyUndownloaded ? S.songs.filter((song) => !songDownloadStatus(song).allDone) : S.songs;
-    if (S.onlyFavorites) list = list.filter((song) => isFav(song.task_id));
+    const list = visibleSongs();
+    S.selected = new Set(selectedVisibleSongs(list).map((song) => song.task_id));
     if (!list.length) {
-      box.append(el('div', { class: 'hint', text: S.onlyFavorites ? '還沒有收藏的歌：點歌曲右側的愛心。' : S.onlyUndownloaded ? '太棒了，所有歌曲都下載完成了（或有檔案無法辨識）。' : '找不到已完成的歌曲。' }));
+      box.append(el('div', { class: 'hint', text: S.onlyFavorites ? '目前篩選沒有符合的收藏歌曲。' : S.onlyUndownloaded ? '目前勾選的檔案類型沒有待補項目；不支援的類型不列入缺失。' : '找不到已完成的歌曲。' }));
       updateCounts();
       return;
     }
@@ -2477,22 +2668,24 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   }
 
   function updateCounts() {
+    const list = visibleSongs();
+    const selected = selectedVisibleSongs(list);
     const label = S.els.countLabel;
     if (label) {
       const parts = [];
       if (S.songs.length) {
         const pending = S.songs.filter((song) => !songDownloadStatus(song).allDone).length;
-        parts.push(`已選 ${S.selected.size} / 共 ${S.songs.length} 首`);
-        parts.push(`未下載 ${pending}`);
+        parts.push(`已選 ${selected.length} / 顯示 ${list.length} / 共 ${S.songs.length} 首`);
+        parts.push(`所選類型待補 ${pending}`);
       }
       if (S.lastUpdated) parts.push(`更新 ${S.lastUpdated}`);
       label.textContent = parts.join(' · ');
     }
     const btn = S.els.downloadBtn;
     if (btn) {
-      const count = S.selected.size;
-      btn.textContent = S.running ? '下載中…' : `下載選中${count ? `（${count} 首）` : ''}`;
-      btn.disabled = S.running || count === 0;
+      const count = selected.length;
+      btn.textContent = S.runtimeInvalidated ? '請刷新 ACE 頁面' : S.running ? '下載中…' : `下載選中${count ? `（${count} 首）` : ''}`;
+      btn.disabled = S.runtimeInvalidated || S.running || count === 0;
     }
     const cancel = S.els.cancelBtn;
     if (cancel) cancel.hidden = !S.running;
@@ -2533,7 +2726,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     if (p.rateLimited > 0) S.els.stats.append(chip('限流略過', p.rateLimited, true));
     if (elapsedSec > 0) S.els.stats.append(chip('時間', elapsedSec + 's', false));
     const phase = PHASE_TEXT[p.phase] || '';
-    let currentText = p.current;
+    let currentText = S.stopReason || p.current;
     if (p.activeDl > 1) currentText += `（${p.activeDl} 個並行）`;
     if (!currentText && p.activePrep > 0) currentText = `站點生成 MIDI/MusicXML 中（${p.activePrep} 個）…`;
     S.els.current.textContent = [phase, currentText].filter(Boolean).join('：');
@@ -2612,6 +2805,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     const folders = got[KEY_FOLDERS] && typeof got[KEY_FOLDERS] === 'object' ? got[KEY_FOLDERS] : {};
     S.folderByTask = folders.folderByTask && typeof folders.folderByTask === 'object' ? folders.folderByTask : {};
     S.ownerByFolder = folders.ownerByFolder && typeof folders.ownerByFolder === 'object' ? folders.ownerByFolder : {};
+    await refreshDoneKinds();
   }
 
   /** 寫入「站點不提供」紀錄；prep worker 會並行，用 promise 鏈序列化避免互相覆蓋 */
@@ -2648,26 +2842,66 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     await storageSet({ [KEY_HISTORY]: S.history });
   }
 
+  async function fetchDownloadApi(url, options = {}, job = S.activeJob) {
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, TEST_MODE ? 10000 : 45000);
+    const cancelled = setInterval(() => {
+      if (job && (S.cancelled || !S.running || S.activeJob !== job || S.runtimeInvalidated)) controller.abort();
+    }, 200);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } catch (err) {
+      assertJobActive(job);
+      if (timedOut) {
+        const timeout = new Error('站點回應逾時（45 秒）；這個檔案保留待補，沒有重新提交生成');
+        timeout.code = 'API_TIMEOUT';
+        throw timeout;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      clearInterval(cancelled);
+    }
+  }
+
+  async function readDownloadJson(response, job = S.activeJob) {
+    try {
+      return await withConnectionTimeout(response.json(), TEST_MODE ? 10000 : 45000, job);
+    } catch (err) {
+      if (err instanceof SyntaxError) return null;
+      assertJobActive(job);
+      const timeout = new Error('站點檔案回應未完成，這個檔案保留待補；沒有重新提交生成');
+      timeout.code = 'API_TIMEOUT';
+      throw timeout;
+    }
+  }
+
   /** 站點 API：MIDI / MusicXML 由站點生成後回傳 URL（生成期間由呼叫端顯示進度） */
-  async function createApiFile(songId, kind) {
+  async function createApiFile(songId, kind, job) {
     const endpoint = `/api/songs/${encodeURIComponent(songId)}/download`;
     const deadline = Date.now() + 180000;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      let response = await fetch(endpoint, {
+      // 即使只生成 MIDI，也先確認下載端仍可用，避免失效頁面繼續消耗額度。
+      await checkDownloadConnection(job);
+      let response = await fetchDownloadApi(endpoint, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ kind }),
       });
       while (response.status === 202) {
+        assertJobActive(job);
         if (Date.now() > deadline) throw new Error(`${kind} 生成逾時`);
-        await sleep(1500);
-        response = await fetch(`${endpoint}?kind=${encodeURIComponent(kind)}`, {
+        await waitForJob(1500, job);
+        await checkDownloadConnection(job);
+        response = await fetchDownloadApi(`${endpoint}?kind=${encodeURIComponent(kind)}`, {
           credentials: 'same-origin',
           cache: 'no-store',
         });
       }
-      const data = await response.json().catch(() => null);
+      const data = await readDownloadJson(response, job);
+      assertJobActive(job);
       if (response.ok && data && data.url) return new URL(data.url, location.origin).href;
       const detail = siteErrorDetail(data, response.status);
       const code = data && data.error && data.error.code;
@@ -2683,7 +2917,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
         // 限流：這條「站點生成」佇列等 60 秒再試（最多 2 次）；其他檔案不受影響。仍限流才放棄剩下的生成
         if (attempt < 2) {
           flash(`站點限流，等待 60 秒後重試（${kind}）`);
-          await sleep(TEST_MODE ? 200 : 60000);
+          await waitForJob(TEST_MODE ? 200 : 60000, job);
           continue;
         }
         const err = new Error('站點限流（429）：' + detail);
@@ -2701,23 +2935,24 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     const direct = `${location.origin}/api/songs/${encodeURIComponent(songId)}/file?kind=${encodeURIComponent(kind)}`;
     let response;
     try {
-      response = await fetch(`${direct}&as=parts`, { credentials: 'same-origin', cache: 'no-store' });
-    } catch (_) {
-      return direct;
+      response = await fetchDownloadApi(`${direct}&as=parts`, { credentials: 'same-origin', cache: 'no-store' });
+    } catch (err) {
+      if (isContextInvalidated(err) || (err && (err.code === 'JOB_CANCELLED' || err.code === 'API_TIMEOUT'))) throw err;
+      throw new Error('無法取得檔案網址，請稍後補下載：' + ((err && err.message) || err));
     }
     if (!response.ok) {
       if (response.status === 402) throw new Error('目前方案不含此下載（HTTP 402）');
       if (response.status === 401) throw new Error('登入已過期，請重新整理頁面再試');
       if (response.status === 403) throw new Error('站點拒絕下載（HTTP 403）');
-      // WAV 只有部分模型支援；400/404 都視為「這首沒有 WAV」→ 跳過，不算失敗
+      // 已由模型能力篩掉 lossy 歌；400/404 不證明這首永遠沒有 WAV。
       if (kind === 'wav' && (response.status === 404 || response.status === 400)) {
-        const err = new Error('此歌曲的模型不提供 WAV（站點 ' + response.status + '）');
-        err.code = 'WAV_UNSUPPORTED';
+        const err = new Error('站點暫時找不到此歌曲的 WAV（HTTP ' + response.status + '），保留待補');
+        err.code = 'FILE_NOT_READY';
         throw err;
       }
       return direct;
     }
-    const data = await response.json().catch(() => null);
+    const data = await readDownloadJson(response);
     if (!data || typeof data !== 'object') return direct;
     if (data.server) return direct;
     if (typeof data.audio === 'string' && data.audio) return new URL(data.audio, location.origin).href;
@@ -2728,24 +2963,27 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   /* ------------------------------------------------------------------ *
    * 下載
    * ------------------------------------------------------------------ */
-  async function attemptDownload(url, filename, timeoutMs = 200000) {
+  async function attemptDownload(url, filename, timeoutMs = 200000, job = S.activeJob) {
     const conflictAction = S.options.force ? 'overwrite' : 'uniquify';
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const response = await Promise.race([
+        assertJobActive(job);
+        const response = await withConnectionTimeout(
           sendMessage({
             type: 'ACE_DOWNLOAD_FILE',
             url,
             filename,
             conflictAction,
           }),
-          sleep(timeoutMs).then(() => ({ ok: false, error: '下載逾時（' + Math.round(timeoutMs / 1000) + ' 秒）' })),
-        ]);
+          timeoutMs,
+          job,
+        );
         if (response && typeof response.ok === 'boolean') return response;
         return { ok: false, error: 'service worker 無回應' };
       } catch (err) {
+        if (isContextInvalidated(err) || (err && err.code === 'JOB_CANCELLED')) throw err;
         if (attempt === 0) {
-          await sleep(400);
+          await waitForJob(400, job);
           continue;
         }
         return { ok: false, error: String((err && err.message) || err) };
@@ -2790,12 +3028,25 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       return;
     }
     const types = jobOpts.types || FILE_TYPES.filter((type) => S.options[type]);
+    DL.record('job_start', { kind: types.join(','), counts: { songs: songs.length } });
     S.jobAuto = !!jobOpts.auto;
     if (!types.length) {
       flash('請至少勾選一種檔案類型');
       return;
     }
+    try {
+      await checkDownloadConnection();
+    } catch (err) {
+      S.stopReason = isContextInvalidated(err) ? CONTEXT_INVALIDATED_MESSAGE : String((err && err.message) || err);
+      DL.record('preflight_fail', diagnosticProgress({ errorCode: err && err.code, error: S.stopReason }));
+      S.progress = { done: 0, skipped: 0, failed: 0, total: 0, current: '', phase: 'cancelled', activeDl: 0, activePrep: 0, elapsedMs: 0 };
+      renderProgress();
+      flash(S.stopReason);
+      return;
+    }
+    S.stopReason = '';
     await Promise.all([loadDownloadState(), ensureSiteModels()]);
+    if (S.host.ok && !S.options.force && !TEST_MODE) await refreshDownloadIndex(true).catch(() => {});
     const plan = P.buildDownloadPlan({
       songs,
       options: {
@@ -2806,7 +3057,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
         origin: location.origin,
         lossyModels: S.lossyModels,
       },
-      state: { folderByTask: S.folderByTask, ownerByFolder: S.ownerByFolder, history: S.history, unavailable: S.unavailable },
+      state: { folderByTask: S.folderByTask, ownerByFolder: S.ownerByFolder, history: existingDownloadHistory(), unavailable: S.unavailable },
       origin: location.origin,
     });
     S.folderByTask = plan.folderByTask;
@@ -2815,19 +3066,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
     // 用實際檔案系統再跳過一次，避免重新下載之前（擴充功能／CLI／站點）已經抓過的檔案
     if (S.host.ok && !S.options.force && !TEST_MODE) {
-      await refreshDownloadIndex(true).catch(() => {});
       let fsSkipped = 0;
-      const aliases = S.agentAliases || {};
-      const removedRel = S.removedRel || new Map();
       for (const task of plan.tasks) {
-        const aliased = !!aliases[task.task_id];
         for (const file of task.files) {
           if (file.skip) continue;
           const rel = String(file.path).toLowerCase();
-          // alias 只跳過 MP3（完整音檔重複）；分軌等同名檔案可能來自不同 take
-          let skip = (aliased && file.kind === 'mp3') || S.fsRel.has(rel);
-          if (!skip && removedRel.has(rel)) skip = S.fsRel.has(removedRel.get(rel));
-          if (!skip) skip = S.fsNames.has(String(file.filename || '').toLowerCase());
+          let skip = S.verifiedAudio.has(task.task_id + '|' + file.kind) || S.fsRel.has(rel);
+          const ambiguous = titleIsAmbiguous(N.songFolderLabel(task.title || ''));
+          // 跨資料夾的同名檔、舊 alias 都不證明是這個 take 的音檔。
+          if (!skip && !ambiguous && file.kind !== 'mp3' && file.kind !== 'wav') {
+            skip = S.fsNames.has(String(file.filename || '').toLowerCase());
+          }
           if (skip) {
             file.skip = true;
             fsSkipped += 1;
@@ -2841,6 +3090,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     }
 
     if (!plan.toDownload) {
+      DL.record('job_done', { phase: 'done', counts: { done: 0, skipped: plan.skipped, total: plan.total } });
       S.progress = { done: 0, skipped: plan.skipped, failed: 0, total: plan.total, current: '', phase: 'done', activeDl: 0, activePrep: 0, elapsedMs: 0 };
       renderProgress();
       flash(`沒有需要下載的檔案（${plan.total} 個都已存在，可勾「強制重下」）`);
@@ -2869,6 +3119,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     let generationHalted = false; // 站點限流後：剩下的 MIDI／MusicXML 不再請求（記為略過），其他檔案照常下載
     let rateLimited = 0;
 
+    if (S.runtimeInvalidated) return;
+    // 每批有獨立身分；停止後仍在返回的網路請求不能加入下一批。
+    const job = {};
+    S.activeJob = job;
     S.running = true;
     S.cancelled = false;
     S.failedList = [];
@@ -2901,7 +3155,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       let prepCursor = 0;
       const prepWorker = async () => {
         while (true) {
-          if (S.cancelled || !S.running) return;
+          if (S.cancelled || !S.running || job !== S.activeJob) return;
           const index = prepCursor++;
           if (index >= queue.length) return;
           const entry = queue[index];
@@ -2912,20 +3166,24 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
           }
           entry.preparing = true;
           S.progress.activePrep = countActivePrep();
+          DL.record('prep_start', diagnosticProgress({ taskId: entry.task.task_id, kind: entry.file.kind, filename: entry.file.filename }));
           renderProgressSoon();
           try {
             // 站點對 MIDI 生成有速率限制：MIDI 間隔 2.5 秒、MusicXML 0.6 秒
-            if (entry.file.source === 'api') await sleep(entry.file.apiKind === 'midi' ? 2500 : 600);
+            if (entry.file.source === 'api') await waitForJob(entry.file.apiKind === 'full' || entry.file.apiKind === 'midi' ? 2500 : 600, job);
+            assertJobActive(job);
             const planned = String(entry.file.sourceUrl || '');
             // MP3 若 planner 已給 local_audio（上傳型歌曲）就直接用，不要再問 /file?kind=mp3（會回 JSON）
             const genericFileUrl = !planned || /\/api\/songs\/[^/]+\/file\?kind=(mp3|wav)\b/i.test(planned);
             entry.url =
               entry.file.source === 'api'
-                ? await createApiFile(entry.task.task_id, entry.file.apiKind)
+                ? await createApiFile(entry.task.task_id, entry.file.apiKind, job)
                 : genericFileUrl
                   ? await resolveFileUrl(entry.task.task_id, entry.file.kind)
                   : planned;
           } catch (err) {
+            DL.record('prep_error', diagnosticProgress({ taskId: entry.task.task_id, kind: entry.file.kind, filename: entry.file.filename, errorCode: err && err.code, error: (err && err.message) || err }));
+            if (isContextInvalidated(err) || (err && err.code === 'JOB_CANCELLED')) return;
             if (isAuthError(err)) {
               if (!S.cancelled) {
                 S.cancelled = true;
@@ -2940,7 +3198,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
                 flash('站點限流：MIDI／MusicXML 先略過，其他檔案繼續下載；稍後再按一次下載即可補齊');
               }
               entry.rateLimited = true;
-              return;
+              continue;
             }
             if (err && (err.code === 'WAV_UNSUPPORTED' || err.code === 'NOT_AVAILABLE')) {
               entry.unsupported = true;
@@ -2966,24 +3224,26 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
           } finally {
             entry.preparing = false;
             entry.prepDone = true;
-            S.progress.activePrep = S.running ? countActivePrep() : 0;
-            if (S.running) {
-              renderProgressSoon();
-              sendBadge(progressPercent() + '%');
+            if (job === S.activeJob) {
+              S.progress.activePrep = S.running ? countActivePrep() : 0;
+              if (S.running) {
+                renderProgressSoon();
+                sendBadge(progressPercent() + '%');
+              }
             }
           }
         }
       };
       await Promise.all(Array.from({ length: Math.max(1, Math.min(width, queue.length)) }, () => prepWorker()));
       };
-      await Promise.all([runQueue(fileEntries, 3), runQueue(genEntries, 2)]);
+      await Promise.all([runQueue(fileEntries, 3), runQueue(genEntries, 1)]);
     })();
     prepPromise.catch(() => {});
 
     let dlCursor = 0;
     const downloadWorker = async () => {
       while (true) {
-        if (S.cancelled) return;
+        if (S.cancelled || job !== S.activeJob) return;
         const index = dlCursor++;
         if (index >= entries.length) return;
         const entry = entries[index];
@@ -3008,9 +3268,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
             if (entry.prepError) throw { counted: true, error: entry.prepError };
             url = entry.url;
           }
-          let result = await attemptDownload(url, file.path);
+          assertJobActive(job);
+          DL.record('download_start', diagnosticProgress({ taskId: task.task_id, kind: file.kind, filename: file.filename }));
+          let result = await attemptDownload(url, file.path, 200000, job);
           if (!result.ok && S.cancelled) return;
           if (!result.ok) {
+            assertJobActive(job);
             const firstError = result.error || '下載失敗';
             let blobUrl = '';
             try {
@@ -3019,7 +3282,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
               throw new Error(`${firstError}；備援抓檔失敗：${(fallbackError && fallbackError.message) || fallbackError}`);
             }
             try {
-              result = await attemptDownload(blobUrl, file.path);
+              assertJobActive(job);
+              result = await attemptDownload(blobUrl, file.path, 200000, job);
               if (!result.ok) throw new Error(`${firstError}；備援下載失敗：${result.error || '未知錯誤'}`);
             } finally {
               setTimeout(() => {
@@ -3050,6 +3314,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
           S.progress.done = done;
           saveHistorySoon();
         } catch (err) {
+          DL.record('download_error', diagnosticProgress({ taskId: task.task_id, kind: file.kind, filename: file.filename, errorCode: err && err.code, error: (err && err.message) || (err && err.error && err.error.message) || err }));
+          if (isContextInvalidated(err) || (err && err.code === 'JOB_CANCELLED')) return;
           if (isAuthError(err)) {
             if (!S.cancelled) {
               S.cancelled = true;
@@ -3088,7 +3354,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       S.progress.activeDl = 0;
       S.progress.activePrep = 0;
       S.progress.elapsedMs = Date.now() - S.jobStartedAt;
+      DL.record('job_finalizing', diagnosticProgress());
       await flushHistory();
+      DL.record('job_done', diagnosticProgress());
       renderProgress();
       updateCounts();
       sendBadge('');
@@ -3105,7 +3373,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
         rateLimited,
         bytes,
       });
-      if (S.cancelled) flash(`已停止（已完成的檔案保留，花了 ${secs} 秒）`);
+      if (S.stopReason) flash(S.stopReason);
+      else if (S.cancelled) flash(`已停止（已完成的檔案保留，花了 ${secs} 秒）`);
       else if (failed) flash(`完成 ${done} 個，失敗 ${failed} 個（${secs} 秒），詳見失敗清單`);
       else if (rateLimited) flash(`完成 ${done} 個；MIDI／MusicXML 因站點限流略過 ${rateLimited} 個，稍後再按一次下載即可補齊（已下載的會自動跳過）`);
       else flash(`完成：下載 ${done} 個${skipped ? `，跳過 ${skipped} 個已存在` : ''}（${secs} 秒）`);

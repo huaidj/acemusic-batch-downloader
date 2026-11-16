@@ -3,6 +3,7 @@
 // 所有歌單抓取、命名、排程與進度計算都在 content script（content.js）完成，
 // 這樣即使 service worker 被 Chrome 回收，也不會中斷整個批次工作。
 'use strict';
+importScripts('diagnostics.js');
 
 const DOWNLOAD_TIMEOUT_MS = 180000;
 const pending = new Map(); // downloadId -> { done, filename }
@@ -318,6 +319,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return false;
       }
       return respondLater(() => hostRequest({ cmd: 'export', name: msg.name, data: msg.data || {} }, 15000), sendResponse);
+    case 'ACE_SAVE_DIAGNOSTICS': {
+      // Fixed destination, strict field allowlist, and no account/session data.
+      if (!msg.data || !Array.isArray(msg.data.events) || msg.data.events.length > 200 || JSON.stringify(msg.data).length > 262144) {
+        sendResponse({ ok: false, error: 'invalid diagnostics snapshot' });
+        return false;
+      }
+      const snapshot = globalThis.AceDLDiagnostics.sanitizeSnapshot(msg.data);
+      return respondLater(() => hostRequest({ cmd: 'export', name: 'download-log', data: snapshot }, 15000), sendResponse);
+    }
     case 'ACE_AGENT_STATUS':
       return respondLater(async () => {
         const stored = await chrome.storage.local.get(['aceAgentExportAt']);

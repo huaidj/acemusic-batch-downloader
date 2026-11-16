@@ -1,6 +1,6 @@
 {
   "name": "acemusic-batch-downloader",
-  "version": "1.7.3",
+  "version": "1.7.4",
   "private": true,
   "description": "Batch-download ACE Music stems, MIDI, MusicXML, MP3 and covers; auto-organize locally. Chrome extension + CLI/MCP/Hub.",
   "license": "MIT",
@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "test:unit": "node --test test/unit/",
+    "test:unit": "node --test test/unit/*.mjs",
     "test:e2e": "node test/e2e.mjs",
     "pack": "node scripts/pack.mjs",
     "hub": "node agent/hub.mjs",
