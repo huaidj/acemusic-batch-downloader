@@ -119,6 +119,8 @@ const CONSOLE_ERROR_ALLOWED_SCENARIOS = new Set([
   'S7_logged_out_shows_login_hint',
   'S9_failure_shows_readable_message',
   'S11_fallback_blob_success',
+  'S13_no_download_marks_unavailable',
+  'S14_rate_limit_stops_without_mass_failures',
 ]);
 let currentScenario = null;
 
@@ -468,6 +470,121 @@ scenario('S11_fallback_blob_success', async () => {
   );
   const drumReqs = mock.log.filter((e) => e.path === '/data/stems/song-a-drums.mp3');
   assertEqual(drumReqs.length, 1, 'S11 drums 應直連成功只請求一次');
+});
+
+const liveSong = (id, title, tracks) => ({
+  task_id: id,
+  capability: 'music_generate',
+  status: 'succeeded',
+  model: 'acemusic-v1.1',
+  local_audio: `/data/mock/${id}.mp3`,
+  local_cover: null,
+  created_at: new Date().toISOString(),
+  meta: { title },
+  result: { duration_sec: 30 },
+  stems: tracks ? { '2': { status: 'done', tracks: tracks.map((t) => track(`${id}-${t}`, t)) } } : null,
+});
+const track = (id, type) => ({ id, type, local_audio: `/data/stems/${id}.mp3`, duration: 12.5, peaks: null });
+const panelHasSong = (p, id, timeout = 8000) =>
+  p.waitForFunction((sid) => !!document.getElementById('acedl-host')?.shadowRoot?.querySelector(`[data-song-id="${sid}"]`), id, { timeout, polling: 50 });
+
+scenario('S12_live_new_song_via_sse', async () => {
+  // 站點 SSE 推 ver → 面板只抓 /api/songs/changes 增量，不再全量抓歌單
+  await freshPanel(page, mock.base);
+  await page.waitForFunction(() => true, null, { timeout: 500 }).catch(() => {});
+  const waitSse = Date.now() + 8000;
+  while (mock.sseClientCount() < 1 && Date.now() < waitSse) await new Promise((r) => setTimeout(r, 50));
+  assert(mock.sseClientCount() >= 1, 'S12 面板應訂閱 /api/songs/events');
+  mock.clearLog();
+  const started = Date.now();
+  mock.addSong(liveSong('song-live1', 'Live One', ['vocal']));
+  await panelHasSong(page, 'song-live1');
+  const ms = Date.now() - started;
+  results.liveLatencyMs = ms;
+  assert(ms < 3000, `S12 新歌應在 3 秒內出現，實際 ${ms}ms`);
+  const fullLists = mock.log.filter((e) => /^\/api\/songs\?/.test(e.path)).length;
+  const deltas = mock.log.filter((e) => e.path.startsWith('/api/songs/changes')).length;
+  assert(deltas >= 1, 'S12 應呼叫 /api/songs/changes');
+  assertEqual(fullLists, 0, 'S12 SSE 連線時不應全量重抓歌單');
+  mock.removeSong('song-live1');
+});
+
+scenario('S13_no_download_marks_unavailable', async () => {
+  mock.setNoDownload('song-c', 'full');
+  try {
+    await freshPanel(page, mock.base);
+    await applyOptions(page, { stems: false, midi: true, cover: false });
+    await setRootFolder(page, 'na-test');
+    await selectSongs(page, ['song-c']);
+    await clickDownload(page);
+    const first = await waitJobDone(page);
+    assertEqual(first.counts, { done: 0, failed: 0, skipped: 1, total: 1 }, 'S13 no_download 應算跳過不算失敗');
+    const storage = await readStorage(context);
+    assert(storage.aceUnavailable && storage.aceUnavailable['song-c'] && storage.aceUnavailable['song-c'].midi, 'S13 應記下 song-c MIDI 不可用');
+    // 第二次：planner 直接跳過，不再向站點請求
+    mock.clearLog();
+    await freshPanel(page, mock.base);
+    await applyOptions(page, { stems: false, midi: true, cover: false });
+    await setRootFolder(page, 'na-test');
+    await selectSongs(page, ['song-c']);
+    await clickDownload(page);
+    const second = await waitJobDone(page);
+    assertEqual(second.counts.failed, 0, 'S13 第二次不應失敗');
+    const posts = mock.log.filter((e) => e.method === 'POST' && e.path.startsWith('/api/songs/song-c/download')).length;
+    assertEqual(posts, 0, 'S13 第二次不應再請求 song-c 的 MIDI');
+    const badge = await page.evaluate(() => {
+      const row = document.getElementById('acedl-host').shadowRoot.querySelector('[data-song-id="song-c"]');
+      return row ? [...row.querySelectorAll('[title]')].map((n) => n.getAttribute('title')).join(' | ') : '';
+    });
+    results.s13Badge = badge;
+  } finally {
+    mock.clearSiteErrors();
+  }
+});
+
+scenario('S14_rate_limit_stops_without_mass_failures', async () => {
+  mock.setRateLimited('song-a', 'full');
+  mock.setRateLimited('song-b', 'full');
+  try {
+    await freshPanel(page, mock.base);
+    await applyOptions(page, { stems: false, midi: true, cover: false });
+    await setRootFolder(page, 'rl-test');
+    await selectSongs(page, ['song-a', 'song-b']);
+    await clickDownload(page);
+    const progress = await waitJobDone(page, 60000);
+    assertEqual(progress.counts.failed, 0, 'S14 限流不應記成大量失敗');
+    assert(progress.counts.done === 0, 'S14 限流時不應有完成檔');
+  } finally {
+    mock.clearSiteErrors();
+  }
+});
+
+scenario('S15_auto_download_new_song', async () => {
+  // 開「新歌自動下載」→ 站點新完成一首 → 自動下載勾選類型（預設不含 MIDI/MusicXML）
+  await freshPanel(page, mock.base);
+  await applyOptions(page, { stems: true, midi: true, cover: false });
+  await setRootFolder(page, 'auto-test');
+  await setOption(page, 'autoNewScores', false);
+  await setOption(page, 'autoNew', true);
+  const waitSse = Date.now() + 8000;
+  while (mock.sseClientCount() < 1 && Date.now() < waitSse) await new Promise((r) => setTimeout(r, 50));
+  await new Promise((r) => setTimeout(r, 300));
+  mock.clearLog();
+  mock.addSong(liveSong('song-live2', 'Live Two', ['vocal', 'drums']));
+  const expected = {
+    'auto-test/Live Two/Live Two - Vocals.mp3': stem('song-live2-vocal'),
+    'auto-test/Live Two/Live Two - Drums.mp3': stem('song-live2-drums'),
+  };
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline && checkFileMap(ROOT, expected, 'S15').length) await new Promise((r) => setTimeout(r, 200));
+  assertFileMap(ROOT, expected, 'S15');
+  await waitJobDone(page, 30000);
+  const midiPosts = mock.log.filter((e) => e.method === 'POST' && e.path.startsWith('/api/songs/song-live2/download')).length;
+  assertEqual(midiPosts, 0, 'S15 自動下載預設不應生成 MIDI（可能扣 credit）');
+  // 舊歌不應被自動下載
+  assertEqual(relFiles(ROOT, 'auto-test').filter((r) => !r.startsWith('Live Two/')), [], 'S15 只自動下載新歌');
+  await setOption(page, 'autoNew', false);
+  mock.removeSong('song-live2');
 });
 
 scenario('S7_logged_out_shows_login_hint', async () => {

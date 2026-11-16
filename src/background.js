@@ -189,7 +189,7 @@ function hostRequest(payload, timeoutMs = 30000) {
     });
 }
 
-const PAGE_EXPORT_NAMES = new Set(['page-songs', 'page-unavailable']);
+const PAGE_EXPORT_NAMES = new Set(['page-songs', 'page-unavailable', 'page-events']);
 
 async function exportSessionToHost() {
     const cookies = await chrome.cookies.getAll({ domain: 'acemusic.ai' });

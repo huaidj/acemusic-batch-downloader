@@ -28,6 +28,8 @@
     autoRefresh: true,
     autoFix: true,
     autoOrganize: true,
+    autoNew: false, // 新歌自動下載（只處理開啟之後完成的歌）
+    autoNewScores: false, // 自動下載是否含 MIDI／MusicXML（站點生成，可能扣 credit）
     concurrency: 4,
   });
   const DEFAULT_ROOT = 'ai音樂';
@@ -377,6 +379,19 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       saveSettings();
     });
     optRows.append(el('label', { class: 'chk', title: '下載後自動整理：成品MP3／採樣包／MIDI分類' }, [autoOrganizeCb, '下載完自動整理']));
+    const autoNewCb = el('input', { type: 'checkbox', 'data-opt': 'autoNew', checked: S.options.autoNew });
+    autoNewCb.addEventListener('change', () => {
+      S.options.autoNew = autoNewCb.checked;
+      saveSettings();
+      if (S.options.autoNew) enableAutoNew();
+    });
+    optRows.append(el('label', { class: 'chk', title: '開啟之後新完成的歌，自動下載上方勾選的類型（分軌會等分離完成）；需開著這個分頁' }, [autoNewCb, '新歌自動下載']));
+    const autoScoresCb = el('input', { type: 'checkbox', 'data-opt': 'autoNewScores', checked: S.options.autoNewScores });
+    autoScoresCb.addEventListener('change', () => {
+      S.options.autoNewScores = autoScoresCb.checked;
+      saveSettings();
+    });
+    optRows.append(el('label', { class: 'chk', title: 'MIDI／MusicXML 由站點即時生成，可能扣 credit；預設自動下載不含' }, [autoScoresCb, '自動含 MIDI／MusicXML']));
     const concSel = el('select', { class: 'mini', 'data-opt': 'concurrency' });
     for (const n of [1, 2, 3, 4, 5, 6]) concSel.append(el('option', { value: String(n), text: String(n) }));
     concSel.value = String(S.options.concurrency);
@@ -1167,6 +1182,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
   async function loadSongsFromApi() {
     const collected = [];
     let after = '';
+    let ver = 0;
     for (let page = 0; page < MAX_PAGES; page += 1) {
       const params = new URLSearchParams({ limit: String(PAGE_LIMIT), sort: 'new' });
       if (after) params.set('after', after);
@@ -1181,11 +1197,181 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       if (!response.ok) throw new Error('伺服器回應 HTTP ' + response.status);
       const data = await response.json().catch(() => null);
       const items = data && Array.isArray(data.items) ? data.items : [];
+      // 第一頁的 ver = 歌單版本；之後用 /api/songs/changes?since=ver 只抓增量
+      if (page === 0 && data && data.ver != null) ver = Number(data.ver) || 0;
       collected.push(...items);
       after = (data && data.next) || '';
       if (!after || !items.length) break;
     }
-    return { songs: collected.filter((song) => song && song.task_id && P.isDone(song)), error: '' };
+    return { songs: collected.filter((song) => song && song.task_id && P.isDone(song)), error: '', ver };
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 即時同步：訂閱站點 /api/songs/events（SSE），版本變了才抓增量
+   * 取代每 8 秒全量抓歌單；SSE 斷線時自動退回輪詢
+   * ------------------------------------------------------------------ */
+  const LIVE = { es: null, refused: 0, pulling: null, again: false, lastSafety: 0, progress: {} };
+  function liveOpen() {
+    return !!(LIVE.es && typeof EventSource === 'function' && LIVE.es.readyState === EventSource.OPEN);
+  }
+  function startLive() {
+    if (LIVE.es || typeof EventSource !== 'function') return;
+    let es;
+    try {
+      es = LIVE.es = new EventSource('/api/songs/events');
+    } catch (_) {
+      LIVE.es = null;
+      return;
+    }
+    es.onmessage = (event) => {
+      LIVE.refused = 0;
+      let msg = {};
+      try {
+        msg = JSON.parse(event.data) || {};
+      } catch (_) {
+        /* ignore */
+      }
+      if (msg.live && typeof msg.live === 'object') {
+        // 生成中歌曲的進度（目前只記著；完成後會有 ver 變動）
+        Object.assign(LIVE.progress, msg.live);
+        return;
+      }
+      const ver = Number(msg.ver) || 0;
+      if (ver > (S.libVer || 0)) pullChanges();
+    };
+    es.onerror = () => {
+      if (LIVE.es !== es) return;
+      // 瀏覽器會自己重連；被拒（CLOSED）才由我們退避後重開（5s×2^n，上限 60s）
+      if (es.readyState === EventSource.CLOSED) {
+        LIVE.es = null;
+        setTimeout(startLive, Math.min(60000, 5000 * 2 ** LIVE.refused++));
+      }
+    };
+  }
+  function pullChanges() {
+    if (LIVE.pulling) {
+      LIVE.again = true;
+      return LIVE.pulling;
+    }
+    LIVE.pulling = (async () => {
+      do {
+        LIVE.again = false;
+        await pullChangesOnce();
+      } while (LIVE.again);
+    })().finally(() => {
+      LIVE.pulling = null;
+    });
+    return LIVE.pulling;
+  }
+  async function pullChangesOnce() {
+    if (!S.libVer || !S.loaded) return refreshSongsQuiet();
+    const res = await fetch('/api/songs/changes?since=' + encodeURIComponent(S.libVer), {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    }).catch(() => null);
+    const data = res && res.ok ? await res.json().catch(() => null) : null;
+    if (!data) return;
+    if (data.reset) return refreshSongsQuiet();
+    const byId = new Map(S.songs.map((song) => [song.task_id, song]));
+    for (const id of data.gone || []) byId.delete(id);
+    for (const item of data.items || []) {
+      // 生成中的歌先不列（完成後會再收到一次變動）
+      if (item && item.task_id && P.isDone(item)) byId.set(item.task_id, item);
+    }
+    S.libVer = Math.max(S.libVer || 0, Number(data.ver) || 0);
+    applySongs([...byId.values()].sort((a, b) => songMs(b.created_at) - songMs(a.created_at)));
+  }
+
+  /** 站點時間是毫秒數字；也容許 ISO 字串 */
+  function songMs(value) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) return n;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 新歌自動下載：只處理「開啟之後」完成的歌；分軌等分離完成；同一首同一組分軌只自動一次
+   * ------------------------------------------------------------------ */
+  const KEY_AUTO = 'aceAutoNew';
+  const AUTO = { since: 0, done: {}, queue: [], timer: 0 };
+  async function loadAutoState() {
+    const got = await storageGet([KEY_AUTO]);
+    const data = (got && got[KEY_AUTO]) || {};
+    AUTO.since = Number(data.since) || 0;
+    AUTO.done = data.done && typeof data.done === 'object' ? data.done : {};
+  }
+  function saveAutoState() {
+    // 只留最近 500 首的紀錄
+    const entries = Object.entries(AUTO.done).sort((a, b) => (b[1].at || 0) - (a[1].at || 0)).slice(0, 500);
+    AUTO.done = Object.fromEntries(entries);
+    return storageSet({ [KEY_AUTO]: { since: AUTO.since, done: AUTO.done } });
+  }
+  async function enableAutoNew() {
+    await loadAutoState();
+    if (!AUTO.since) {
+      AUTO.since = Date.now();
+      await saveAutoState();
+      flash('已開啟新歌自動下載：之後完成的新歌會自動下載');
+    }
+    startLive();
+  }
+  function stemsKeyOf(song) {
+    const group = P.pickStemGroup(song.stems);
+    return group ? group.mode + ':' + group.tracks.length : 'none';
+  }
+  function stemsRunning(song) {
+    return Object.values(song.stems || {}).some((job) => job && (job.status === 'running' || job.status === 'pending' || job.status === 'queued'));
+  }
+  function autoTypes() {
+    return FILE_TYPES.filter((type) => S.options[type] && (S.options.autoNewScores || (type !== 'midi' && type !== 'musicxml')));
+  }
+  function checkAutoNew() {
+    if (!S.options.autoNew || !AUTO.since) return;
+    const due = [];
+    for (const song of S.songs) {
+      const created = songMs(song.finished_at) || songMs(song.created_at);
+      if (created < AUTO.since || !P.isDone(song) || stemsRunning(song)) continue;
+      const key = stemsKeyOf(song);
+      const prev = AUTO.done[song.task_id];
+      if (prev && prev.stems === key) continue;
+      due.push(song);
+    }
+    if (!due.length) return;
+    for (const song of due) {
+      if (!AUTO.queue.some((s) => s.task_id === song.task_id)) AUTO.queue.push(song);
+      if (!AUTO.done[song.task_id]) emitPageEvent({ type: 'song_new', task_id: song.task_id, title: (song.meta && song.meta.title) || '' });
+    }
+    runAutoQueue();
+  }
+  function runAutoQueue() {
+    clearTimeout(AUTO.timer);
+    if (!AUTO.queue.length) return;
+    if (S.running) {
+      AUTO.timer = setTimeout(runAutoQueue, 3000);
+      return;
+    }
+    const types = autoTypes();
+    const songs = AUTO.queue.splice(0, AUTO.queue.length);
+    for (const song of songs) AUTO.done[song.task_id] = { at: Date.now(), stems: stemsKeyOf(song) };
+    saveAutoState();
+    if (!types.length) return;
+    emitPageEvent({ type: 'auto_download', task_ids: songs.map((s) => s.task_id), types });
+    startJob(songs, { types, auto: true }).catch(() => {});
+  }
+
+  /* 頁面事件 → 本機（page-events.json，Hub 監看後經 SSE 推給 agent） */
+  const PAGE_EVENTS = [];
+  let pageEventsTimer = 0;
+  function emitPageEvent(evt) {
+    PAGE_EVENTS.push({ ...evt, at: Date.now() });
+    if (PAGE_EVENTS.length > 100) PAGE_EVENTS.splice(0, PAGE_EVENTS.length - 100);
+    if (TEST_MODE || !S.host || !S.host.ok) return;
+    clearTimeout(pageEventsTimer);
+    pageEventsTimer = setTimeout(() => {
+      sendMessage({ type: 'ACE_HOST_EXPORT_PAGE', name: 'page-events', data: { savedAt: Date.now(), events: PAGE_EVENTS.slice() } }).catch(() => {});
+    }, 150);
   }
 
   /** 歌單是否實質改變（用來避免自動更新時無謂重繪） */
@@ -1250,6 +1436,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     if (changed) renderSongs();
     else updateCounts();
     exportPageSongs(songs, sig);
+    checkAutoNew();
   }
 
   async function fetchSongs() {
@@ -1264,6 +1451,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
         S.songs = [];
         S.lastSig = '';
       } else {
+        S.libVer = result.ver || S.libVer || 0;
         applySongs(result.songs);
       }
     } catch (err) {
@@ -1301,6 +1489,8 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
         return;
       }
       if (S.loadError) S.loadError = '';
+      S.libVer = result.ver || S.libVer || 0;
+      S.loaded = true;
       applySongs(result.songs);
     } catch (err) {
       /* 背景刷新失敗不吵使用者，等下一次 */
@@ -1316,7 +1506,15 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     S.autoTimer = setInterval(() => {
       if (S.els.panel && S.els.panel.hidden) return;
       if (document.hidden) return;
-      refreshSongsQuiet();
+      // SSE 連著：站點會推版本變動，這裡只做 60 秒一次的增量保險；斷線才回到全量輪詢
+      if (liveOpen()) {
+        if (Date.now() - LIVE.lastSafety > 60000) {
+          LIVE.lastSafety = Date.now();
+          pullChanges();
+        }
+      } else {
+        refreshSongsQuiet();
+      }
       if (S.host.ok) {
         refreshDownloadIndex(false).then(() => {
           if (S.songs.length) renderSongs();
@@ -1617,7 +1815,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       if (response.status === 429 || code === 'rate_limited' || /too often|too many/i.test(detail)) {
         if (attempt < 2) {
           flash(`站點限流，等待 60 秒後重試（${kind}）`);
-          await sleep(60000);
+          await sleep(TEST_MODE ? 200 : 60000);
           continue;
         }
         const err = new Error('站點限流（429）：' + detail);
@@ -1697,12 +1895,13 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     return URL.createObjectURL(blob);
   }
 
-  async function startJob(songs) {
+  async function startJob(songs, jobOpts = {}) {
     if (S.running) {
       flash('已有下載進行中');
       return;
     }
-    const types = FILE_TYPES.filter((type) => S.options[type]);
+    const types = jobOpts.types || FILE_TYPES.filter((type) => S.options[type]);
+    S.jobAuto = !!jobOpts.auto;
     if (!types.length) {
       flash('請至少勾選一種檔案類型');
       return;
@@ -1982,6 +2181,16 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       sendBadge('');
       const skipped = plan.skipped;
       const secs = Math.round(S.progress.elapsedMs / 1000);
+      emitPageEvent({
+        type: 'download_done',
+        auto: !!S.jobAuto,
+        task_ids: plan.tasks.map((task) => task.task_id),
+        done,
+        failed,
+        skipped,
+        cancelled: !!S.cancelled,
+        bytes,
+      });
       if (S.cancelled) flash(`已停止（已完成的檔案保留，花了 ${secs} 秒）`);
       else if (failed) flash(`完成 ${done} 個，失敗 ${failed} 個（${secs} 秒），詳見失敗清單`);
       else flash(`完成：下載 ${done} 個${skipped ? `，跳過 ${skipped} 個已存在` : ''}（${secs} 秒）`);
@@ -2010,16 +2219,26 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
    * 啟動
    * ------------------------------------------------------------------ */
   buildUi();
-  loadSettings().then(() => {
-    syncOptionsToUi();
-    startAutoRefresh();
-    return loadDownloadState();
-  });
-  refreshHostStatus()
-    .then(() => refreshDownloadIndex(true))
+  loadSettings()
+    .then(() => {
+      syncOptionsToUi();
+      startAutoRefresh();
+      return Promise.all([loadDownloadState(), loadAutoState()]);
+    })
+    .then(() => refreshHostStatus())
+    .then(() => {
+      // 有本機中樞或開了新歌自動下載：面板沒打開也要在背景同步歌單（給 agent／自動下載用）
+      if (S.options.autoNew) enableAutoNew();
+      if (S.host.ok || S.options.autoNew) {
+        startLive();
+        if (!S.loaded) refreshSongsQuiet();
+      }
+      return refreshDownloadIndex(true);
+    })
     .then(() => {
       if (S.songs.length) renderSongs();
-    });
+    })
+    .catch(() => {});
   // 切回分頁時立刻更新一次歌單（分軌完成後不必手動重整頁面）
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && S.els.panel && !S.els.panel.hidden && S.loaded) {

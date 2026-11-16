@@ -198,6 +198,19 @@ export function startMockServer(options = {}) {
   const polls = new Map(); // `${id}:${kind}` -> 已輪詢次數
   const failing = new Set(); // pathname 集合：命中就回 500（測失敗顯示）
   const failFirst = new Map(); // pathname -> 接下來的 N 次請求回 500（測 content 端 blob 備援）
+  // 即時同步（對齊真站 /api/songs/events + /api/songs/changes?since=）
+  const songs = [...SONGS];
+  let ver = 1;
+  const changes = []; // { ver, task_id }
+  const sseClients = new Set();
+  const noDownload = new Set(); // ${id}: → 404 no_download
+  const rateLimited = new Set(); // ${id}: → 429
+  const findSong = (id) => songs.find((s) => s.task_id === id);
+  const bump = (id) => {
+    ver += 1;
+    changes.push({ ver, task_id: id });
+    for (const client of sseClients) client.write(`data: ${JSON.stringify({ ver })}\n\n`);
+  };
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://mock');
@@ -265,7 +278,7 @@ export function startMockServer(options = {}) {
       }
       const sort = url.searchParams.get('sort') === 'old' ? 'old' : 'new';
       const after = url.searchParams.get('after') || '';
-      let ordered = [...SONGS];
+      let ordered = [...songs];
       if (sort === 'new') ordered.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
       else ordered.sort((a, b) => (a.created_at > b.created_at ? 1 : -1));
       const startIdx = after
@@ -274,7 +287,30 @@ export function startMockServer(options = {}) {
       const slice = ordered.slice(startIdx, startIdx + pageSize);
       const last = slice[slice.length - 1];
       const next = slice.length === pageSize && last ? `${last.created_at}~${last.task_id}` : null;
-      sendJson(200, { items: slice, next, ver: 1 });
+      sendJson(200, { items: slice, next, ver });
+      return;
+    }
+
+    if (url.pathname === '/api/songs/events' && req.method === 'GET') {
+      if (!isAuthed(req)) {
+        deny();
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+      res.write(`data: ${JSON.stringify({ ver })}\n\n`);
+      sseClients.add(res);
+      req.on('close', () => sseClients.delete(res));
+      return;
+    }
+
+    if (url.pathname === '/api/songs/changes' && req.method === 'GET') {
+      if (!isAuthed(req)) {
+        deny();
+        return;
+      }
+      const since = Number(url.searchParams.get('since')) || 0;
+      const ids = [...new Set(changes.filter((c) => c.ver > since).map((c) => c.task_id))];
+      sendJson(200, { items: ids.map(findSong).filter(Boolean), gone: [], ver, reset: false });
       return;
     }
 
@@ -307,7 +343,7 @@ export function startMockServer(options = {}) {
         return;
       }
       const id = decodeURIComponent(genMatch[1]);
-      const song = SONGS.find((s) => s.task_id === id);
+      const song = findSong(id);
       if (!song) {
         sendJson(404, { error: 'not found' });
         return;
@@ -315,6 +351,14 @@ export function startMockServer(options = {}) {
       if (req.method === 'POST') {
         const body = await readBody(req);
         const kind = body.kind === 'musicxml' ? 'musicxml' : 'full';
+        if (noDownload.has(`${id}:${kind}`)) {
+          sendJson(404, { error: { code: 'no_download', message: "This file isn't available for this song" } });
+          return;
+        }
+        if (rateLimited.has(`${id}:${kind}`)) {
+          sendJson(429, { error: { code: 'rate_limited', message: "You're doing that too often" } });
+          return;
+        }
         if (!(song.status === 'succeeded' && song.local_audio)) {
           sendJson(409, { error: 'song not ready' });
           return;
@@ -376,6 +420,31 @@ export function startMockServer(options = {}) {
         failPath: (pathname) => failing.add(pathname),
         clearFailures: () => failing.clear(),
         failFirstRequests: (pathname, n = 1) => failFirst.set(pathname, n),
+        /** 模擬「站點新完成一首歌」：加入歌單、ver+1、推 SSE */
+        addSong: (song) => {
+          songs.unshift(song);
+          bump(song.task_id);
+        },
+        /** 模擬既有歌曲更新（例如分軌完成） */
+        updateSong: (id, patch) => {
+          const song = findSong(id);
+          if (song) Object.assign(song, patch);
+          bump(id);
+        },
+        removeSong: (id) => {
+          const i = songs.findIndex((s) => s.task_id === id);
+          if (i >= 0) songs.splice(i, 1);
+        },
+        setNoDownload: (id, kind = 'full') => noDownload.add(`${id}:${kind}`),
+        setRateLimited: (id, kind = 'full') => rateLimited.add(`${id}:${kind}`),
+        clearSiteErrors: () => {
+          noDownload.clear();
+          rateLimited.clear();
+        },
+        sseClientCount: () => sseClients.size,
+        get ver() {
+          return ver;
+        },
       });
     });
   });
