@@ -108,6 +108,29 @@
   }
 
   /**
+   * 由同一組 A／B 詞條與 seed 產生歌曲名（可復現）：各取兩字（詞首或詞尾），兩半不得相同。
+   * 例：玄武岩壓力 × 近距離錯步 → 玄武錯步。只用詞典內的中文名，不另造詞。
+   */
+  function songTitle(a, b, rng) {
+    const halves = (name) => {
+      const chars = Array.from(String(name || '').trim());
+      if (chars.length < 2) return chars.length ? [chars.join('')] : [];
+      return [...new Set([chars.slice(0, 2).join(''), chars.slice(-2).join('')])];
+    };
+    const left = halves(a && a.name_zh);
+    const right = halves(b && b.name_zh);
+    const pairs = [];
+    for (const x of left) for (const y of right) if (x !== y) pairs.push(x + y);
+    if (!pairs.length) return '';
+    return pairs[Math.floor(rng() * pairs.length) % pairs.length];
+  }
+
+  /** Idea 模式把歌名明確寫進同一段提示詞；Custom 的 Style 框不放歌名（站點另有 Title 欄）。 */
+  function withTitle(text, title) {
+    return title ? `Song title: "${title}". ${text}` : text;
+  }
+
+  /**
    * 隨機一格。lockA／lockB：固定某一軸（只變另一軸）；weightsA／weightsB：{ id: weight } 覆蓋（使用者調整）。
    * 回傳含完整追溯資訊：seed、詞典 id／版本、模型、模式、欄位、字數／上限。
    */
@@ -121,8 +144,18 @@
     const a = options.lockA ? dict.axis_a.find((x) => x.id === options.lockA) : weightedPick(dict.axis_a, rng, w(options.weightsA));
     const b = options.lockB ? dict.axis_b.find((x) => x.id === options.lockB) : weightedPick(dict.axis_b, rng, w(options.weightsB));
     if (!a || !b) return { ok: false, status: 'empty_pool', reason: options.lockA || options.lockB ? '鎖定的格子不存在' : '沒有可抽的詞條（權重都是 0 或已停用）', context: { ...ctx, dictionary: undefined } };
-    const out = compile(dict, a.id, b.id, ctx.limit);
+    const compiled = compile(dict, a.id, b.id, 0);
+    const title = songTitle(a, b, rng);
+    let out = compiled;
+    if (compiled.ok) {
+      const text = ctx.mode === 'idea' ? withTitle(compiled.text, title) : compiled.text;
+      out = ctx.limit > 0 && text.length > ctx.limit
+        ? { ok: false, reason: `長度 ${text.length} 超過這個欄位的上限 ${ctx.limit}（不硬截斷，需要這個模型專用的精簡詞典）` }
+        : { ...compiled, text, length: text.length };
+    }
     const base = {
+      title,
+      titleInPrompt: ctx.mode === 'idea' && !!title,
       seed,
       cell: `${a.id}_${b.id}`,
       a: { id: a.id, name_zh: a.name_zh },
@@ -163,6 +196,8 @@
     newSeed,
     weightedPick,
     compile,
+    songTitle,
+    withTitle,
     randomPrompt,
     randomBatch,
   });

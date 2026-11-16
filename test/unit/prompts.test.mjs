@@ -126,3 +126,36 @@ test('agent：ACE.randomPrompt 沒有登入／離線時用後備上限，仍區�
   assert.equal(step.prompts[0].status, 'no_dictionary');
   assert.equal(step.prompts[0].text, undefined);
 });
+
+test('隨機 Idea 內含歌名：同 seed 同名、寫入同一段提示詞且仍符合固定約束；Custom 不把歌名塞進 Style', () => {
+  const idea = PR.randomPrompt({ modelId: 'acemusic-v1.1', mode: 'idea', seed: 42 });
+  const again = PR.randomPrompt({ modelId: 'acemusic-v1.1', mode: 'idea', seed: 42 });
+  assert.equal(idea.ok, true);
+  assert.ok(idea.title && Array.from(idea.title).length === 4, idea.title);
+  assert.equal(idea.title, again.title);
+  assert.equal(idea.text, again.text);
+  assert.equal(idea.titleInPrompt, true);
+  assert.ok(idea.text.startsWith(`Song title: "${idea.title}". `));
+  for (const rule of PR.REQUIRED) assert.match(idea.text.toLowerCase(), rule.test, rule.id);
+  assert.equal(idea.length, idea.text.length);
+  const custom = PR.randomPrompt({ modelId: 'acemusic-v1.1', mode: 'custom', seed: 42 });
+  assert.equal(custom.titleInPrompt, false);
+  assert.ok(!custom.text.includes('Song title'));
+  assert.equal(custom.title, idea.title);
+});
+
+test('歌名只取詞典中文名的詞首／詞尾兩字，兩半不同；名稱過短時不亂造', () => {
+  const rng = PR.makeRng(7);
+  const title = PR.songTitle({ name_zh: '玄武岩壓力' }, { name_zh: '近距離錯步' }, rng);
+  assert.ok(['玄武錯步', '玄武近距', '壓力錯步', '壓力近距'].includes(title), title);
+  assert.equal(PR.songTitle({ name_zh: '同字' }, { name_zh: '同字' }, rng), '');
+  assert.equal(PR.songTitle({ name_zh: '' }, { name_zh: '近距離錯步' }, rng), '');
+  assert.equal(PR.withTitle('x', ''), 'x');
+});
+
+test('加上歌名後仍不硬截斷：超過欄位上限回報原因', () => {
+  const ctx = { ...PR.resolveContext({ modelId: 'acemusic-v1.1', mode: 'idea' }), limit: 700 };
+  const r = PR.randomPrompt({ context: ctx, seed: 42 });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /超過這個欄位的上限 700/);
+});

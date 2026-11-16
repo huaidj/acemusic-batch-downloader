@@ -1475,11 +1475,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     S.els.randCopy.disabled = !have;
     S.els.randText.value = have ? cur.text : '';
     S.els.randMeta.textContent = have
-      ? `${cur.a.id} ${cur.a.name_zh} × ${cur.b.id} ${cur.b.name_zh} · ${cur.text.length}/${ctx.limit || cur.limit} 字 · seed ${cur.seed} · ${cur.modelName}／${cur.mode} · 詞典 v${cur.dictionaryVersion}${stale ? ' · ⚠ ' + staleReason : ''}`
+      ? `${cur.title ? '「' + cur.title + '」' + (cur.titleInPrompt ? '（已寫入提示詞）' : '') + ' · ' : ''}${cur.a.id} ${cur.a.name_zh} × ${cur.b.id} ${cur.b.name_zh} · ${cur.text.length}/${ctx.limit || cur.limit} 字 · seed ${cur.seed} · ${cur.modelName}／${cur.mode} · 詞典 v${cur.dictionaryVersion}${stale ? ' · ⚠ ' + staleReason : ''}`
       : '';
     S.els.randHistory.textContent = '';
     for (const item of RND.history) {
-      const b = el('button', { class: 'chip', type: 'button', title: `${item.a.name_zh} × ${item.b.name_zh}（${item.modelName}／${item.mode}）`, text: item.cell });
+      const b = el('button', { class: 'chip', type: 'button', title: `${item.title ? item.title + '：' : ''}${item.a.name_zh} × ${item.b.name_zh}（${item.modelName}／${item.mode}）`, text: item.title || item.cell });
       b.addEventListener('click', () => {
         RND.current = item;
         renderRandom();
@@ -1527,7 +1527,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       return flash(invalid);
     }
     const res = fillPageField(cur.field, cur.text);
-    flash(res.ok ? `已填入${cur.field === 'prompt' ? '自然語言框' : 'Style 框'}（${cur.length} 字）；確認後自行按 Generate` : res.reason);
+    flash(res.ok ? `已填入${cur.field === 'prompt' ? '自然語言框' : 'Style 框'}（${cur.length} 字${cur.titleInPrompt ? `，歌名「${cur.title}」` : ''}）；確認後自行按 Generate` : res.reason);
   }
 
   /* ------------------------------------------------------------------ *
