@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HuaiDJ · 創作工作台</title><link rel="stylesheet" href="/music/tokens.css"><link rel="stylesheet" href="/music/app.css"><script defer src="/music/app.js"></script></head>
+<body>
+<header><div class="brand"><svg viewBox="0 0 32 24" aria-hidden="true"><path d="M2 12h4l3-8 5 16 4-12 3 4h9"/></svg><strong>HuaiDJ</strong><span>創作工作台</span></div><span class="status">本機預覽 · 不扣費</span></header>
+<main>
+<nav aria-label="工作區"><a href="#create">創作</a><a href="#directions">方向</a><a href="#tasks">任務</a><a href="#library">候選庫</a><a href="#performance">演出</a></nav>
+<div class="title"><h1>把聲音方向寫清楚</h1><p>先審閱實際提示詞，再準備有限批次。</p></div>
+<div id="notice" role="status" aria-live="polite">正在讀取本機詞典與紀錄…</div>
+<div class="workspace">
+<section id="create" class="surface">
+<h2>創作方向</h2>
+<form id="intent-form">
+<label for="intent">想聽到什麼？</label><textarea id="intent" rows="4" maxlength="4000">重 sub 壓力、微搖擺、交錯打擊、克制變化、前後景深，無人聲</textarea>
+<p class="help">已知詞條可離線翻譯。新描述會保留原文並提醒核對。</p>
+<div class="form-row"><div><label for="model">模型</label><select id="model"><option value="acemusic-v1.1">ACE Music v1.1 Preview</option><option value="acemusic-v1">ACE Music v1</option><option value="ace-step-v1.5-xl">ACE-Step v1.5 XL</option></select></div><div><label for="mode">模式</label><select id="mode"><option value="idea">Idea</option><option value="custom">Custom</option></select></div></div>
+<div class="form-row"><div><label for="seed">探索種子</label><input id="seed" type="number" value="11" min="0" max="4294967295" title="相同輸入與種子會得到相同提示詞計畫；不代表生成音訊可重現。"></div><div><label for="change-limit">每代變動上限</label><select id="change-limit"><option value="1">1 個維度</option><option value="2" selected>2 個維度</option><option value="3">3 個維度</option><option value="6">6 個維度</option></select></div></div>
+<div id="lyrics-field" hidden><label for="lyrics">歌詞 Lyrics</label><textarea id="lyrics" rows="3" maxlength="5000" placeholder="純音樂請留空；聲音描述填在上方。"></textarea></div>
+<details><summary>詞條權重與鎖定</summary><p class="help">權重只控制內部抽樣。明確要求與鎖定項會優先保留；互相衝突時需要調整。</p><div id="dictionary" class="dictionary"></div></details>
+<div class="actions"><button class="primary" type="submit">產生方向預覽</button><button id="explore" type="button" title="增加種子並產生另一份可審閱的方向。">換一個方向</button></div>
+</form>
+<details class="reference-area"><summary>登記參考連結</summary><p class="help">只保存在本機供導覽。Spotify 內容的 AI 路徑保持關閉，不會抓取連結。</p><label for="reference-url">單曲或歌單網址</label><input id="reference-url" type="url" placeholder="https://…"><button id="register-reference" type="button">登記引用</button><ul id="references" class="plain-list"></ul></details>
+</section>
+<section id="directions" class="surface preview">
+<div class="section-head"><h2>方向預覽</h2><span id="plan-status" class="meta">尚未產生</span></div>
+<div id="empty-preview" class="empty"><p>低頻、律動、空間，各自保留一個清楚方向。</p><p class="help">預覽會列出選中詞條與實際提交欄位，沒有音訊生成或上傳。</p></div>
+<div id="preview-content" hidden>
+<p id="explanation"></p><div id="selected-terms" class="terms"></div>
+<div id="translation-warning" class="warning" hidden>仍有內容待翻譯核對。請以已知詞條或自行核對的英文重新預覽。</div>
+<div class="section-head"><h3>實際欄位</h3><button id="copy" type="button">複製文字</button></div><div id="prompt-fields"></div>
+<dl class="facts"><dt>生成費用</dt><dd>未知 · 尚未核對帳戶報價</dd><dt>本次支出</dt><dd>0 Credits / US$0</dd><dt>能力依據</dt><dd>官方文件；生成及控件未實測</dd><dt>版本</dt><dd id="versions"></dd></dl>
+<details><summary>抽樣與變更依據</summary><pre id="trace"></pre></details>
+<label class="check"><input id="reviewed" type="checkbox">我已核對這份提示詞的模型、模式與文字</label>
+<button id="prepare" type="button" disabled>準備一個待授權任務</button><p class="help">只保存本機任務；真實提交 adapter 尚未驗收並啟用。</p>
+</div>
+</section>
+</div>
+<div class="lower-grid">
+<section id="tasks" class="surface"><div class="section-head"><h2>任務</h2><button id="refresh" type="button">重新讀取</button></div><div id="jobs" class="list empty">尚無準備任務。</div></section>
+<section class="surface"><h2>已保存的方向</h2><div id="history" class="list empty">尚無預覽紀錄。</div></section>
+<section id="library" class="surface"><h2>候選庫</h2><p>尚無經本流程驗證的實際音訊。</p><p class="help">下載、完整性檢查及人類試聽尚未串接，提示詞不計入候選音樂。</p></section>
+<section id="performance" class="surface"><h2>演出準備</h2><p>播放引擎與 REA 尚未接通。</p><p class="help">先建立可試聽的音樂候選與離線備用集，現場控制需另行驗收。</p></section>
+</div>
+<footer>HuaiDJ · 詞典為離線草案。空間、相位與無人聲描述仍需實際試聽確認。<a href="/music/capabilities" target="_blank" rel="noreferrer">檢視能力與限制</a></footer>
+</main>
+</body></html>

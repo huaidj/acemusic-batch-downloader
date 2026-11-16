@@ -7,6 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config, cachePeek } from './lib/config.mjs';
 import * as ACE from './lib/ace.mjs';
+import { musicHttp } from './lib/music-http.mjs';
+import { MUSIC_CONTRACT } from './lib/music-contract.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT = path.resolve(HERE, '..');
@@ -381,9 +383,10 @@ function capabilities() {
     name: 'ace-agent-hub',
     apiVersion: API_VERSION,
     version: VERSION,
-    endpoints: ENDPOINTS,
+    endpoints: [...ENDPOINTS, ...MUSIC_CONTRACT.map(({ method, path, description }) => ({ method, path, desc: description }))],
+    musicAgent: { mode: 'local_prepare_only', ui: '/music', externalCalls: false, realGeneration: false },
     events: { types: EVENT_TYPES, shape: '{ type, at(ms), seq, source:"page"|"hub", task_id?, task_ids?, title?, ... }' },
-    sse: ['job', 'progress', 'snapshot', 'page', 'event'],
+    sse: ['job', 'progress', 'snapshot', 'page', 'event', 'music'],
     fileTypes: [...ACE.FILE_TYPES, 'all'],
     selector: '{ song_ids?: string[], query?: string, latest?: number, all?: boolean }（無條件且 all≠true → 不選任何歌）',
     pageFiles: ['page-songs.json', 'page-unavailable.json', 'page-events.json', 'page-favorites.json'],
@@ -418,6 +421,7 @@ function filterSongs(rows, url) {
 /* ------------------------------------------------------------------ *
  * Router
  * ------------------------------------------------------------------ */
+const handleMusic = musicHttp({ stateDir: path.join(cfg.stateDir, 'music-agent'), onEvent: e => broadcast('music', e) });
 const server = http.createServer(async (req, res) => {
   const origin = req.headers.origin ? String(req.headers.origin) : '';
   if (!originAllowed(origin)) return json(res, 403, { ok: false, error: 'origin not allowed: ' + origin });
@@ -438,6 +442,8 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
     const pathname = url.pathname;
+
+    if (await handleMusic(req, res, url, { readBody, json })) return;
 
     if (pathname === '/capabilities' && req.method === 'GET') return json(res, 200, capabilities());
 

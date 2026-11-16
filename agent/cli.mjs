@@ -5,6 +5,8 @@ import { pathToFileURL } from 'node:url';
 import * as ACE from './lib/ace.mjs';
 import { config, readJson, writeJson, exists } from './lib/config.mjs';
 import { hubJson, hubRequest } from './lib/hubclient.mjs';
+import fs from 'node:fs/promises';
+import { MUSIC_CONTRACT, validateMusicInput } from './lib/music-contract.mjs';
 
 let hubSkipUntil = 0;
 
@@ -22,6 +24,10 @@ function usage() {
     console.log(`ACE Music 批量下載器 CLI  v1.7.3
 
 用法：
+  node cli.mjs music capabilities             音樂 Agent 能力與授權狀態（需此分支 Hub）
+  node cli.mjs music prompt_compile --input plan.json   從 JSON 產生並保存預覽
+  node cli.mjs music state                    本機提示詞、批次與任務
+  node cli.mjs music <action> --input file.json  其他操作見 agent/MUSIC-AGENT.md
   node cli.mjs doctor                         檢查登入狀態與環境
   node cli.mjs locate [--latest N|--query 字|--song id] [--views] [--json]  歌曲 → 本機真實目錄（預設最新一首）
   node cli.mjs prompt [--model id] [--mode idea|custom] [--seed N] [--lock-a A07] [--lock-b B03] [--count 6]  隨機提示詞（依模型＋模式選詞典）
@@ -113,6 +119,20 @@ async function main() {
     const cfg = config();
 
     if (!cmd || cmd === 'help' || cmd === '--help') return usage();
+
+    if (cmd === 'music') {
+        const action = args._[0] || 'capabilities';
+        const contract = MUSIC_CONTRACT.find(item => item.action === action || item.name === action);
+        if (!contract) throw new Error('未知音樂操作；可用：' + MUSIC_CONTRACT.map(item => item.action).join(', '));
+        const input = args.flags.input ? JSON.parse(await fs.readFile(String(args.flags.input), 'utf8')) : {};
+        const error = validateMusicInput(input, contract.inputSchema);
+        if (error) throw new Error(error);
+        const query = contract.method === 'GET' ? '?' + new URLSearchParams(Object.entries(input).map(([k,v]) => [k, String(v)])).toString() : '';
+        const { status, data } = await hubRequest(contract.path + query, { method: contract.method, body: contract.method === 'POST' ? input : undefined, timeoutMs: 5000 });
+        printJson(data || { ok: false, status: 'unsupported', error: '此 Hub 不支援音樂準備介面。', http: status });
+        if (status >= 400 || data?.ok === false) process.exitCode = 1;
+        return;
+    }
 
     if (cmd === 'doctor') {
         const status = await ACE.sessionStatus(cfg, { force: !!args.flags.refresh });

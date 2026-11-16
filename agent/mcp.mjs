@@ -4,6 +4,7 @@
 import * as ACE from './lib/ace.mjs';
 import { config, readJson, exists } from './lib/config.mjs';
 import { hubJson, hubRequest, HUB_URL } from './lib/hubclient.mjs';
+import { MUSIC_CONTRACT, MUSIC_TOOLS, validateMusicInput } from './lib/music-contract.mjs';
 
 const SERVER = { name: 'ace-music-downloader', version: '1.7.3' };
 const jobs = new Map();
@@ -34,6 +35,7 @@ async function hubWaitJob(jobId, timeoutMs = 20000) {
 }
 
 const TOOLS = [
+    ...MUSIC_TOOLS,
     {
         name: 'ace_session_status',
         description: '檢查 ACE Music 登入狀態（擴充功能是否已「同步登入狀態給 Agent」、session 是否有效）。',
@@ -255,6 +257,18 @@ function textContent(value) {
 }
 
 async function callTool(name, args) {
+    const music = MUSIC_CONTRACT.find(item => item.name === name);
+    if (music) {
+        const error = validateMusicInput(args, music.inputSchema);
+        if (error) return { ok: false, status: 'invalid', error };
+        const query = music.method === 'GET' ? '?' + new URLSearchParams(Object.entries(args).map(([k,v]) => [k, String(v)])).toString() : '';
+        try {
+            const { status, data } = await hubRequest(music.path + query, { method: music.method, body: music.method === 'POST' ? args : undefined, timeoutMs: 5000 });
+            return data || { ok: false, status: 'unsupported', error: '此 Hub 尚未支援音樂 Agent 準備功能。', http: status };
+        } catch {
+            return { ok: false, status: 'hub_required', error: '需要此分支的 Hub；未回落為第二個寫入者，請用隔離啟動器。' };
+        }
+    }
     switch (name) {
         case 'ace_session_status': {
             const [status, page] = await Promise.all([ACE.sessionStatus(), ACE.pageChannelStatus()]);
@@ -582,7 +596,7 @@ async function handleMessage(message) {
         const args = (params && params.arguments) || {};
         try {
             const value = await callTool(name, args);
-            return result(id, { content: textContent(value), isError: false });
+            return result(id, { content: textContent(value), isError: name?.startsWith('music_') && value?.ok === false });
         } catch (err) {
             return result(id, { content: textContent('錯誤：' + ((err && err.message) || err)), isError: true });
         }

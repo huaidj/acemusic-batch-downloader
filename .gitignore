@@ -15,6 +15,7 @@ test/spike/.tmp/
 test/spike/*.log
 
 # internal docs (not part of the public repo)
+CONTROL.md
 CONTRACT.md
 VERIFICATION.md
 test/FINDINGS.md

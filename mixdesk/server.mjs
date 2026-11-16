@@ -6,9 +6,9 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { config as agentConfig } from '../agent/lib/config.mjs';
+import { analyzeFiles } from './lib/analyzer.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT = path.resolve(HERE, '..');
@@ -25,6 +25,10 @@ const PYTHON = process.env.ACE_PYTHON || 'python';
 const SLOTS = ['opening', 'build', 'peak', 'cooldown', 'transition'];
 const SLOT_TEXT = { opening: '暖場', build: '推進', peak: '高潮', cooldown: '降溫', transition: '過渡' };
 const MAX_REFS = 3;
+const ANALYSIS_TIMEOUT_MS = Number(process.env.ACE_MIX_ANALYSIS_TIMEOUT_MS || 600000);
+const MAX_INDEX_QUEUE = 8;
+let indexChain = Promise.resolve();
+const indexing = { status: 'idle', queued: 0, total: 0, processed: 0, failed: 0, startedAt: null, finishedAt: null, error: null };
 
 /* ------------------------------------------------------------------ *
  * 狀態
@@ -95,23 +99,6 @@ function listLibraryFiles() {
   return files.sort();
 }
 
-function analyzeFiles(files) {
-  if (!files.length) return [];
-  const args = [ANALYZER, ...files];
-  const res = spawnSync(PYTHON, args, {
-    encoding: 'utf8',
-    timeout: 600000,
-    maxBuffer: 64 * 1024 * 1024,
-    windowsHide: true,
-    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
-  });
-  try {
-    return JSON.parse(res.stdout || '[]');
-  } catch {
-    return [];
-  }
-}
-
 function slotGuess(bpm, energy) {
   if (energy == null) return 'build';
   if (energy < 0.1) return 'opening';
@@ -120,7 +107,31 @@ function slotGuess(bpm, energy) {
   return 'peak';
 }
 
-async function indexLibrary({ limit = 30, refresh = false } = {}) {
+function indexLibrary(options = {}) {
+  if (indexing.queued + Number(indexing.status === 'running') >= MAX_INDEX_QUEUE) {
+    return Promise.reject(new Error('索引佇列已滿，請等待目前分析完成'));
+  }
+  indexing.queued += 1;
+  const task = indexChain.then(async () => {
+    indexing.queued -= 1;
+    Object.assign(indexing, { status: 'running', total: 0, processed: 0, failed: 0, startedAt: new Date().toISOString(), finishedAt: null, error: null });
+    try {
+      const result = await indexLibraryNow(options);
+      indexing.status = result.failed ? 'partial' : 'done';
+      return result;
+    } catch (err) {
+      indexing.status = 'failed';
+      indexing.error = String(err.message || err);
+      throw err;
+    } finally {
+      indexing.finishedAt = new Date().toISOString();
+    }
+  });
+  indexChain = task.catch(() => {});
+  return task;
+}
+
+async function indexLibraryNow({ limit = 30, refresh = false } = {}) {
   const files = listLibraryFiles();
   const existing = new Map(state.tracks.map((track) => [track.file, track]));
   const todo = [];
@@ -133,10 +144,12 @@ async function indexLibrary({ limit = 30, refresh = false } = {}) {
     if (!refresh && old && old.size === stat.size && sameTime && old.analyzedAt) continue;
     todo.push({ file, size: stat.size, mtime: stat.mtimeMs, old });
   }
+  indexing.total = todo.length;
+  const errors = [];
   const batch = 10;
   for (let i = 0; i < todo.length; i += batch) {
     const chunk = todo.slice(i, i + batch);
-    const results = analyzeFiles(chunk.map((item) => item.file));
+    const results = await analyzeFiles(chunk.map((item) => item.file), { executable: PYTHON, analyzer: ANALYZER, timeoutMs: ANALYSIS_TIMEOUT_MS });
     for (const item of chunk) {
       const analysis = results.find((result) => result && result.path && path.resolve(result.path) === path.resolve(item.file)) || {};
       const title = trimTitle(path.basename(item.file));
@@ -160,15 +173,20 @@ async function indexLibrary({ limit = 30, refresh = false } = {}) {
       track.camelot = analysis.camelot || null;
       track.energy = typeof analysis.energy === 'number' ? analysis.energy : null;
       track.analyzedAt = analysis.ok ? new Date().toISOString() : null;
+      track.analysisStatus = analysis.ok ? 'done' : 'failed';
+      track.analysisError = analysis.ok ? null : (analysis.error || { code: 'ANALYZER_MISSING_RESULT', message: '音訊分析結果缺失' });
+      if (!analysis.ok) errors.push({ trackId: track.id, error: track.analysisError });
       track.slot = track.slot || slotGuess(track.bpm, track.energy);
       if (!item.old) state.tracks.push(track);
+      indexing.processed += 1;
+      indexing.failed = errors.length;
     }
     saveState().catch(() => {});
   }
   // 保留不在本次索引範圍內的舊歌曲
-  logEvent('library.index', { total: state.tracks.length, analyzed: todo.length, limit });
+  logEvent('library.index', { total: state.tracks.length, analyzed: todo.length, successful: todo.length - errors.length, failed: errors.length, limit, errors });
   await saveState();
-  return { total: state.tracks.length, files: files.length, analyzed: todo.length };
+  return { total: state.tracks.length, files: files.length, analyzed: todo.length, successful: todo.length - errors.length, failed: errors.length, errors };
 }
 
 /* ------------------------------------------------------------------ *
@@ -520,6 +538,7 @@ function stateSummary() {
     libraryRoot: MIX_ROOT,
     mockRoot: MOCK_DIR,
     slots: SLOTS,
+    indexing: { ...indexing },
   };
 }
 
@@ -544,7 +563,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/index' && req.method === 'POST') {
       const body = await readBody(req);
       const result = await indexLibrary({ limit: body.limit ?? 30, refresh: !!body.refresh });
-      return json(res, 200, { ok: true, ...result });
+      return json(res, 200, { ok: result.failed === 0, ...result });
     }
 
     if (pathname === '/api/pending' && req.method === 'GET') return json(res, 200, { ok: true, pending: state.pending });
@@ -675,12 +694,15 @@ const server = http.createServer(async (req, res) => {
 
 await loadState();
 const indexLimit = Number(process.env.ACE_MIX_INDEX_LIMIT || 30);
-if (!state.tracks.length) {
-  console.log('[mixdesk] 首次啟動，索引曲庫（limit ' + indexLimit + '）…');
-  await indexLibrary({ limit: indexLimit });
-}
 server.listen(PORT, HOST, () => {
   console.log(`[mixdesk] ACE MIX DESK 已啟動：http://${HOST}:${PORT}`);
   console.log(`[mixdesk] 曲庫：${MIX_ROOT}`);
   console.log(`[mixdesk] 狀態：${STATE_FILE}（${state.tracks.length} 首曲目）`);
+  if (!state.tracks.length) {
+    console.log('[mixdesk] 首次啟動，背景索引曲庫（limit ' + indexLimit + '）…');
+    indexLibrary({ limit: indexLimit }).catch((err) => {
+      logEvent('library.index.failed', { error: String(err.message || err) });
+      saveState().catch(() => {});
+    });
+  }
 });

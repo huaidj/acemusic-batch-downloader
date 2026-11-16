@@ -1,0 +1,72 @@
+# HuaiDJ 創作工作台（離線準備版）
+
+這個分支將自然語言、詞典與任務準備加入既有 ACE Hub。它沒有啟用付費生成、DeepSeek、素材上傳或播放；不把提示詞或 mock 當成音樂產物。
+
+## 開啟隔離預覽
+
+需要 Windows、Node.js 24.18 或更新版本；不需要安裝 npm 依賴。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-music-preview.ps1
+```
+
+開啟 <http://127.0.0.1:18788/music>。啟動器使用 F 槽的獨立 state/downloads，ACE 網路目的地限制為 loopback，不讀取原登入或真實曲庫，也不重啟原 8788 Hub。
+
+1. 輸入方向，選擇三個模型之一及 Idea/Custom。
+2. 必要時調整詞條權重、鎖定項與探索種子，再產生預覽。
+3. 檢查實際欄位。未知中文保留原文並標示待核對，不會冒充已完成翻譯。
+4. 核對後建立待授權任務；相同幂等鍵不會多建任務。停止批次會取消尚未送出的準備任務。
+5. 已保存的方向可作下一代父代。字典與能力 hash 固定在原計畫中，不改寫舊紀錄。
+
+Spotify 連結可以登記作導覽；不抓取內容、不送入 AI。來源權利未知或 AI 許可不為真正 boolean `true` 的參考會被編譯器阻擋。Advanced 尚未核對帳戶控件，暫時拒絕。
+
+```powershell
+# 停止這個預覽，保留紀錄
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-music-preview.ps1 -Stop
+```
+
+## CLI 與 MCP
+
+指向同一個預覽 Hub：
+
+```powershell
+$env:ACE_HUB_URL = 'http://127.0.0.1:18788'
+node agent\cli.mjs music capabilities
+node agent\cli.mjs music prompt_compile --input intent.json
+node agent\cli.mjs music state
+```
+
+`intent.json` 範例：
+
+```json
+{
+  "natural_language": "重 sub 壓力、微搖擺、交錯打擊、克制變化、前後景深，無人聲",
+  "model": "acemusic-v1.1",
+  "mode": "idea",
+  "seed": 11,
+  "locked_term_ids": ["voice.instrumental"]
+}
+```
+
+MCP 沿用 `node agent/mcp.mjs` stdio；設定 `ACE_HUB_URL` 即可。新增工具都以 `music_` 開頭，讀取 `music_capabilities` 後用 `music_prompt_compile`、`music_session_create`、`music_generation_prepare`、`music_job_status`、`music_session_stop` 等。未修改任何宿主 MCP 設定；舊 `ace_*` 介面保留。
+
+所有新寫操作只交給 Hub；Hub 失聯會報 `hub_required`，不另開本機寫入者。HTTP 能力契約在 `/capabilities`，新工作區在 `/music`。持久事件 `/music/events?since=…` 可跨重啟續讀；同時提供既有 SSE 的 `music` 事件。
+
+紀錄位於指定 `ACE_STATE_DIR/music-agent/music-agent.sqlite`，使用 SQLite 交易保存準備任務、幂等鍵、版本快照與停止狀態。此版本沒有供應商費用預留或已生成音訊。SQLite 的 WAL/SHM 仍在使用時不要搬移整個 state。
+
+## 真實生成與尚未驗收
+
+`music_generation_submit` 固定回 `unsupported`。供應商 adapter 接通、實際模型/成本回讀、使用者明確預算及素材範圍、累計預留與未知結果對帳完成前，不開啟此路徑。另一分支的 v1.1 提交 adapter 是可復用候選，並不代表已具實際付費生成驗收。
+
+完整真實任務仍需：遠端 task ID → 對應音檔 → 下載大小/SHA-256/解碼 → 人類試聽 → 下一輪計畫。這些目前沒有 real pass。DeepSeek 研究、持續循環、REA 與演出另有後續 gate。
+
+## 測試與回退
+
+```powershell
+# 大量測試請先把 TEMP/TMP 指向 F:\DevData\Temp 下的獨立目錄
+npm run test:unit
+```
+
+測試包含原有下載器回歸、詞典/來源/模型契約、SQLite 重啟與停止，以及 Mixdesk 的非同步分析。UI 與協議驗證使用隔離資料，不等於音樂聽感或演出驗收。
+
+本次只改獨立分支。停止預覽後即可回到原主工作樹；不刪除 SQLite、原始音樂或其他服務。預覽紀錄預設保留，刪除需另行指定明確範圍。
