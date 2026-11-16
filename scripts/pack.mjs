@@ -15,9 +15,9 @@ const dist = path.join(ROOT, 'dist');
 const tmp = path.join(dist, '.pack');
 const isWin = process.platform === 'win32';
 
-const STORE_ITEMS = ['manifest.json', 'src', 'icons'];
+const STORE_ITEMS = ['manifest.json', 'src', 'icons', 'naming'];
 const FULL_ITEMS = [
-  'manifest.json', 'src', 'icons', 'agent', 'native', 'mixdesk', 'player', 'docs',
+  'manifest.json', 'src', 'icons', 'naming', 'agent', 'native', 'mixdesk', 'player', 'docs',
   'design', 'scripts/repair-wavs.mjs',
   'README.md', 'CHANGELOG.md', 'LICENSE', 'PRIVACY.md', 'CHROMEWEBSTORE.md', 'RELEASING.md', 'package.json', '更新本機工具.cmd',
 ];

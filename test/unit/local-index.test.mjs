@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { buildLocalDownloadIndex, buildAudioLibrary } from '../../agent/lib/local-index.mjs';
+import { buildLocalDownloadIndex, buildAudioLibrary, namingJournalMoves } from '../../agent/lib/local-index.mjs';
 import { fileIdFromStat, fileIdForPath, physicalFileKey, legacyPathFileId } from '../../agent/lib/file-id.mjs';
 import { moveFileSafely, recordRelocations } from '../../agent/lib/file-ops.mjs';
 
@@ -318,4 +318,32 @@ test('local index: traversal/type escapes and unclaimed lookalike sources cannot
   assert.equal(index.byTask[s.task_id].downloaded.midi, false);
   assert.equal(index.byTask[s.task_id].downloaded.stems, 0);
   assert.ok(index.problems.filter(x => x.code === 'CLASSIFICATION_TARGET_REJECTED').length >= 2);
+});
+
+test('local index: 命名爐 rename journal keeps download evidence on the renamed file; without it the file is missing', async () => {
+  const a = song('so_named'), f = fixture([a]);
+  const oldPath = path.join(f.root, 'Twin', 'Audio', 'Twin.mp3');
+  const renamed = f.write(path.join(f.root, 'Twin', 'Audio', '玄武錯步.mp3'), mp3());
+  f.json(f.cfg.historyFile, { items: [complete(1, oldPath, f.cfg.baseUrl + a.local_audio, 417)] });
+  const without = await buildLocalDownloadIndex({ cfg: f.cfg });
+  assert.equal(without.byTask.so_named.downloaded.mp3, false);
+  assert.ok(without.byTask.so_named.problems.some((x) => x.code === 'RECORDED_PATH_MISSING'));
+  f.json(path.join(f.root, '_命名爐改名紀錄.json'), { schema: 'ace_naming_journal_v1', entries: [{ batch: 'b1', at: 'x', from: 'Twin/Audio/Twin.mp3', to: 'Twin/Audio/玄武錯步.mp3', bytes: 417 }] });
+  const withJournal = await buildLocalDownloadIndex({ cfg: f.cfg });
+  assert.equal(withJournal.byTask.so_named.downloaded.mp3, true);
+  assert.equal(withJournal.byTask.so_named.files[0].absolute, renamed);
+});
+
+test('naming journal: only in-library relative moves are accepted; tool relocations win over the journal', () => {
+  const root = path.resolve(os.tmpdir(), 'ai音樂');
+  const moves = namingJournalMoves({ schema: 'ace_naming_journal_v1', entries: [
+    { from: 'A/x.mp3', to: 'A/y.mp3' },
+    { from: '../escape.mp3', to: 'A/z.mp3' },
+    { from: 'A/q.mp3', to: '' },
+    { from: 'A/same.mp3', to: 'A/same.mp3' },
+    null,
+  ] }, root);
+  assert.deepEqual(Object.keys(moves), [path.resolve(root, 'A', 'x.mp3').toLowerCase()]);
+  assert.deepEqual(namingJournalMoves({ schema: 'other', entries: [{ from: 'a', to: 'b' }] }, root), {});
+  assert.deepEqual(namingJournalMoves(null, root), {});
 });

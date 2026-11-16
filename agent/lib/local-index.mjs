@@ -30,6 +30,22 @@ function sourceKey(raw, baseUrl) {
     } catch { return ''; }
 }
 
+export const NAMING_JOURNAL = '_命名爐改名紀錄.json';
+
+/** 命名爐改名紀錄 → { 小寫舊絕對路徑: 新絕對路徑 }；只接受曲庫內的相對路徑。 */
+export function namingJournalMoves(journal, root) {
+    const moves = {};
+    if (!journal || journal.schema !== 'ace_naming_journal_v1' || !Array.isArray(journal.entries)) return moves;
+    for (const entry of journal.entries) {
+        if (!entry || typeof entry.from !== 'string' || typeof entry.to !== 'string' || !entry.from || !entry.to) continue;
+        if ([entry.from, entry.to].some((rel) => rel.split('/').some((part) => !part || part === '.' || part === '..'))) continue;
+        const from = path.resolve(root, ...entry.from.split('/')), to = path.resolve(root, ...entry.to.split('/'));
+        if (!within(root, from) || !within(root, to) || lower(from) === lower(to)) continue;
+        moves[lower(from)] = to;
+    }
+    return moves;
+}
+
 function resolveRecordedPath(file, state, root, byPath) {
     let current = path.resolve(file);
     const seen = new Set(), chain = [];
@@ -112,6 +128,10 @@ export async function buildLocalDownloadIndex({ cfg = config(), root = 'ai音樂
     const downloadRoot = path.resolve(cfg.downloadDir), libraryRoot = path.resolve(downloadRoot, root);
     if (!within(downloadRoot, libraryRoot)) throw Object.assign(new Error('Library root must remain within the download directory.'), { code: 'INVALID_LIBRARY_ROOT' });
     const state = readJson(cfg.stateFile || path.join(cfg.stateDir, 'agent-state.json'), {});
+    // 命名爐改名紀錄：與 removedPaths 同語意的搬移鏈；既有 removedPaths 優先，不覆蓋工具自己的紀錄。
+    const namingJournal = readJson(path.join(libraryRoot, NAMING_JOURNAL), null);
+    const journalMoves = namingJournalMoves(namingJournal, libraryRoot);
+    if (Object.keys(journalMoves).length) state.removedPaths = { ...journalMoves, ...(state.removedPaths || {}) };
     const browserHistory = readJson(cfg.historyFile || path.join(cfg.stateDir, 'history.json'), { items: [] });
     const ownBrowserState = readJson(path.join(cfg.stateDir, 'browser-download-state.json'), { history: {} });
     const pageUnavailable = readJson(path.join(cfg.stateDir, 'page-unavailable.json'), { unavailable: {} });

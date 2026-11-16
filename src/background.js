@@ -379,6 +379,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!result.ok || result.exitCode !== 0 || !result.data?.ok) return { ok: false, error: result.error || result.data?.error || '本機索引未就緒，請更新本機工具' };
         return { ok: true, index: await decodeNativeIndexPayload(result.data) };
       }, sendResponse);
+    case 'ACE_OPEN_NAMING':
+      return respondLater(async () => {
+        const tab = await chrome.tabs.create({ url: chrome.runtime.getURL('naming/index.html') });
+        return { ok: true, tabId: tab.id };
+      }, sendResponse);
     case 'ACE_OPEN_PLAYER':
       return respondLater(async () => {
         const songId = typeof msg.songId === 'string' && msg.songId.length <= 256 ? msg.songId : '';

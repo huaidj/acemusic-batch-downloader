@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>命名爐 NOMENCLATOR · SUB-110</title>
+<meta name="description" content="給低頻儀式音樂的雙語命名裝置：繁體中文 × English。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230a0908'/%3E%3Crect x='3.5' y='3.5' width='25' height='25' fill='none' stroke='%23ff4b1f'/%3E%3Ctext x='16' y='23' font-family='serif' font-size='18' fill='%23ece4d4' text-anchor='middle'%3E%E5%91%BD%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+<div class="vignette" aria-hidden="true"></div>
+
+<div class="app">
+
+  <header class="bar">
+    <div class="brand">
+      <div class="sigil" aria-hidden="true"><span>命</span></div>
+      <div class="brandtext">
+        <h1>命名爐</h1>
+        <p>NOMENCLATOR <i>/</i> SUB·110</p>
+      </div>
+    </div>
+    <div class="barstats">
+      <div class="stat"><span>狀態 STATE</span><b id="statMode">BOOT</b></div>
+      <div class="stat"><span>檔案 FILES</span><b id="statCount">—</b></div>
+      <div class="stat"><span>已採用 ADOPTED</span><b id="statAdopted">0</b></div>
+    </div>
+    <div class="seedreadout">
+      <span>SEED</span>
+      <b id="seedHex">0x00000000</b>
+    </div>
+  </header>
+
+  <main class="console">
+
+    <!-- ───────── 曲庫 ───────── -->
+    <section class="bay" aria-label="曲庫">
+      <div class="pane-head">
+        <h2>曲庫</h2><span>TRACK BAY</span>
+      </div>
+
+      <div class="drop" id="drop" tabindex="0" role="button" aria-label="拖入音檔或資料夾">
+        <div class="drop-corner tl"></div><div class="drop-corner tr"></div>
+        <div class="drop-corner bl"></div><div class="drop-corner br"></div>
+        <div class="drop-ico">↓</div>
+        <p class="drop-main">拖入音檔 / 資料夾 / <b>_manifest.json</b></p>
+        <p class="drop-sub">WAV · MP3 · FLAC — 60 秒內完成指紋分析</p>
+        <div class="drop-actions">
+          <button class="mini" id="btnConnect" type="button" hidden>連接 ai音樂</button>
+          <button class="mini" id="btnFiles" type="button">選音檔</button>
+          <button class="mini" id="btnDir" type="button">選資料夾</button>
+          <button class="mini" id="btnDemo" type="button">示範曲庫</button>
+        </div>
+      </div>
+
+      <div class="bay-tools">
+        <input id="search" type="search" placeholder="搜尋曲目 / 路徑…" autocomplete="off" spellcheck="false">
+        <div class="chips" id="chips">
+          <button class="chip" data-filter="reps" type="button">每組一首</button>
+          <button class="chip" data-filter="all" type="button">全部</button>
+          <button class="chip" data-filter="down" type="button">105–118</button>
+          <button class="chip" data-filter="pending" type="button">未採用</button>
+        </div>
+      </div>
+
+      <div class="list" id="list" role="listbox" aria-label="曲目清單"></div>
+
+      <div class="bay-foot">
+        <span id="bayHint">BPM / KEY 來自你的 _manifest.json</span>
+        <button class="linkbtn" id="btnRandom" type="button">隨機一首</button>
+      </div>
+    </section>
+
+    <!-- ───────── 名刻 ───────── -->
+    <section class="stage" aria-label="名刻">
+      <div class="pane-head">
+        <h2>名刻</h2><span>NAME SLAB</span>
+        <div class="head-right"><i class="dot" id="srcDot"></i><span id="sourceTag">—</span></div>
+      </div>
+
+      <div class="slab" id="slab">
+        <span class="scanline" aria-hidden="true"></span>
+        <div class="slab-side" aria-hidden="true">SUB·110 <i>/</i> RITUAL CONSOLE</div>
+
+        <div class="ruler" id="ruler" aria-hidden="true">
+          <div class="ruler-line"></div>
+          <div class="ruler-major" id="rulerMajor"></div>
+          <div class="ruler-marker" id="rulerMarker"><b id="rulerVal">110</b></div>
+          <div class="ruler-labels"><span>70</span><span>90</span><span>110</span><span>130</span><span>150</span><span>170</span></div>
+        </div>
+
+        <div class="regline">
+          <span class="regmark" id="regMark">—</span>
+          <span class="code" id="code">No. —</span>
+        </div>
+
+        <div class="namestack" id="namestack">
+          <h2 class="name-zh" id="nameZh" lang="zh-Hant">—</h2>
+          <div class="name-en" id="nameEn">—</div>
+          <div class="srcline" id="srcLine">—</div>
+          <div class="groupline" id="groupLine">—</div>
+        </div>
+
+        <div class="sigwrap">
+          <canvas class="sig" id="sig" height="120"></canvas>
+          <span class="siglabel" id="sigLabel">SIGNATURE</span>
+        </div>
+
+        <div class="meta" id="meta">
+          <div class="mcell"><span>BPM</span><b id="mBpm">—</b></div>
+          <div class="mcell"><span>KEY</span><b id="mKey">—</b></div>
+          <div class="mcell"><span>CAMELOT</span><b id="mCam">—</b></div>
+          <div class="mcell"><span>LENGTH</span><b id="mLen">—</b></div>
+          <div class="mcell"><span>ENERGY</span><b class="bars" id="mEnergy"></b></div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn primary" id="btnAdopt" type="button">採用 <kbd>↵</kbd></button>
+        <button class="btn" id="btnReroll" type="button">重擲 <kbd>R</kbd></button>
+        <button class="btn" id="btnCopy" type="button">複製 <kbd>C</kbd></button>
+        <button class="btn" id="btnPlay" type="button"><span id="playGlyph">▶</span> 試聽 <kbd>P</kbd></button>
+      </div>
+
+      <div class="alts" id="alts"></div>
+
+      <div class="stage-foot">
+        <span id="analysisStatus">—</span>
+        <span class="stage-foot-right">種子 <b id="seedShort">—</b></span>
+      </div>
+    </section>
+
+    <!-- ───────── 校準 ───────── -->
+    <aside class="calib" aria-label="校準">
+      <div class="pane-head">
+        <h2>校準</h2><span>CALIBRATION</span>
+      </div>
+
+      <div class="calib-body">
+        <div class="field">
+          <label for="mix">質地 <em>ORGANIC ⟷ MACHINE</em></label>
+          <input type="range" id="mix" min="0" max="100" value="50">
+          <div class="range-read"><span>有機</span><b id="mixVal">50</b><span>機械</span></div>
+        </div>
+
+        <div class="field">
+          <label for="shake">動勢 <em>STILL ⟷ QUAKE</em></label>
+          <input type="range" id="shake" min="0" max="100" value="52">
+          <div class="range-read"><span>靜</span><b id="shakeVal">52</b><span>震</span></div>
+        </div>
+
+        <div class="field">
+          <label>體裁 <em>REGISTER</em></label>
+          <div class="seg" id="seg">
+            <button data-reg="auto" class="on" type="button">自動</button>
+            <button data-reg="sigil" type="button">銘</button>
+            <button data-reg="liturgy" type="button">儀</button>
+            <button data-reg="pair" type="button">並</button>
+            <button data-reg="abstract" type="button">抽</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>參考預設 <em>PRESET</em></label>
+          <div class="presets">
+            <button data-preset="gingai" type="button"><b>GINGAÍ</b><span>有機部落</span></button>
+            <button data-preset="hybrid" class="on" type="button"><b>HYBRID</b><span>有機×機械</span></button>
+            <button data-preset="zaliva" type="button"><b>ZALIVA-D</b><span>工業冥界</span></button>
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="field">
+          <label for="fmt">檔名格式 <em>FORMAT</em></label>
+          <select id="fmt">
+            <option value="paren">中文 (English)</option>
+            <option value="dash">中文 - English</option>
+            <option value="dashEn">English - 中文</option>
+            <option value="zh">只有中文</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="root">根目錄 <em>ROOT</em></label>
+          <input id="root" type="text" spellcheck="false">
+        </div>
+
+        <div class="exports">
+          <button class="btn primary" id="btnApply" type="button" hidden>套用改名</button>
+          <button class="btn primary" id="btnPs1" type="button">匯出改名腳本 .ps1</button>
+          <div class="btn-row">
+            <button class="btn" id="btnCsv" type="button">CSV</button>
+            <button class="btn" id="btnJson" type="button">JSON</button>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn small" id="btnBatch" type="button">全部採用未命名</button>
+          <button class="btn small danger" id="btnClear" type="button">清除採用</button>
+        </div>
+
+        <p class="hint" id="hint">
+          腳本預設 <code>$DryRun = $true</code>，先預覽再改名。<br>
+          名字由音檔指紋（檔名·大小·BPM·調性）+ 種子決定，同檔永遠同名。
+        </p>
+
+        <div class="corpus">
+          <div class="corpus-head">名冊 CORPUS</div>
+          <div class="corpus-row"><span>檔案 FILES</span><b id="corpusTracks">—</b></div>
+          <div class="corpus-row"><span>群組 GROUPS</span><b id="corpusGroups">—</b></div>
+          <div class="corpus-row"><span>分軌 STEMS</span><b id="corpusStems">—</b></div>
+          <div class="corpus-row"><span>105–118 組</span><b id="corpusDown">—</b></div>
+          <div class="corpus-row"><span>已刻名 TITLES</span><b id="corpusTitles">—</b></div>
+          <div class="corpus-row"><span>防撞名 GUARD</span><b>ON</b></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="foot">
+    <div class="ticker">
+      <span class="ticker-label">已刻名冊</span>
+      <div class="ticker-window"><div class="ticker-track" id="ticker"></div></div>
+    </div>
+    <div class="hints">
+      <kbd>R</kbd>重擲　<kbd>↵</kbd>採用　<kbd>C</kbd>複製　<kbd>P</kbd>試聽　<kbd>↑</kbd><kbd>↓</kbd>選曲
+    </div>
+  </footer>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<input type="file" id="fileInput" accept=".mp3,.wav,.flac,.m4a,.aac,.ogg,.aiff,.aif,.opus,audio/*" multiple hidden>
+<input type="file" id="dirInput" webkitdirectory directory multiple hidden>
+
+<script src="extension-mode.js"></script>
+<script src="grouping.js"></script>
+<script src="engine.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

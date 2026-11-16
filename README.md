@@ -19,6 +19,7 @@
 - **即時同步＋新歌自動下載**：訂閱站點推送，新歌完成約 50 ms 出現；可選「新歌自動下載」（MIDI／MusicXML 需另勾，因可能扣 credit）
 - **老歌新增分軌**：已開啟自動分軌下載時，偵測既有歌曲新增或更新的就緒分軌並下載；不主動購買分軌。MIDI／MusicXML 僅用於該歌已主動要求分軌且已授權樂譜生成的情況。
 - **獨立播放器**：可拖動及調整大小的視窗；本機曲庫、搜尋、下載狀態、佇列、播放清單、收藏、歷史與系統媒體鍵。[播放器說明](player/README.md)
+- **命名爐（預設顯示）**：面板「命名爐」按鈕打開雙語命名裝置；同一首歌的分軌／版本共用一個名字，可連接 ai音樂 資料夾後直接套用改名。名字有銘／儀／並／抽四種體裁。
 - **Agent 中樞**：CLI、MCP（含 `ace_locate` 找最新歌曲真實路徑、`ace_download_index`、`ace_player`、`ace_wait_new_song` 等新歌、`ace_generate` 預覽及明確提交 v1.1）、常駐 Agent Hub（127.0.0.1:8788，既有查詢熱路徑 <2 ms）
 - **HuaiDJ 創作中樞**：音樂意圖、版本化詞典、提示詞編譯、有限授權生成、產物回收與人評、DeepSeek 研究候選（`music_*`、`ace_create_*` 工具；預設不提交付費生成）
 - 完整說明：[docs/GUIDE.md](docs/GUIDE.md)｜開發規範：[docs/CONVENTIONS.md](docs/CONVENTIONS.md)｜設計系統：[docs/DESIGN-SYSTEM.md](docs/DESIGN-SYSTEM.md)
@@ -80,6 +81,7 @@ node agent\cli.mjs hub --stop
 src/naming.js      命名純函式
 src/planner.js     下載清單純函式
 src/content.js     面板 UI／站點 API／排程
+naming/            命名爐頁面（引擎、分組、File System Access 套用改名）
 src/background.js  service worker（chrome.downloads）
 agent/             CLI／MCP／Hub／watcher／音訊分析
 native/            native messaging host（C#，選用）

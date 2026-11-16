@@ -708,12 +708,21 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     const extractMp3Btn = el('button', { type: 'button', 'data-act': 'extract-mp3', text: '成品MP3' });
     const watchBtn = el('button', { type: 'button', 'data-act': 'watch', text: '背景自動整理' });
     const openClassifyBtn = el('button', { type: 'button', 'data-act': 'open-classify', text: '開啟分類資料夾' });
+    const namingBtn = el('button', { type: 'button', 'data-act': 'naming', title: '用命名爐替分軌／版本產生雙語名字' }, ['命名爐']);
+    namingBtn.addEventListener('click', async () => {
+      try {
+        await sendMessage({ type: 'ACE_OPEN_NAMING' });
+        flash('命名爐已開啟');
+      } catch (err) {
+        flash('開啟失敗：' + friendlyError(err));
+      }
+    });
     const dedupeCustomBtn = el('button', { type: 'button', 'data-act': 'dedupe-custom', text: '清自訂重複' });
     const maintenanceTools = el('details', { class: 'more-tools', 'data-maintenance-tools': '' }, [
       el('summary', { text: '更多維護' }),
       el('div', { class: 'maintenance-menu', role: 'group', 'aria-label': '進階維護工具' }, [organizeBtn, extractMp3Btn, watchBtn, dedupeCustomBtn, exportAgentBtn]),
     ]);
-    const toolbar2 = el('div', { class: 'toolbar library-tools', role: 'toolbar', 'aria-label': '曲庫工具' }, [el('span', { class: 'toolbar-label', text: '曲庫' }), tidyBtn, openClassifyBtn, maintenanceTools]);
+    const toolbar2 = el('div', { class: 'toolbar library-tools', role: 'toolbar', 'aria-label': '曲庫工具' }, [el('span', { class: 'toolbar-label', text: '曲庫' }), tidyBtn, namingBtn, openClassifyBtn, maintenanceTools]);
 
     const songsBox = el('div', { class: 'songs', 'data-songs': '' });
     const organizeBox = el('div', { class: 'organize', 'data-organize': '', hidden: true });
