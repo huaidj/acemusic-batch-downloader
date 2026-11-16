@@ -41,7 +41,9 @@
   let view = 'library';
   let selection = null;
   let inspectorTab = 'details';
-  let sort = { key: 'title', direction: 1 };
+  // 歌曲檢視預設與 acemusic.ai 一致：最新的在最上面。
+  const defaultSort = (name) => name.startsWith('playlist:') || name === 'history' ? { key: 'order', direction: 1 } : name === 'local' ? { key: 'title', direction: 1 } : { key: 'created', direction: -1 };
+  let sort = defaultSort('library');
   let query = '';
   let statusFilter = 'all';
   let formatFilter = 'all';
@@ -181,6 +183,40 @@
     $('toast').hidden = false;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { $('toast').hidden = true; }, 4200);
+  }
+  // 這個頁面本身的版本；與服務版本不同代表升級後舊服務仍在執行。
+  const PLAYER_BUILD = '1.8.0';
+  let versionWarned = false;
+  async function checkServiceVersion() {
+    try {
+      const health = await request('/api/health', { signal: AbortSignal.timeout(3000) });
+      if (!health?.version || health.version === PLAYER_BUILD) { if (versionWarned) { versionWarned = false; notice(''); } return; }
+      versionWarned = true;
+      const node = $('notice');
+      node.hidden = false;
+      node.innerHTML = `播放器服務仍是舊版 ${esc(health.version)}（頁面是 ${PLAYER_BUILD}），網站點讚等新功能需要新版服務。<button id="restart-service">重新啟動播放器服務</button><span class="muted"> 約 2 秒，會中斷目前播放。</span>`;
+      $('restart-service').addEventListener('click', restartService);
+    } catch (_) { /* 服務暫時無回應時不打擾。 */ }
+  }
+  async function restartService() {
+    const button = $('restart-service');
+    if (button) { button.disabled = true; button.textContent = '重新啟動中…'; }
+    try {
+      await request('/api/restart', { method: 'POST', body: '{}' });
+    } catch (error) {
+      notice(error.status === 404 || error.status === 501
+        ? '這個舊版服務不支援自動重新啟動。請在命令列執行：node "%LOCALAPPDATA%\AceMusicDL\agent\cli.mjs" player --restart'
+        : `重新啟動失敗：${error.message}`);
+      return;
+    }
+    for (let attempt = 0; attempt < 40; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      try {
+        const health = await request('/api/health', { signal: AbortSignal.timeout(1500) });
+        if (health?.version === PLAYER_BUILD) { versionWarned = false; notice(''); await loadSiteLikes(); await loadLibrary(true); toast('播放器服務已更新'); return; }
+      } catch (_) { /* 重新啟動期間連不上是正常的 */ }
+    }
+    notice('播放器服務沒有在 10 秒內回來；請重新開啟播放器。');
   }
   function notice(message, reload = false) {
     const node = $('notice');
@@ -528,6 +564,7 @@
   }
   function sortValue(row, key) {
     const entry = row.track || row.file || {};
+    if (key === 'created') return Number(row.track?.createdAt) || Number(row.siteLikedAt) || 0;
     if (key === 'duration') return Number(entry.duration) || 0;
     if (key === 'bytes') return Number(entry.bytes) || 0;
     if (key === 'mp3' || key === 'wav') return formatStatus(row.track, key).status;
@@ -555,7 +592,7 @@
     const fileView = ['local', 'history'].includes(view) || isPlaylistView();
     $('library-table').classList.toggle('file-table', fileView);
     const head = (key, label, cls = '') => `<th class="${cls}" aria-sort="${sort.key === key ? sort.direction === 1 ? 'ascending' : 'descending' : 'none'}"><button data-sort="${key}" class="${sort.key === key ? 'sort-active' : ''}">${label}${sort.key === key ? sort.direction === 1 ? ' ↑' : ' ↓' : ''}</button></th>`;
-    $('table-head').innerHTML = `<tr><th class="play-cell"></th>${head('title', fileView ? '檔案' : '曲名', 'title-cell')}${head('duration', '長度', 'duration-cell')}${fileView ? `${head('format', '格式')}${head('bytes', '大小')}<th>狀態</th>${isPlaylistView() ? '<th>順序</th>' : ''}` : `${head('mp3', 'MP3', 'status-cell')}${head('wav', 'WAV', 'status-cell')}${head('stems', '分軌', 'status-cell')}`}<th class="row-actions"></th></tr>`;
+    $('table-head').innerHTML = `<tr><th class="play-cell">${fileView ? '' : `<button data-sort="created" class="site-order ${sort.key === 'created' ? 'sort-active' : ''}" title="與 acemusic.ai 相同：最新在前" aria-pressed="${sort.key === 'created'}">${sort.key === 'created' ? (sort.direction === -1 ? '新↓' : '舊↓') : '新'}</button>`}</th>${head('title', fileView ? '檔案' : '曲名', 'title-cell')}${head('duration', '長度', 'duration-cell')}${fileView ? `${head('format', '格式')}${head('bytes', '大小')}<th>狀態</th>${isPlaylistView() ? '<th>順序</th>' : ''}` : `${head('mp3', 'MP3', 'status-cell')}${head('wav', 'WAV', 'status-cell')}${head('stems', '分軌', 'status-cell')}`}<th class="row-actions"></th></tr>`;
     $('table-body').innerHTML = rows.map((row) => {
       const file = row.file || preferredFile(row.track);
       const title = row.track?.title || row.file?.title || row.file?.name || '檔案已不存在';
@@ -682,6 +719,8 @@
     try {
       const head = await request('/api/library/revision', { signal: AbortSignal.timeout(4000) });
       if (!head.ok || typeof head.revision !== 'string') return;
+      // Hub 狀態隨輪詢更新，不必等曲庫內容變動。
+      if (typeof head.hubOnline === 'boolean' && head.hubOnline !== !!library.hub?.online) { library.hub = { ...(library.hub || {}), online: head.hubOnline }; renderNavigation(); }
       // 網站點讚只更新導覽計數與該檢視，不碰 audio.src、佇列、草稿或播放進度。
       if (typeof head.siteLikesRevision === 'string' && head.siteLikesRevision !== siteLikesHead && !libraryRefreshDeferred() && await loadSiteLikes(head.siteLikesRevision)) { renderNavigation(); if (view === 'site-likes') renderTable(); }
       if (!head.revision || head.revision === library.revision || libraryRefreshDeferred()) return;
@@ -695,7 +734,7 @@
   }
   function switchView(next) {
     view = next;
-    sort = { key: isPlaylistView() || view === 'history' ? 'order' : 'title', direction: 1 };
+    sort = defaultSort(next);
     renderAll();
   }
   function toggleFavorite(id) {
@@ -1017,7 +1056,7 @@
     const nav = event.target.closest('[data-view]');
     if (nav) { switchView(nav.dataset.view); return; }
     const sortButton = event.target.closest('[data-sort]');
-    if (sortButton) { sort = { key: sortButton.dataset.sort, direction: sort.key === sortButton.dataset.sort ? -sort.direction : 1 }; renderTable(); return; }
+    if (sortButton) { const key = sortButton.dataset.sort; sort = { key, direction: sort.key === key ? -sort.direction : key === 'created' ? -1 : 1 }; renderTable(); return; }
     const row = event.target.closest('tr[data-row]');
     if (row) { const split = row.dataset.row.indexOf(':'); selectRow(row.dataset.row.slice(0, split), row.dataset.row.slice(split + 1)); }
     const command = event.target.closest('[data-command]')?.dataset.command;
@@ -1160,6 +1199,8 @@
       discoverRecoveryDrafts();
       startSelectionPolling();
       startLibraryPolling();
+      checkServiceVersion();
+      setInterval(checkServiceVersion, 30000);
       $('save-status').textContent = '播放資料已載入';
     } catch (error) {
       notice(`本機播放器尚未就緒：${error.message}。請確認服務已啟動，再刷新頁面。`);

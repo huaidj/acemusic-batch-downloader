@@ -282,10 +282,20 @@ export function createPlayerServer(options = {}) {
       const url = new URL(req.url, `http://${host}`);
       const method = req.method || 'GET';
       if (url.pathname === '/api/health' && method === 'GET') return json(res, 200, { ok: true, service: 'huaidj-player', version: '1.8.0', pid: process.pid });
+      if (url.pathname === '/api/restart' && method === 'POST') {
+        // 升級後讓舊程序換成磁碟上的新版；只由使用者在播放器視窗按下，不會自動打斷播放。
+        if (typeof options.onRestart !== 'function') throw failure(501, '這個播放器服務不支援自動重新啟動', 'RESTART_UNAVAILABLE');
+        const body = await readBody(req, true);
+        if (Object.keys(body).length) throw failure(400, '重新啟動不接受參數', 'INVALID_REQUEST');
+        json(res, 202, { ok: true, restarting: true, pid: process.pid });
+        setTimeout(() => options.onRestart(server), 150);
+        return;
+      }
       if (url.pathname === '/api/selection' && method === 'GET') return json(res, 200, selection);
       if (url.pathname === '/api/library/revision' && method === 'GET') {
-        const [indexed, likes] = await Promise.all([library(), likesRevision()]);
-        return json(res, 200, { ok: true, revision: String(indexed.library.revision || ''), siteLikesRevision: likes });
+        const indexed = await library();
+        const [likes, online] = await Promise.all([likesRevision(), probeHub()]);
+        return json(res, 200, { ok: true, revision: String(indexed.library.revision || ''), siteLikesRevision: likes, hubOnline: !!online });
       }
       if (url.pathname === '/api/site-likes' && method === 'GET') {
         if (url.search) throw failure(400, '網站點讚查詢不接受參數', 'INVALID_REQUEST');
@@ -308,7 +318,9 @@ export function createPlayerServer(options = {}) {
           if (Object.keys(body).length) throw failure(400, '重新掃描不接受檔案路徑或其他參數', 'INVALID_REQUEST');
         }
         if ([...url.searchParams.keys()].some((key) => key !== 'refresh')) throw failure(400, '不支援此曲庫查詢參數', 'INVALID_REQUEST');
-        const [indexed, online] = await Promise.all([library(method === 'POST' || url.searchParams.get('refresh') === '1'), probeHub()]);
+        // 先建曲庫再探測 Hub：建曲庫會佔用事件迴圈，並行時探測會在本程序這端逾時而誤報離線。
+        const indexed = await library(method === 'POST' || url.searchParams.get('refresh') === '1');
+        const online = await probeHub();
         return json(res, 200, { ...indexed.library, hub: { ...(indexed.library.hub || {}), online: !!online } });
       }
       if (url.pathname === '/api/state' && method === 'GET') return json(res, 200, await loadState());
@@ -388,7 +400,15 @@ export function createPlayerServer(options = {}) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.ACE_PLAYER_PORT || 8790);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('ACE_PLAYER_PORT 必須是 1 到 65535 的整數');
-  const server = createPlayerServer({ autoSyncSiteLikes: process.env.ACE_PLAYER_SITE_LIKES !== '0' });
+  const onRestart = (current) => {
+    current.closeAllConnections?.();
+    current.close(() => {
+      const child = spawn(process.execPath, process.argv.slice(1), { detached: true, windowsHide: true, stdio: 'ignore', env: process.env });
+      child.once('spawn', () => { child.unref(); process.exit(0); });
+      child.once('error', (err) => { console.error('播放器重新啟動失敗：', err.code || err.name); process.exit(1); });
+    });
+  };
+  const server = createPlayerServer({ autoSyncSiteLikes: process.env.ACE_PLAYER_SITE_LIKES !== '0', onRestart });
   server.once('error', (err) => { console.error('播放器無法啟動：', err.code || err.name); process.exitCode = 1; });
   server.listen(port, '127.0.0.1', () => console.log(`HuaiDJ Player 1.8.0 http://127.0.0.1:${port}`));
 }

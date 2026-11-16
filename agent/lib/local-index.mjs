@@ -173,6 +173,17 @@ export async function buildLocalDownloadIndex({ cfg = config(), root = 'ai音樂
         for (const alias of aliases) byPath.set(lower(alias.absolutePath), file);
         return file;
     });
+    // MP3 檔頭不含長度；用音頻分析快取（同路徑且同大小才採用）補上，避免播放器整排顯示 0:00。
+    const analysisCache = readJson(path.join(cfg.stateDir, 'cache', 'audio-analysis.json'), {});
+    const analysisItems = (analysisCache && (analysisCache.items || analysisCache.data?.items)) || {};
+    const analysedDuration = (file, aliases) => {
+        for (const alias of aliases) {
+            const item = analysisItems[path.resolve(alias.absolutePath)] || analysisItems[alias.absolutePath];
+            if (item && item.ok !== false && Number(item.size) === file.bytes && Number(item.duration) > 0) return Number(item.duration);
+        }
+        return null;
+    };
+    const aliasesById = new Map([...groups.values()].map((aliases) => [aliases[0].physicalId, aliases]));
     let cursor = 0;
     await Promise.all(Array.from({ length: Math.min(8, physicalFiles.length) }, async () => {
         while (cursor < physicalFiles.length) {
@@ -180,7 +191,7 @@ export async function buildLocalDownloadIndex({ cfg = config(), root = 'ai音樂
             const inspected = file.isAudio ? await inspectAudioFile(file.absolutePath) : { validity: file.bytes ? 'unknown' : 'damaged', format: file.extension, bytes: file.bytes, reason: file.bytes ? undefined : 'File is empty' };
             file.validity = inspected.validity;
             file.format = inspected.format;
-            file.duration = inspected.duration || null;
+            file.duration = inspected.duration || (inspected.validity !== 'damaged' ? analysedDuration(file, aliasesById.get(file.id) || []) : null) || null;
             file.inspection = inspected;
         }
     }));
@@ -428,7 +439,7 @@ export async function buildAudioLibrary(options = {}) {
         const song = owners.length === 1 ? index._songs.find((song) => song.task_id === owners[0]) : null;
         const stem = file.associations.some((item) => item.kind === 'stems') || /(?:^|\/)(?:Stems|採樣包(?:WAV)?|分軌)(?:\/|$)/i.test(file.path);
         const full = file.associations.some((item) => ['mp3', 'wav', 'audio'].includes(item.kind)) || /^(?:成品MP3|成品WAV|俱樂部版)\//.test(file.path) || /(?:^|\/)完整歌曲\//.test(file.path);
-        return { id: file.id, name: file.name, title: song?.meta?.title || path.basename(file.name, path.extname(file.name)), format: file.format, bytes: file.bytes, relativePath: file.path, folder: slash(path.dirname(file.path)), duration: file.duration, validity: file.validity, kind: stem ? 'stem' : full ? 'full' : 'other', ...(owners.length === 1 ? { songId: owners[0] } : {}) };
+        return { id: file.id, name: file.name, title: song?.meta?.title || path.basename(file.name, path.extname(file.name)), format: file.format, bytes: file.bytes, relativePath: file.path, folder: slash(path.dirname(file.path)), duration: file.duration || (owners.length === 1 && !stem && (song?.result?.duration_sec || song?.result?.duration)) || null, validity: file.validity, kind: stem ? 'stem' : full ? 'full' : 'other', ...(owners.length === 1 ? { songId: owners[0] } : {}) };
     });
     const publicById = new Map(files.map((file) => [file.id, file]));
     const filesById = new Map(audio.map((file) => [file.id, { absolutePath: file.absolutePath, ...publicById.get(file.id) }]));
@@ -464,7 +475,7 @@ export async function buildAudioLibrary(options = {}) {
         const stemFiles = [...new Set(stemRecords.map((item) => item.fileId))].map((id) => publicById.get(id)).filter(Boolean);
         const group = P.pickStemGroup(song.stems);
         const stemStatus = stemRecords.some((item) => item.validity === 'valid' && item.confidence === 'verified') ? 'verified' : row.downloaded.stems > 0 ? 'recorded' : stemRecords.some((item) => item.validity !== 'damaged') ? 'uncertain' : stemRecords.length ? 'damaged' : group || P.notationRequested(song) ? 'missing' : 'unsupported';
-        return { id: song.task_id, songId: song.task_id, title: song.meta?.title || 'Untitled', model: song.model || null, duration: song.result?.duration_sec || song.result?.duration || null, coverUrl: null, files: candidates.map((item) => ({ ...publicById.get(item.fileId), confidence: item.confidence })), preferredFileId: preferred?.fileId || null, formats: { mp3: formatStatus(song, row.files, 'mp3'), wav: formatStatus(song, row.files, 'wav') }, stems: { status: stemStatus, count: row.downloaded.stems, files: stemFiles }, problems: row.problems };
+        return { id: song.task_id, songId: song.task_id, title: song.meta?.title || 'Untitled', model: song.model || null, duration: song.result?.duration_sec || song.result?.duration || null, createdAt: Number.isFinite(Number(song.created_at)) ? Number(song.created_at) : null, coverUrl: null, files: candidates.map((item) => ({ ...publicById.get(item.fileId), confidence: item.confidence })), preferredFileId: preferred?.fileId || null, formats: { mp3: formatStatus(song, row.files, 'mp3'), wav: formatStatus(song, row.files, 'wav') }, stems: { status: stemStatus, count: row.downloaded.stems, files: stemFiles }, problems: row.problems };
     });
     return { library: { scannedAt: index.savedAt, revision: index.revision, root: options.root || 'ai音樂', hub: { online: false }, tracks, files, fileAliases, folders: [...new Set(files.map((file) => file.folder))].sort(), summary: { songs: tracks.length, files: files.length, mp3: files.filter((file) => file.format === 'mp3').length, wav: files.filter((file) => file.format === 'wav').length, damaged: files.filter((file) => file.validity === 'damaged').length, uncertain: tracks.filter((track) => ['uncertain', 'missing'].includes(track.formats.mp3.status) || track.formats.wav.status === 'uncertain').length } }, filesById };
 }

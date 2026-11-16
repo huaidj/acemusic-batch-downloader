@@ -347,3 +347,16 @@ test('naming journal: only in-library relative moves are accepted; tool relocati
   assert.deepEqual(namingJournalMoves({ schema: 'other', entries: [{ from: 'a', to: 'b' }] }, root), {});
   assert.deepEqual(namingJournalMoves(null, root), {});
 });
+
+test('audio library: MP3 duration comes from the analysis cache only when path and size match', async () => {
+  const a = song('so_dur'), f = fixture([a]);
+  const file = f.write(path.join(f.root, '成品MP3', 'Twin.mp3'), mp3());
+  const other = f.write(path.join(f.root, '採樣包', 'Drums', 'Loose - Drums.mp3'), mp3());
+  f.json(path.join(f.cfg.stateDir, 'cache', 'audio-analysis.json'), { items: {
+    [path.resolve(file)]: { file, size: 417, ok: true, duration: 183.5 },
+    [path.resolve(other)]: { file: other, size: 999, ok: true, duration: 50 },
+  } });
+  const { library } = await buildAudioLibrary({ cfg: f.cfg });
+  assert.equal(library.files.find((x) => x.name === 'Twin.mp3').duration, 183.5);
+  assert.equal(library.files.find((x) => x.name === 'Loose - Drums.mp3').duration, null, 'size mismatch means a stale cache entry is ignored');
+});

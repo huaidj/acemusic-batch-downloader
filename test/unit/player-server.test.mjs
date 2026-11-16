@@ -278,3 +278,17 @@ test('hub probe tolerates one slow or failed health check before reporting offli
   mode = 'ok';
   assert.equal(await probe.probe(), true);
 });
+
+test('player restart endpoint: only with a restart handler, local origin, no parameters', async (t) => {
+  const f = await fixture(t);
+  let restarts = 0;
+  const { port } = await f.start({ onRestart: () => { restarts += 1; } });
+  assert.equal((await request(port, '/api/restart', { method: 'POST', body: { force: true } })).status, 400);
+  assert.equal((await request(port, '/api/restart', { method: 'POST', headers: { Origin: 'http://evil.example' } })).status, 403);
+  const ok = await request(port, '/api/restart', { method: 'POST' });
+  assert.equal(ok.status, 202); assert.equal(ok.json.restarting, true);
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(restarts, 1);
+  const plain = await f.start();
+  assert.equal((await request(plain.port, '/api/restart', { method: 'POST' })).status, 501);
+});

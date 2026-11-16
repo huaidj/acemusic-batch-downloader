@@ -53,6 +53,8 @@ input::placeholder { color: var(--faint); }
 #view-actions button { min-height: 26px; padding: 3px 8px; font-size: 12px; }
 #view-actions { flex-wrap: wrap; justify-content: flex-end; }
 .site-likes-status { color: var(--muted); font-size: 12px; max-width: 46ch; overflow-wrap: anywhere; }
+.site-order { font-size: 11px; padding: 2px 6px; min-height: 22px; border-radius: 6px; color: var(--muted); background: transparent; }
+.site-order.sort-active { color: var(--text); border-color: var(--line-strong, currentColor); }
 .table-scroll { overflow: auto; flex: 1; min-height: 0; }
 table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 12px; }
 table.file-table { min-width: 860px; }

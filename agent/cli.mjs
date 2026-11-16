@@ -39,6 +39,7 @@ function usage() {
   node cli.mjs local-index [--root 名稱] [--full] [--json] 按歌曲ID核對真實檔案，不猜同名
   node cli.mjs site-likes [--sync]   ACE 網頁原生拇指點讚快照；--sync 唯讀抓取全部分頁，不改網站上的讚
   node cli.mjs player [--background] [--json] 啟動獨立本機播放器
+  node cli.mjs player --restart              升級後把執行中的舊播放器服務換成新版（會中斷目前播放）
   node cli.mjs events [--since seq] [--type t]  中樞事件（新歌、自動下載、下載完成）
   node cli.mjs wait [--timeout 秒]             等待下一首新歌（需 Hub＋開著站點分頁）
   node cli.mjs probe                           站點健康（唯讀）
@@ -143,6 +144,7 @@ async function main() {
         }
     }
     if (cmd === 'site-likes') return printJson(args.flags.sync ? await ACE.syncSiteLikesFromSite(cfg) : await ACE.siteLikes(cfg));
+    if (cmd === 'player' && args.flags.restart) { const { restartPlayer } = await import('./lib/player-process.mjs'); return printJson(await restartPlayer(cfg)); }
     if (cmd === 'player') return printJson(await ACE.startPlayer(cfg, { songId: args.flags['focus-id'] ? decodeURIComponent(String(args.flags['focus-id'])) : '' }));
 
     if (!cmd || cmd === 'help' || cmd === '--help') return usage();

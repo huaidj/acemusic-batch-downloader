@@ -1883,6 +1883,58 @@ export async function classifyByAttributes({ root = 'ai音樂', move = true, cfg
  * 按「音頻屬性」分類：BPM / 調性(Camelot) / 能量，分軌再加樂器類型。
  * 對 ai音樂 內所有音檔（成品、分軌、未對應）分析後用 hardlink 建分類視圖（不佔額外空間）。
  */
+/**
+ * 音頻分類是 hardlink 檢視。去重／整理把原件歸檔後，它在音頻分類裡的連結仍指向歸檔的那份資料，
+ * 變成「只存在於音頻分類」的孤兒（常見症狀：播放器出現十六進位檔名、同一首重複、檔數虛增）。
+ * 規則：檢視檔的實體檔若不屬於任何曲庫內的來源檔，且曲庫內有內容完全相同的來源，才把這個檢視連結
+ * 移到 organize-backups（同磁碟改名，可復原，不刪資料）；沒有相同來源的唯一音訊只回報、不動。
+ */
+export async function pruneStaleAudioViews({ cfg = config(), outDir, liveFiles, commit = false } = {}) {
+    const report = { checked: 0, stale: 0, moved: 0, keptUnique: 0, kept: [], movedItems: [], failed: [], archive: null };
+    if (!outDir || !exists(outDir)) return report;
+    const { physicalFileKey } = await import('./file-id.mjs');
+    const liveByKey = new Map(), liveBySize = new Map();
+    for (const file of liveFiles || []) {
+        let stat;
+        try { stat = fs.statSync(file, { bigint: true }); } catch { continue; }
+        liveByKey.set(physicalFileKey(stat, file), file);
+        const size = Number(stat.size);
+        if (!liveBySize.has(size)) liveBySize.set(size, []);
+        liveBySize.get(size).push(file);
+    }
+    const views = walkFiles(outDir, 8, [], 200000).filter((file) => /\.(mp3|wav|flac)$/i.test(file));
+    const hashes = new Map();
+    const hashOf = async (file) => { if (!hashes.has(file)) hashes.set(file, await streamFileHash(file)); return hashes.get(file); };
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const archiveRoot = path.join(cfg.stateDir, 'organize-backups', 'stale-audio-views-' + stamp);
+    for (const view of views) {
+        report.checked++;
+        let stat;
+        try { stat = fs.statSync(view, { bigint: true }); } catch { continue; }
+        if (liveByKey.has(physicalFileKey(stat, view))) continue;
+        // 只處理「仍與別處（歸檔）共用資料」的 hardlink；獨立複本（nlink=1）是使用者或舊版留下的檔案，照舊保留。
+        if (stat.nlink <= 1n) continue;
+        report.stale++;
+        let keeper = null;
+        try {
+            const digest = await hashOf(view);
+            for (const candidate of liveBySize.get(Number(stat.size)) || []) if (await hashOf(candidate) === digest) { keeper = candidate; break; }
+        } catch (error) { report.failed.push({ file: path.relative(outDir, view), error: String(error.message || error) }); continue; }
+        if (!keeper) { report.keptUnique++; if (report.kept.length < 200) report.kept.push(path.relative(outDir, view)); continue; }
+        if (!commit) { report.movedItems.push({ view: path.relative(outDir, view), keeper: path.relative(path.dirname(outDir), keeper), preview: true }); continue; }
+        const target = path.join(archiveRoot, path.relative(outDir, view));
+        try {
+            await fsp.mkdir(path.dirname(target), { recursive: true });
+            await fsp.rename(view, target);
+            report.moved++;
+            report.archive = archiveRoot;
+            if (report.movedItems.length < 500) report.movedItems.push({ view: path.relative(outDir, view), keeper: path.relative(path.dirname(outDir), keeper) });
+        } catch (error) { report.failed.push({ file: path.relative(outDir, view), error: String(error.message || error) }); }
+    }
+    if (commit && report.moved) await fsp.writeFile(path.join(archiveRoot, '_stale-views.json'), JSON.stringify({ reason: 'classification view whose source was archived; identical live source exists', createdAt: new Date().toISOString(), items: report.movedItems }, null, 2)).catch(() => {});
+    return report;
+}
+
 export async function classifyByAudio({ root = 'ai音樂', folder = '音頻分類', linkMode = 'hardlink', limit = 0, refresh = false, onProgress = null, cfg = config() } = {}) {
     if (!hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => classifyByAudio(...arguments));
     const { sameFileContent, copyFileSafely } = await import('./file-ops.mjs');
@@ -2092,6 +2144,7 @@ export async function classifyByAudio({ root = 'ai音樂', folder = '音頻分�
             manifest.push(item);
         } catch (error) { report.failed.push({ file: record.file, error: String(error.message || error), code: error.code }); }
     }
+    if (linkMode === 'hardlink') report.staleViews = await pruneStaleAudioViews({ cfg, outDir, liveFiles: unique, commit: true });
     await writeJson(path.join(outDir, '_manifest.json'), {
         schema: 'ace_audio_classification_v1',
         generatedAt: new Date().toISOString(),
