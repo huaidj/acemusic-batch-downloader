@@ -5,7 +5,7 @@ import * as ACE from './lib/ace.mjs';
 import { config, readJson, exists } from './lib/config.mjs';
 import { hubJson, HUB_URL } from './lib/hubclient.mjs';
 
-const SERVER = { name: 'ace-music-downloader', version: '1.7.2' };
+const SERVER = { name: 'ace-music-downloader', version: '1.7.3' };
 const jobs = new Map();
 let jobSeq = 0;
 const hubJobs = new Set();

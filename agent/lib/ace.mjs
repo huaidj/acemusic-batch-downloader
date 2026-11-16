@@ -222,7 +222,7 @@ export async function pruneBackups(cfg = config(), { keepDays = 7, keepLast = 1,
                 failed.push({ name: b.name, error: String((err && err.message) || err) });
             }
         }
-        await appendLog(`prune-backups removed=${removed.join(',') || '-'} failed=${failed.length}`);
+        await appendLog(`prune-backups removed=${removed.join(',') || '-'} failed=${failed.length}`, cfg);
     }
     const strip = ({ mtimeMs, ...rest }) => rest;
     return {
@@ -838,16 +838,41 @@ async function saveState(cfg, buildPlanResult, state) {
     });
 }
 
+/**
+ * 站點模型的 lossy 集合（/api/status 的 models[].lossy）：lossy 模型（ACE-Step 的 m4a）沒有 WAV。
+ * 快取 6 小時；讀不到（沒登入／離線）回 null → planner 用後備規則（ace-step* 視為 lossy）。
+ */
+export async function getLossyModels(cfg = config()) {
+    const cached = await cacheRead('site-models', { maxAgeMs: 6 * 3600 * 1000, cfg }).catch(() => null);
+    if (cached && Array.isArray(cached.lossy)) return new Set(cached.lossy);
+    try {
+        const session = await loadSession(cfg);
+        const res = await aceFetch(cfg, session, '/api/status', { headers: { Accept: 'application/json' } });
+        if (!res.ok) return null;
+        const data = await res.json().catch(() => null);
+        const models = data && Array.isArray(data.models) ? data.models : [];
+        if (!models.length) return null;
+        const lossy = models.filter((m) => m && m.lossy).map((m) => m.id);
+        await cacheWrite('site-models', { lossy, all: models.map((m) => m.id) }, cfg).catch(() => {});
+        return new Set(lossy);
+    } catch {
+        return null;
+    }
+}
+
 export async function buildPlanForSongs(cfg = config(), songs, options = {}) {
     const state = await loadState(cfg);
+    const types = options.types || ['stems', 'midi'];
+    const lossyModels = (Array.isArray(types) ? types : [...types]).includes('wav') ? await getLossyModels(cfg) : null;
     const plan = P.buildDownloadPlan({
         songs,
         options: {
-            types: options.types || ['stems', 'midi'],
+            types,
             root: options.root || 'ai音樂',
             typeFolders: !!options.typeFolders,
             force: !!options.force,
             origin: cfg.baseUrl,
+            lossyModels,
         },
         state,
         origin: cfg.baseUrl,

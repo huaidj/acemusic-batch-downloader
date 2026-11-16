@@ -106,8 +106,8 @@ export function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }
 
-export async function appendLog(line) {
-    const cfg = config();
+export async function appendLog(line, cfgArg) {
+    const cfg = cfgArg || config();
     try {
         await fsp.mkdir(cfg.stateDir, { recursive: true });
         const stamp = new Date().toISOString();

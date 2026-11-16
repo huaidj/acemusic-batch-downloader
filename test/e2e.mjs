@@ -547,13 +547,17 @@ scenario('S14_rate_limit_stops_without_mass_failures', async () => {
   mock.setRateLimited('song-b', 'full');
   try {
     await freshPanel(page, mock.base);
-    await applyOptions(page, { stems: false, midi: true, cover: false });
+    // 限流只停 MIDI／MusicXML 生成；同一個工作裡的 WAV 必須照常下載（之前會整個停掉）
+    await applyOptions(page, { stems: false, midi: true, wav: true, cover: false });
     await setRootFolder(page, 'rl-test');
     await selectSongs(page, ['song-a', 'song-b']);
     await clickDownload(page);
     const progress = await waitJobDone(page, 60000);
-    assertEqual(progress.counts.failed, 0, 'S14 限流不應記成大量失敗');
-    assert(progress.counts.done === 0, 'S14 限流時不應有完成檔');
+    assertEqual(progress.counts.failed, 0, 'S14 限流不應記成失敗');
+    assert(!/^已停止/.test(progress.phaseLine || ''), `S14 限流不應停掉整個工作：${progress.phaseLine}`);
+    assertFileMap(ROOT, { 'rl-test/Neon Drive/Neon Drive.wav': expectedBytes('AUDIO-WAV', 'song-a') }, 'S14 WAV 應照常下載');
+    const statsText = await page.evaluate(() => document.getElementById('acedl-host').shadowRoot.querySelector('[data-stats]').textContent);
+    assert(/限流略過\s*2/.test(statsText), `S14 應顯示限流略過 2：${statsText}`);
   } finally {
     mock.clearSiteErrors();
   }
@@ -627,6 +631,45 @@ scenario('S16_drag_and_opacity', async () => {
   await openPanel(page);
   const h2 = await box('.panel header');
   await page.mouse.dblclick(h2.left + 40, h2.top + 14);
+});
+
+scenario('S17_radio_player_favorites', async () => {
+  // 電臺：播放請求站點音檔、收藏（愛心）存 aceFavorites、只看收藏過濾、隨機／來源設定持久化
+  await freshPanel(page, mock.base);
+  const q = (sel) => page.locator(sel);
+  assertEqual(await q('[data-radio-player]').count(), 1, 'S17 應有播放器');
+  // 收藏 song-a、song-b
+  for (const id of ['song-a', 'song-b']) await q(`[data-song-id="${id}"] [data-fav]`).click();
+  await new Promise((r) => setTimeout(r, 250));
+  let storage = await readStorage(context);
+  assertEqual(Object.keys(storage.aceFavorites || {}).sort(), ['song-a', 'song-b'], 'S17 收藏應存入 aceFavorites');
+  // 只看收藏
+  await q('[data-act="filter-favorites"]').click();
+  assertEqual(await q('[data-song-id]').count(), 2, 'S17 只看收藏應只剩 2 首');
+  await q('[data-act="filter-favorites"]').click();
+  assertEqual(await q('[data-song-id]').count(), 5, 'S17 取消過濾應回到 5 首');
+  // 隨機、來源
+  await q('[data-radio="shuffle"]').click();
+  await q('[data-radio-source]').selectOption('fav');
+  // 播放：按 song-a 的播放鍵 → 站點應收到該音檔請求，標題顯示歌名
+  mock.clearLog();
+  await q('[data-song-id="song-a"] [data-play]').click();
+  await new Promise((r) => setTimeout(r, 600));
+  assert(mock.log.some((e) => e.path.startsWith('/data/mock/song-a.mp3')), 'S17 播放應請求 song-a 的音檔');
+  const title = await q('[data-radio-title]').textContent();
+  assertEqual(title.trim(), 'Neon Drive', 'S17 播放器標題');
+  await new Promise((r) => setTimeout(r, 250));
+  storage = await readStorage(context);
+  assert(storage.aceRadio && storage.aceRadio.shuffle === true && storage.aceRadio.source === 'fav' && storage.aceRadio.lastId === 'song-a', `S17 aceRadio 應保存設定：${JSON.stringify(storage.aceRadio)}`);
+  // 取消收藏
+  await q('[data-song-id="song-a"] [data-fav]').click();
+  await new Promise((r) => setTimeout(r, 250));
+  storage = await readStorage(context);
+  assertEqual(Object.keys(storage.aceFavorites || {}), ['song-b'], 'S17 取消收藏');
+  // 還原設定，避免影響後續情境
+  await q('[data-radio="shuffle"]').click();
+  await q('[data-radio-source]').selectOption('all');
+  await q('[data-song-id="song-b"] [data-fav]').click();
 });
 
 scenario('S7_logged_out_shows_login_hint', async () => {

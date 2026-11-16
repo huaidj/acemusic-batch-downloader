@@ -211,6 +211,8 @@ async function exportSessionToHost() {
 
 async function exportHistoryToHost() {
     const items = await new Promise((resolve) => chrome.downloads.search({ limit: 2000, orderBy: ['-startTime'] }, resolve));
+    // Chrome 下載紀錄被清空（或搜尋暫時回空）時不要覆寫：否則本機 history.json 會被洗成 0 筆（曾發生）
+    if (!items || !items.length) return { ok: true, skipped: 'empty-history' };
     return hostRequest({
         cmd: 'export',
         name: 'history',

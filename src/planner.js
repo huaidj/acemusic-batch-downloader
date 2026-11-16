@@ -21,6 +21,7 @@
       root: (typeof o.root === 'string' && o.root.trim()) || 'ai音樂',
       typeFolders: !!o.typeFolders,
       force: !!o.force,
+      lossyModels: o.lossyModels && typeof o.lossyModels.has === 'function' ? o.lossyModels : Array.isArray(o.lossyModels) ? new Set(o.lossyModels) : null,
       origin: String(o.origin || 'https://acemusic.ai').replace(/\/+$/, ''),
     };
   }
@@ -31,11 +32,18 @@
   }
 
   /** 站點目前只有 acemusic-v1.1 模型提供 WAV；其他模型抓 ?kind=wav 會 404 */
-  const WAV_MODELS = Object.freeze(['acemusic-v1.1', 'acemusic-v1.2', 'acemusic-v1.3']);
-  function supportsWav(song) {
+  /**
+   * WAV 可用性＝站點規則（public/app.js：`hasWav = (s) => !modelPicker.of(s.model)?.lossy`，且只有生成歌曲有 WAV）：
+   * 模型在 /api/status 標 lossy（ACE-Step 系列：來源是 m4a）就沒有 WAV；acemusic-v1／v1.1／之後的新模型都有。
+   * lossyModels：/api/status 讀到的 lossy 模型集合；沒有時用後備規則「ace-step* 視為 lossy」。
+   */
+  const LOSSY_FALLBACK = /^ace-step/i;
+  function supportsWav(song, lossyModels) {
     const model = String((song && song.model) || '');
-    if (!model) return false;
-    return WAV_MODELS.some((m) => model === m || model.startsWith(m + '-') || model.startsWith(m + '.'));
+    if (!model) return false; // 上傳的歌（沒有模型）只有原檔
+    if (song.capability && song.capability !== 'music_generate') return false;
+    if (lossyModels && typeof lossyModels.has === 'function' && lossyModels.size) return !lossyModels.has(model);
+    return !LOSSY_FALLBACK.test(model);
   }
 
   /** 站點判定 MIDI / MusicXML 可用的條件（見 public/app.js dlOptions） */
@@ -168,7 +176,7 @@
         });
       }
 
-      if (opts.types.has('wav') && isDone(song) && supportsWav(song)) {
+      if (opts.types.has('wav') && isDone(song) && supportsWav(song, opts.lossyModels)) {
         push({
           key: 'wav',
           kind: 'wav',

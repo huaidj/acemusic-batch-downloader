@@ -34,7 +34,7 @@
   });
   const DEFAULT_ROOT = 'ai音樂';
   const PAGE_LIMIT = 50;
-  const MAX_PAGES = 8;
+  const MAX_PAGES = 40; // 50×40 = 2000 首（舊值 8 會在 400 首默默截斷）
   const AUTO_REFRESH_MS = 8000;
   const KEY_SETTINGS = 'aceSettings';
   const KEY_HISTORY = 'aceHistory';
@@ -77,6 +77,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     unavailable: {},
     agentUnavailable: {},
     onlyUndownloaded: false,
+    onlyFavorites: false,
   };
 
   /* ------------------------------------------------------------------ *
@@ -332,6 +333,36 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
 .tidybar .label { color: var(--muted); font-size: 10.5px; }
 .toast:empty { display: none; }
 .toast { color: var(--accent); font-size: 11px; margin-left: 6px; }
+/* 電臺播放器 */
+.player { display: grid; grid-template-columns: 38px 1fr; grid-template-areas: "cover info" "ctrl ctrl" "extra extra"; gap: 6px 10px; padding: 9px 14px 10px; border-bottom: 1px solid var(--line); background: rgba(0, 0, 0, .1); }
+.pcover { grid-area: cover; width: 38px; height: 38px; border-radius: 7px; object-fit: cover; background: var(--surface-hover); }
+.pinfo { grid-area: info; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 3px; }
+.ptitle { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pline { display: flex; align-items: center; gap: 8px; }
+.pseek { flex: 1; min-width: 0; accent-color: var(--accent); height: 14px; cursor: pointer; }
+.ptime { font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pctrl { grid-area: ctrl; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.pextra { grid-area: extra; display: flex; align-items: center; gap: 8px; }
+.pextra select { padding: 2px 4px; border-radius: 6px; border: 1px solid var(--line); background: var(--field); color: var(--text); font-size: 11.5px; outline: none; }
+.pvol { width: 90px; accent-color: var(--accent); cursor: pointer; }
+.pvolicon { display: inline-flex; color: var(--faint); margin-left: auto; }
+.pbtn { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer; padding: 0; }
+.pbtn:hover { background: var(--surface-hover); color: var(--text); }
+.pbtn.on { color: var(--accent); }
+.pbtn:disabled { opacity: .35; cursor: default; }
+.pbtn.main { width: 38px; height: 38px; background: var(--accent); color: var(--accent-ink); }
+.pbtn.main:hover { background: var(--accent-hover); color: var(--accent-ink); }
+.pbtn[data-mode="one"]::after { content: "1"; position: absolute; font-size: 8px; font-weight: 700; margin: 12px 0 0 12px; }
+.pbtn { position: relative; }
+.pbtn[data-radio="fav"].on { color: var(--err); }
+.ico { width: 17px; height: 17px; }
+.pbtn.main .ico { width: 19px; height: 19px; }
+.song.nowplaying { background: var(--accent-soft); }
+.rowicon { flex: none; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; border: 1px solid transparent; background: transparent; color: var(--faint); cursor: pointer; padding: 0; }
+.rowicon:hover { background: var(--surface-hover); color: var(--text); }
+.rowicon.on { color: var(--err); }
+.rowicon .ico { width: 15px; height: 15px; }
+.song .cover { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) { .fab.running .dot { animation: none; } .bar i, .tidybar .track i { transition: none; } }
 `;
 
@@ -446,7 +477,13 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     const exportAgentBtn = el('button', { type: 'button', 'data-act': 'export-agent', text: '同步 Agent' });
     const filterBtn = el('button', { type: 'button', 'data-act': 'filter-undownloaded', text: '只看未下載' });
     const organizeBtn = el('button', { type: 'button', 'data-act': 'organize', text: '整理舊檔' });
-    const toolbar = el('div', { class: 'toolbar' }, [selectAll, selectNone, filterBtn, organizeBtn, exportAgentBtn, countLabel]);
+    const favFilterBtn = el('button', { type: 'button', 'data-act': 'filter-favorites', text: '只看收藏' });
+    favFilterBtn.addEventListener('click', () => {
+      S.onlyFavorites = !S.onlyFavorites;
+      favFilterBtn.classList.toggle('on', S.onlyFavorites);
+      renderSongs();
+    });
+    const toolbar = el('div', { class: 'toolbar' }, [selectAll, selectNone, filterBtn, favFilterBtn, organizeBtn, exportAgentBtn, countLabel]);
     const tidyBtn = el('button', { type: 'button', 'data-act': 'tidy', text: '一鍵整理' });
     const extractMp3Btn = el('button', { type: 'button', 'data-act': 'extract-mp3', text: '成品MP3' });
     const watchBtn = el('button', { type: 'button', 'data-act': 'watch', text: '背景自動整理' });
@@ -493,7 +530,8 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     ]);
     const footer = el('div', { class: 'footer' }, [downloadBtn, cancelBtn, toast, tidyBar, footHint]);
 
-    panel.append(header, optRows, toolbar, toolbar2, organizeBox, songsBox, progress, footer);
+    const playerBar = buildPlayer();
+    panel.append(header, playerBar, optRows, toolbar, toolbar2, organizeBox, songsBox, progress, footer);
     shadow.append(fab, panel);
 
     Object.assign(S.els, {
@@ -593,6 +631,378 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     renderProgress();
     updateFab();
     updateCounts();
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 電臺播放器：播放／暫停、上下首、隨機、循環、收藏、只聽收藏、音量、進度、系統媒體鍵
+   * 播的是站點歌曲音檔（local_audio，同源、帶登入），不另外下載；狀態存在 aceRadio／aceFavorites，
+   * 收藏另外經頁面通道交給本機（page-favorites.json），給 agent／之後的 Studio 用。
+   * ------------------------------------------------------------------ */
+  const KEY_RADIO = 'aceRadio';
+  const KEY_FAVORITES = 'aceFavorites';
+  const R = {
+    audio: null,
+    currentId: '',
+    playing: false,
+    shuffle: false,
+    repeat: 'all', // off | all | one
+    source: 'all', // all | fav
+    volume: 0.8,
+    favorites: {}, // task_id → { at, title }
+    order: [], // 目前播放序（隨機時是洗牌後的 id）
+    history: [],
+    errors: 0,
+  };
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const ICONS = {
+    play: 'M8 5.5v13l11-6.5z',
+    pause: 'M7 5h3.5v14H7zM13.5 5H17v14h-3.5z',
+    prev: 'M6 5h2v14H6zM9.5 12 19 5v14z',
+    next: 'M16 5h2v14h-2zM5 5l9.5 7L5 19z',
+    shuffle: 'M4 7h3.2c1.6 0 3 .8 3.9 2.1l2.8 4.3c.9 1.3 2.3 2.1 3.9 2.1H20m0 0-2.5-2.5M20 15.5 17.5 18M4 17h3.2c1 0 1.9-.3 2.6-.9M20 8.5h-2.2c-1 0-1.9.3-2.6.9M20 8.5 17.5 6M20 8.5 17.5 11',
+    repeat: 'M5 10V9a3 3 0 0 1 3-3h10m0 0-2.5-2.5M18 6l-2.5 2.5M19 14v1a3 3 0 0 1-3 3H6m0 0 2.5 2.5M6 18l2.5-2.5',
+    heart: 'M12 19.5s-7-4.3-7-9.6A3.9 3.9 0 0 1 12 7.6a3.9 3.9 0 0 1 7 2.3c0 5.3-7 9.6-7 9.6z',
+    volume: 'M5 9.5h3l4-3.5v12l-4-3.5H5zM15.5 9a4 4 0 0 1 0 6M17.5 7a7 7 0 0 1 0 10',
+  };
+  const STROKE_ICONS = new Set(['shuffle', 'repeat', 'heart', 'volume']);
+  function icon(name) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.classList.add('ico');
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', ICONS[name]);
+    if (STROKE_ICONS.has(name)) {
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', 'currentColor');
+      path.setAttribute('stroke-width', '1.7');
+      path.setAttribute('stroke-linecap', 'round');
+      path.setAttribute('stroke-linejoin', 'round');
+    } else {
+      path.setAttribute('fill', 'currentColor');
+    }
+    svg.append(path);
+    return svg;
+  }
+  function setIcon(btn, name) {
+    btn.textContent = '';
+    btn.append(icon(name));
+  }
+  // 注意：本檔有一個 const CSS（面板樣式字串）遮蔽了瀏覽器的全域 CSS，這裡必須走 window.CSS
+  const cssEsc = (value) => (window.CSS && typeof window.CSS.escape === 'function' ? window.CSS.escape(value) : String(value).replace(/["\\]/g, '\\$&'));
+  const isFav = (id) => !!R.favorites[id];
+  const songById = (id) => S.songs.find((song) => song.task_id === id) || null;
+  const songTitle = (song) => (song && song.meta && song.meta.title) || 'Untitled';
+  const fmtTime = (sec) => {
+    if (!Number.isFinite(sec) || sec < 0) return '0:00';
+    const s = Math.floor(sec);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
+
+  async function loadRadio() {
+    const got = await storageGet([KEY_RADIO, KEY_FAVORITES]);
+    const prefs = (got && got[KEY_RADIO]) || {};
+    if (typeof prefs.shuffle === 'boolean') R.shuffle = prefs.shuffle;
+    if (['off', 'all', 'one'].includes(prefs.repeat)) R.repeat = prefs.repeat;
+    if (['all', 'fav'].includes(prefs.source)) R.source = prefs.source;
+    if (Number.isFinite(prefs.volume)) R.volume = clamp(prefs.volume, 0, 1);
+    if (typeof prefs.lastId === 'string') R.currentId = prefs.lastId;
+    const fav = got && got[KEY_FAVORITES];
+    R.favorites = fav && typeof fav === 'object' ? fav : {};
+    renderPlayer();
+  }
+  function saveRadio() {
+    return storageSet({ [KEY_RADIO]: { shuffle: R.shuffle, repeat: R.repeat, source: R.source, volume: R.volume, lastId: R.currentId } });
+  }
+  function saveFavorites() {
+    storageSet({ [KEY_FAVORITES]: R.favorites });
+    if (TEST_MODE || !S.host || !S.host.ok) return;
+    const favorites = Object.entries(R.favorites)
+      .map(([task_id, info]) => ({ task_id, title: (info && info.title) || '', at: (info && info.at) || 0 }))
+      .sort((a, b) => b.at - a.at);
+    sendMessage({ type: 'ACE_HOST_EXPORT_PAGE', name: 'page-favorites', data: { savedAt: Date.now(), favorites } }).catch(() => {});
+  }
+  function toggleFavorite(id) {
+    if (!id) return;
+    if (isFav(id)) delete R.favorites[id];
+    else R.favorites[id] = { at: Date.now(), title: songTitle(songById(id)) };
+    saveFavorites();
+    R.order = [];
+    renderPlayer();
+    for (const btn of S.els.songsBox ? S.els.songsBox.querySelectorAll(`[data-song-id="${cssEsc(id)}"] [data-fav]`) : []) paintFav(btn, id);
+    if (S.onlyFavorites) renderSongs();
+  }
+  function paintFav(btn, id) {
+    const on = isFav(id);
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-pressed', String(on));
+    btn.title = on ? '取消收藏' : '收藏';
+  }
+
+  /** 播放佇列：來源（全部／收藏）裡可播放的歌；順序依歌單（新 → 舊） */
+  function playableQueue() {
+    return S.songs.filter((song) => song.local_audio && (R.source === 'all' || isFav(song.task_id))).map((song) => song.task_id);
+  }
+  function rebuildOrder() {
+    const queue = playableQueue();
+    if (!R.shuffle) {
+      R.order = queue;
+      return;
+    }
+    const rest = queue.filter((id) => id !== R.currentId);
+    for (let i = rest.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [rest[i], rest[j]] = [rest[j], rest[i]];
+    }
+    R.order = R.currentId && queue.includes(R.currentId) ? [R.currentId, ...rest] : rest;
+  }
+  function neighbor(step) {
+    if (!R.order.length || R.order.some((id) => !songById(id))) rebuildOrder();
+    if (!R.order.length) return '';
+    const i = R.order.indexOf(R.currentId);
+    let j = i + step;
+    if (i < 0) j = step > 0 ? 0 : R.order.length - 1;
+    if (j >= R.order.length || j < 0) {
+      if (R.repeat === 'off' && i >= 0) return '';
+      if (R.shuffle && step > 0) {
+        R.currentId = '';
+        rebuildOrder();
+        return R.order[0] || '';
+      }
+      j = (j + R.order.length) % R.order.length;
+    }
+    return R.order[j] || '';
+  }
+
+  function ensureAudio() {
+    if (R.audio) return R.audio;
+    const audio = new Audio();
+    audio.preload = 'metadata';
+    audio.volume = R.volume;
+    audio.addEventListener('play', () => {
+      R.playing = true;
+      renderPlayer();
+    });
+    audio.addEventListener('pause', () => {
+      R.playing = false;
+      renderPlayer();
+    });
+    audio.addEventListener('timeupdate', paintProgress);
+    audio.addEventListener('loadedmetadata', paintProgress);
+    audio.addEventListener('playing', () => {
+      R.errors = 0;
+    });
+    audio.addEventListener('ended', () => {
+      if (R.repeat === 'one') {
+        audio.currentTime = 0;
+        audio.play().catch(() => {});
+        return;
+      }
+      const next = neighbor(1);
+      if (next) playSong(next);
+      else {
+        R.playing = false;
+        renderPlayer();
+      }
+    });
+    audio.addEventListener('error', () => {
+      // 單首播放失敗（音檔失效／未登入）：跳下一首；整個佇列都失敗就停，避免無限跳
+      R.errors += 1;
+      const total = Math.max(1, playableQueue().length);
+      if (R.errors >= Math.min(total, 5)) {
+        R.playing = false;
+        renderPlayer();
+        flash('無法播放（音檔無法載入，可能需要重新登入）');
+        return;
+      }
+      const next = neighbor(1);
+      if (next && next !== R.currentId) playSong(next);
+    });
+    R.audio = audio;
+    return audio;
+  }
+
+  function playSong(id) {
+    const song = songById(id);
+    if (!song || !song.local_audio) return;
+    const audio = ensureAudio();
+    if (R.currentId && R.currentId !== id) R.history.push(R.currentId);
+    if (R.history.length > 50) R.history.shift();
+    R.currentId = id;
+    if (!R.order.includes(id)) rebuildOrder();
+    audio.src = new URL(song.local_audio, location.origin).href;
+    audio.play().catch(() => {
+      /* 自動播放被擋或格式錯誤：error 事件會處理 */
+    });
+    saveRadio();
+    updateMediaSession(song);
+    renderPlayer();
+    highlightPlayingRow();
+  }
+  function togglePlay() {
+    const audio = ensureAudio();
+    if (!audio.src) {
+      const first = (R.currentId && songById(R.currentId) && R.currentId) || neighbor(1);
+      if (first) playSong(first);
+      else flash(R.source === 'fav' ? '還沒有收藏的歌' : '沒有可播放的歌曲');
+      return;
+    }
+    if (audio.paused) audio.play().catch(() => {});
+    else audio.pause();
+  }
+  function playNext() {
+    const next = neighbor(1) || (R.repeat === 'off' ? '' : R.order[0]);
+    if (next) playSong(next);
+  }
+  function playPrev() {
+    const audio = R.audio;
+    // 播超過 3 秒按上一首 = 回到開頭（一般播放器慣例）
+    if (audio && audio.currentTime > 3) {
+      audio.currentTime = 0;
+      return;
+    }
+    const prev = R.shuffle ? R.history.pop() : neighbor(-1);
+    if (prev) playSong(prev);
+  }
+  function updateMediaSession(song) {
+    const ms = navigator.mediaSession;
+    if (!ms) return;
+    try {
+      ms.metadata = new MediaMetadata({
+        title: songTitle(song),
+        artist: 'ACE Music',
+        album: R.source === 'fav' ? '收藏' : '我的歌曲',
+        artwork: song.local_cover ? [{ src: new URL(song.local_cover, location.origin).href, sizes: '512x512' }] : [],
+      });
+      ms.setActionHandler('play', () => togglePlay());
+      ms.setActionHandler('pause', () => R.audio && R.audio.pause());
+      ms.setActionHandler('nexttrack', () => playNext());
+      ms.setActionHandler('previoustrack', () => playPrev());
+      ms.setActionHandler('seekto', (d) => {
+        if (R.audio && Number.isFinite(d.seekTime)) R.audio.currentTime = d.seekTime;
+      });
+    } catch (_) {
+      /* 舊瀏覽器 */
+    }
+  }
+
+  function buildPlayer() {
+    const btn = (act, name, title) => {
+      const b = el('button', { class: 'pbtn', type: 'button', 'data-radio': act, title, 'aria-label': title });
+      b.append(icon(name));
+      return b;
+    };
+    const cover = el('img', { class: 'pcover', alt: '' });
+    const title = el('div', { class: 'ptitle', 'data-radio-title': '', text: '電臺：選一首歌開始，或按播放' });
+    const time = el('div', { class: 'ptime', 'data-radio-time': '', text: '0:00 / 0:00' });
+    const seek = el('input', { class: 'pseek', type: 'range', min: '0', max: '1000', value: '0', step: '1', 'data-radio-seek': '', 'aria-label': '播放進度' });
+    const prev = btn('prev', 'prev', '上一首');
+    const play = btn('play', 'play', '播放');
+    play.classList.add('main');
+    const next = btn('next', 'next', '下一首');
+    const shuffle = btn('shuffle', 'shuffle', '隨機');
+    const repeat = btn('repeat', 'repeat', '循環');
+    const fav = btn('fav', 'heart', '收藏目前歌曲');
+    const source = el('select', { class: 'psource', 'data-radio-source': '', title: '播放來源' }, [
+      el('option', { value: 'all', text: '全部歌曲' }),
+      el('option', { value: 'fav', text: '只聽收藏' }),
+    ]);
+    const vol = el('input', { class: 'pvol', type: 'range', min: '0', max: '100', step: '1', 'data-radio-volume': '', 'aria-label': '音量' });
+    const volIcon = el('span', { class: 'pvolicon' });
+    volIcon.append(icon('volume'));
+
+    play.addEventListener('click', () => togglePlay());
+    prev.addEventListener('click', () => playPrev());
+    next.addEventListener('click', () => playNext());
+    shuffle.addEventListener('click', () => {
+      R.shuffle = !R.shuffle;
+      rebuildOrder();
+      saveRadio();
+      renderPlayer();
+    });
+    repeat.addEventListener('click', () => {
+      R.repeat = R.repeat === 'all' ? 'one' : R.repeat === 'one' ? 'off' : 'all';
+      saveRadio();
+      renderPlayer();
+    });
+    fav.addEventListener('click', () => toggleFavorite(R.currentId));
+    source.addEventListener('change', () => {
+      R.source = source.value;
+      R.order = [];
+      saveRadio();
+      renderPlayer();
+    });
+    vol.addEventListener('input', () => {
+      R.volume = clamp(Number(vol.value) / 100, 0, 1);
+      if (R.audio) R.audio.volume = R.volume;
+    });
+    vol.addEventListener('change', () => saveRadio());
+    let seeking = false;
+    seek.addEventListener('input', () => {
+      seeking = true;
+      const a = R.audio;
+      if (a && Number.isFinite(a.duration)) time.textContent = `${fmtTime((Number(seek.value) / 1000) * a.duration)} / ${fmtTime(a.duration)}`;
+    });
+    seek.addEventListener('change', () => {
+      const a = R.audio;
+      if (a && Number.isFinite(a.duration)) a.currentTime = (Number(seek.value) / 1000) * a.duration;
+      seeking = false;
+    });
+    R.isSeeking = () => seeking;
+
+    const info = el('div', { class: 'pinfo' }, [title, el('div', { class: 'pline' }, [seek, time])]);
+    const controls = el('div', { class: 'pctrl' }, [shuffle, prev, play, next, repeat, fav]);
+    const extras = el('div', { class: 'pextra' }, [source, volIcon, vol]);
+    const bar = el('div', { class: 'player', 'data-radio-player': '' }, [cover, info, controls, extras]);
+    Object.assign(S.els, { player: bar, pCover: cover, pTitle: title, pTime: time, pSeek: seek, pPlay: play, pShuffle: shuffle, pRepeat: repeat, pFav: fav, pSource: source, pVol: vol });
+    return bar;
+  }
+
+  function paintProgress() {
+    const a = R.audio;
+    if (!a || !S.els.pTime) return;
+    const dur = Number.isFinite(a.duration) ? a.duration : 0;
+    if (!(R.isSeeking && R.isSeeking())) {
+      S.els.pTime.textContent = `${fmtTime(a.currentTime)} / ${fmtTime(dur)}`;
+      S.els.pSeek.value = dur ? String(Math.round((a.currentTime / dur) * 1000)) : '0';
+    }
+  }
+  function renderPlayer() {
+    if (!S.els.player) return;
+    const song = songById(R.currentId);
+    setIcon(S.els.pPlay, R.playing ? 'pause' : 'play');
+    S.els.pPlay.title = R.playing ? '暫停' : '播放';
+    S.els.pPlay.setAttribute('aria-label', S.els.pPlay.title);
+    S.els.pShuffle.classList.toggle('on', R.shuffle);
+    S.els.pShuffle.setAttribute('aria-pressed', String(R.shuffle));
+    S.els.pRepeat.classList.toggle('on', R.repeat !== 'off');
+    S.els.pRepeat.dataset.mode = R.repeat;
+    S.els.pRepeat.title = R.repeat === 'one' ? '單曲循環' : R.repeat === 'all' ? '清單循環' : '不循環';
+    S.els.pFav.disabled = !song;
+    paintFav(S.els.pFav, R.currentId);
+    S.els.pSource.value = R.source;
+    S.els.pVol.value = String(Math.round(R.volume * 100));
+    S.els.pTitle.textContent = song ? songTitle(song) : '電臺：選一首歌開始，或按播放';
+    S.els.pTitle.title = S.els.pTitle.textContent;
+    if (song && song.local_cover) {
+      S.els.pCover.src = song.local_cover;
+      S.els.pCover.style.visibility = '';
+    } else {
+      S.els.pCover.removeAttribute('src');
+      S.els.pCover.style.visibility = 'hidden';
+    }
+    S.els.player.classList.toggle('playing', R.playing);
+    paintProgress();
+    updateFab();
+  }
+  function highlightPlayingRow() {
+    const box = S.els.songsBox;
+    if (!box) return;
+    for (const row of box.querySelectorAll('.song.nowplaying')) row.classList.remove('nowplaying');
+    if (R.currentId) {
+      const row = box.querySelector(`[data-song-id="${cssEsc(R.currentId)}"]`);
+      if (row) row.classList.add('nowplaying');
+    }
   }
 
   /* ------------------------------------------------------------------ *
@@ -1338,7 +1748,12 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       .join('、');
     if (!status.known) return { text: '狀態未知', cls: 'dim', title: '本機整理工具未安裝，無法檢查已下載檔案' };
     if (status.allDone) return { text: '已下載', cls: 'ok', title: '已下載：' + detail };
-    if (status.any) return { text: `部分 ${status.have}/${status.total}`, cls: 'warn', title: '已下載：' + detail };
+    if (status.any) {
+      // 直接說缺什麼（「部分 2/3」看不出缺哪項）
+      const lack = status.detail.filter((item) => !item.done && !item.na).map((item) => item.label);
+      const brief = lack.length && lack.length <= 3 ? ' · 缺 ' + lack.join('／') : '';
+      return { text: `部分 ${status.have}/${status.total}${brief}`, cls: 'warn', title: '已下載：' + detail };
+    }
     return { text: '未下載', cls: 'dim', title: '尚未下載：' + detail };
   }
 
@@ -1617,6 +2032,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     if (changed) renderSongs();
     else updateCounts();
     exportPageSongs(songs, sig);
+    if (changed) R.order = [];
     checkAutoNew();
   }
 
@@ -1748,15 +2164,17 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       updateCounts();
       return;
     }
-    const list = S.onlyUndownloaded ? S.songs.filter((song) => !songDownloadStatus(song).allDone) : S.songs;
+    let list = S.onlyUndownloaded ? S.songs.filter((song) => !songDownloadStatus(song).allDone) : S.songs;
+    if (S.onlyFavorites) list = list.filter((song) => isFav(song.task_id));
     if (!list.length) {
-      box.append(el('div', { class: 'hint', text: S.onlyUndownloaded ? '太棒了，所有歌曲都下載完成了（或有檔案無法辨識）。' : '找不到已完成的歌曲。' }));
+      box.append(el('div', { class: 'hint', text: S.onlyFavorites ? '還沒有收藏的歌：點歌曲右側的愛心。' : S.onlyUndownloaded ? '太棒了，所有歌曲都下載完成了（或有檔案無法辨識）。' : '找不到已完成的歌曲。' }));
       updateCounts();
       return;
     }
     const frag = document.createDocumentFragment();
     for (const song of list) frag.append(songRow(song));
     box.append(frag);
+    highlightPlayingRow();
     updateCounts();
   }
 
@@ -1790,7 +2208,16 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       if (S.running) return flash('已有下載進行中');
       startJob([song]);
     });
-    return el('div', { class: 'song', 'data-song-id': song.task_id }, [checkbox, cover, body, perSong]);
+    const playBtn = el('button', { class: 'rowicon', type: 'button', 'data-play': '', title: '播放', 'aria-label': '播放' });
+    playBtn.append(icon('play'));
+    playBtn.disabled = !song.local_audio;
+    playBtn.addEventListener('click', () => (R.currentId === song.task_id && R.playing ? R.audio.pause() : R.currentId === song.task_id && R.audio && R.audio.src ? togglePlay() : playSong(song.task_id)));
+    cover.addEventListener('click', () => song.local_audio && playSong(song.task_id));
+    const favBtn = el('button', { class: 'rowicon', type: 'button', 'data-fav': '', 'aria-label': '收藏' });
+    favBtn.append(icon('heart'));
+    paintFav(favBtn, song.task_id);
+    favBtn.addEventListener('click', () => toggleFavorite(song.task_id));
+    return el('div', { class: 'song', 'data-song-id': song.task_id }, [checkbox, cover, body, playBtn, favBtn, perSong]);
   }
 
   function updateCounts() {
@@ -1847,6 +2274,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       chip('共', p.total, true),
     );
     if (p.activePrep > 0) S.els.stats.append(chip('生成中', p.activePrep, true));
+    if (p.rateLimited > 0) S.els.stats.append(chip('限流略過', p.rateLimited, true));
     if (elapsedSec > 0) S.els.stats.append(chip('時間', elapsedSec + 's', false));
     const phase = PHASE_TEXT[p.phase] || '';
     let currentText = p.current;
@@ -1996,6 +2424,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       }
       // 站點限流：等一分鐘再試，最多三次；仍失敗才中止整個 job
       if (response.status === 429 || code === 'rate_limited' || /too often|too many/i.test(detail)) {
+        // 限流：這條「站點生成」佇列等 60 秒再試（最多 2 次）；其他檔案不受影響。仍限流才放棄剩下的生成
         if (attempt < 2) {
           flash(`站點限流，等待 60 秒後重試（${kind}）`);
           await sleep(TEST_MODE ? 200 : 60000);
@@ -2078,8 +2507,24 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     return URL.createObjectURL(blob);
   }
 
-  async function startJob(songs, jobOpts = {}) {
-    if (S.running) {
+  /** 站點模型資訊（/api/status）：哪些模型只有 lossy 音檔（沒有 WAV）。每頁載入問一次，失敗用 planner 後備規則 */
+  let siteModelsPromise = null;
+  function ensureSiteModels() {
+    if (!siteModelsPromise) {
+      siteModelsPromise = fetch('/api/status', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          const models = data && Array.isArray(data.models) ? data.models : [];
+          if (models.length) S.lossyModels = new Set(models.filter((m) => m && m.lossy).map((m) => m.id));
+        })
+        .catch(() => {
+          siteModelsPromise = null; // 下次再試
+        });
+    }
+    return siteModelsPromise;
+  }
+
+  async function startJob(songs, jobOpts = {}) {    if (S.running) {
       flash('已有下載進行中');
       return;
     }
@@ -2089,7 +2534,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       flash('請至少勾選一種檔案類型');
       return;
     }
-    await loadDownloadState();
+    await Promise.all([loadDownloadState(), ensureSiteModels()]);
     const plan = P.buildDownloadPlan({
       songs,
       options: {
@@ -2098,6 +2543,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
         typeFolders: S.options.typeFolders,
         force: S.options.force,
         origin: location.origin,
+        lossyModels: S.lossyModels,
       },
       state: { folderByTask: S.folderByTask, ownerByFolder: S.ownerByFolder, history: S.history, unavailable: S.unavailable },
       origin: location.origin,
@@ -2149,11 +2595,18 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
         entries.push({ task, file, prepDone: file.source === 'url', url: '', prepError: null, preparing: false });
       }
     }
-    entries.sort((a, b) => (a.file.source === 'url' ? 0 : 1) - (b.file.source === 'url' ? 0 : 1));
+    // 順序：直接連結（分軌／封面／MP3）→ 需要問網址的檔案（WAV／MP3）→ 站點生成（MIDI／MusicXML）最後。
+    // 生成很慢又會被限流，放最後才不會讓 WAV 等在它後面。
+    const rank = (entry) => (entry.file.source === 'url' ? 0 : entry.file.source === 'api' ? 2 : 1);
+    entries.sort((a, b) => rank(a) - rank(b));
 
     const concurrency = clamp(Math.round(Number(S.options.concurrency) || 4), 1, 6);
-    const apiEntries = entries.filter((entry) => entry.file.source !== 'url');
-    const apiConcurrency = clamp(Math.min(2, apiEntries.length), 1, 2);
+    // 兩條獨立的準備佇列：檔案網址（快，3 並行）與站點生成（慢、限流，2 並行），互不阻塞
+    const fileEntries = entries.filter((entry) => entry.file.source === 'file');
+    const genEntries = entries.filter((entry) => entry.file.source === 'api');
+    const apiEntries = [...fileEntries, ...genEntries];
+    let generationHalted = false; // 站點限流後：剩下的 MIDI／MusicXML 不再請求（記為略過），其他檔案照常下載
+    let rateLimited = 0;
 
     S.running = true;
     S.cancelled = false;
@@ -2181,15 +2634,21 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
 
     const countActivePrep = () => apiEntries.filter((entry) => entry.preparing && !entry.prepDone).length;
 
-    // 生成階段：背景向站點要 MIDI / MusicXML 的檔案 URL（最多 3 個並行）
+    // 準備階段：背景取得檔案 URL（WAV／MP3）與站點生成（MIDI／MusicXML），兩條佇列分開跑
     const prepPromise = (async () => {
+      const runQueue = async (queue, width) => {
       let prepCursor = 0;
       const prepWorker = async () => {
         while (true) {
           if (S.cancelled || !S.running) return;
           const index = prepCursor++;
-          if (index >= apiEntries.length) return;
-          const entry = apiEntries[index];
+          if (index >= queue.length) return;
+          const entry = queue[index];
+          if (entry.file.source === 'api' && generationHalted) {
+            entry.rateLimited = true;
+            entry.prepDone = true;
+            continue;
+          }
           entry.preparing = true;
           S.progress.activePrep = countActivePrep();
           renderProgressSoon();
@@ -2214,10 +2673,12 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
               return;
             }
             if (err && err.code === 'RATE_LIMIT') {
-              if (!S.cancelled) {
-                S.cancelled = true;
-                flash('站點限流，請等一分鐘後再試');
+              // 只停「站點生成」：這個與剩下的 MIDI／MusicXML 記為略過，WAV／MP3／分軌／封面繼續下載
+              if (!generationHalted) {
+                generationHalted = true;
+                flash('站點限流：MIDI／MusicXML 先略過，其他檔案繼續下載；稍後再按一次下載即可補齊');
               }
+              entry.rateLimited = true;
               return;
             }
             if (err && (err.code === 'WAV_UNSUPPORTED' || err.code === 'NOT_AVAILABLE')) {
@@ -2252,7 +2713,9 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
           }
         }
       };
-      await Promise.all(Array.from({ length: apiConcurrency }, () => prepWorker()));
+      await Promise.all(Array.from({ length: Math.max(1, Math.min(width, queue.length)) }, () => prepWorker()));
+      };
+      await Promise.all([runQueue(fileEntries, 3), runQueue(genEntries, 2)]);
     })();
     prepPromise.catch(() => {});
 
@@ -2275,6 +2738,12 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
             while (!entry.prepDone && !S.cancelled) await sleep(80);
             if (S.cancelled) return;
             if (entry.unsupported) continue;
+            if (entry.rateLimited) {
+              rateLimited += 1;
+              S.progress.skipped = (Number(S.progress.skipped) || 0) + 1;
+              S.progress.rateLimited = rateLimited;
+              continue;
+            }
             if (entry.prepError) throw { counted: true, error: entry.prepError };
             url = entry.url;
           }
@@ -2372,10 +2841,12 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
         failed,
         skipped,
         cancelled: !!S.cancelled,
+        rateLimited,
         bytes,
       });
       if (S.cancelled) flash(`已停止（已完成的檔案保留，花了 ${secs} 秒）`);
       else if (failed) flash(`完成 ${done} 個，失敗 ${failed} 個（${secs} 秒），詳見失敗清單`);
+      else if (rateLimited) flash(`完成 ${done} 個；MIDI／MusicXML 因站點限流略過 ${rateLimited} 個，稍後再按一次下載即可補齊（已下載的會自動跳過）`);
       else flash(`完成：下載 ${done} 個${skipped ? `，跳過 ${skipped} 個已存在` : ''}（${secs} 秒）`);
       if (bytes > 0) {
         S.els.footHint.textContent = `本次下載約 ${(bytes / 1048576).toFixed(1)} MB、耗時 ${secs} 秒。檔案在「下載」資料夾的「${S.rootFolder}」內。`;
@@ -2406,7 +2877,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     .then(() => {
       syncOptionsToUi();
       startAutoRefresh();
-      return Promise.all([loadDownloadState(), loadAutoState()]);
+      return Promise.all([loadDownloadState(), loadAutoState(), loadRadio()]);
     })
     .then(() => refreshHostStatus())
     .then(() => {
