@@ -1,3 +1,5 @@
+> 此隔離分支新增 HuaiDJ 音樂中樞：受控生成與回收、公開文字研究、版本化詞典、人類回饋與人工演出準備。先看 [工作流程](agent/WORKFLOW.md) 與 [完整 API](agent/CREATE-API.md)；預設不啟用供應商費用或自動播放。
+
 # ACE Music 批量下載器
 
 在 [acemusic.ai](https://acemusic.ai/create/) 的 Create 歌曲庫頁面加入一個面板，把一首或全部歌曲的**分軌（stems）、MIDI、MusicXML、MP3、WAV、封面**一次下載完，自動改名、分類；另外提供 CLI／MCP／常駐 Hub 給 agent 使用。
@@ -17,7 +19,8 @@
 - **即時同步＋新歌自動下載**：訂閱站點推送，新歌完成約 50 ms 出現；可選「新歌自動下載」（MIDI／MusicXML 需另勾，因可能扣 credit）
 - **老歌新增分軌**：已開啟自動分軌下載時，偵測既有歌曲新增或更新的就緒分軌並下載；不主動購買分軌。MIDI／MusicXML 僅用於該歌已主動要求分軌且已授權樂譜生成的情況。
 - **獨立播放器**：可拖動及調整大小的視窗；本機曲庫、搜尋、下載狀態、佇列、播放清單、收藏、歷史與系統媒體鍵。[播放器說明](player/README.md)
-- **Agent 中樞**：CLI、MCP（含 `ace_locate`、`ace_download_index`、`ace_player`）、常駐 Agent Hub（127.0.0.1:8788）。
+- **Agent 中樞**：CLI、MCP（含 `ace_locate` 找最新歌曲真實路徑、`ace_download_index`、`ace_player`、`ace_wait_new_song` 等新歌、`ace_generate` 預覽及明確提交 v1.1）、常駐 Agent Hub（127.0.0.1:8788，既有查詢熱路徑 <2 ms）
+- **HuaiDJ 創作中樞**：音樂意圖、版本化詞典、提示詞編譯、有限授權生成、產物回收與人評、DeepSeek 研究候選（`music_*`、`ace_create_*` 工具；預設不提交付費生成）
 - 完整說明：[docs/GUIDE.md](docs/GUIDE.md)｜開發規範：[docs/CONVENTIONS.md](docs/CONVENTIONS.md)｜設計系統：[docs/DESIGN-SYSTEM.md](docs/DESIGN-SYSTEM.md)
 - **可選本機工具**：native messaging host 負責改名／搬檔／叫用 CLI（不裝也能下載）
 
@@ -58,6 +61,8 @@ node agent\cli.mjs tidy-all
 ```
 
 MCP（stdio）：`node <repo>\agent\mcp.mjs`，工具包含 `ace_overview`、`ace_list_songs`、`ace_download`、`ace_job_status`、`ace_organize`、`ace_warm`、`ace_hub_status` 等。
+
+本機直接生成 v1.1：`ace_generate` 預設只預覽；實際提交需明確額度上限、防重送 key 與支援生成的 Hub。`ace_generation_status` 查詢音訊進度與實際模型。沿用已同步的本機登入，不使用第三方代理；參數與驗證邊界見 [直接生成說明](agent/DIRECT-GENERATION.md)。
 
 常駐 Hub（多 agent 共用、單一寫入者、job 佇列、SSE）：
 
@@ -100,4 +105,10 @@ npm run pack                 # 產生 dist/ store 與完整包
 [MIT](LICENSE)。本專案與 ACE Music／ACE Studio 無隸屬關係，為非官方工具；使用時請遵守站點服務條款。
 
 
+
+# 此分支：HuaiDJ 音樂 Agent
+
+復用既有 Hub 的自然語言工作台與完整 Create API 參數契約，三模型／Idea／Custom／Step／HD 控件均有條件驗證。預設只本機準備與唯讀報價，真實生成需獨立有限授權，未作音樂或演出驗收。
+
+[開啟工作台與上手](agent/MUSIC-AGENT.md) · [API 全參數與門禁](agent/CREATE-API.md)。沒有修改宿主 MCP 或部署原有服務。
 

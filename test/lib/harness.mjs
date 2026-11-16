@@ -69,6 +69,9 @@ export function buildTestExtension({ tmpRoot, port, extraOrigins = [] }) {
   // 隔離背景副本也禁止 native 實寫；Chrome 下載 API 仍是真實流程。
   const testBackground = path.join(extDir, 'src', 'background.js');
   fs.writeFileSync(testBackground, "chrome.runtime.connectNative = () => { throw new Error('Native host disabled in isolated e2e'); };\n" + fs.readFileSync(testBackground, 'utf8'));
+  // A fresh browser profile still discovers system native-host registration.
+  // Deny that permission in this test copy too, so nothing can reach the user's real host.
+  manifest.permissions = (manifest.permissions || []).filter(permission => permission !== 'nativeMessaging');
   // 測試隔離：content.js 看到 __ACEDL_TEST_MODE__ 就不採用真機 host 的 fs/agent-state 跳過邏輯
   fs.writeFileSync(path.join(extDir, 'src', 'testmode.js'), `
 globalThis.__ACEDL_TEST_MODE__ = true;
@@ -226,6 +229,7 @@ export async function launchExtensionContext({ profileDir, extDir, downloadsDir 
     '--no-default-browser-check',
     '--disable-features=Translate',
     '--disable-search-engine-choice-screen',
+    '--mute-audio',
   ];
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: false,

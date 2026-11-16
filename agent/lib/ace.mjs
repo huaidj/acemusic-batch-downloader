@@ -12,6 +12,7 @@ import { invalidateLocalIndex } from './local-index-service.mjs';
 import { sameFileContent, moveFileSafely, recordRelocations } from './file-ops.mjs';
 export { localDownloadIndex } from './local-index-service.mjs';
 export { startPlayer } from './player-process.mjs';
+import { assertDirectGenerationPermission } from './provider-policy.mjs';
 
 const { N, P, PR } = loadShared();
 const SNAPSHOT_NAME = 'library-snapshot';
@@ -73,6 +74,9 @@ export function absolutize(cfg, url) {
 }
 
 async function aceFetch(cfg, session, url, options = {}) {
+    if (cfg.controlledRun && !['GET', 'HEAD'].includes(String(options.method || 'GET').toUpperCase())) {
+        throw Object.assign(new Error('受控中樞未批准舊轉譜或其他可能扣額度的站點寫入；保留下載預覽，請另行核對費用與授權。'), { code: 'LEGACY_PAID_OPERATION_NOT_AUTHORIZED' });
+    }
     let target = new URL(absolutize(cfg, url));
     const origin = new URL(cfg.baseUrl).origin;
     let method = String(options.method || 'GET').toUpperCase();
@@ -93,6 +97,260 @@ async function aceFetch(cfg, session, url, options = {}) {
         if (response.status === 303 || ([301, 302].includes(response.status) && method === 'POST')) { method = 'GET'; body = undefined; }
         target = next;
     }
+}
+
+/* ------------------------------------------------------------------ *
+ * Direct v1.1 generation. Cookie stays in the local session store.
+ * Charged submissions are serialized and durably deduplicated by Hub.
+ * ------------------------------------------------------------------ */
+const GENERATION_MODEL = 'acemusic-v1.1';
+const GENERATION_FIELDS = new Set(['mode', 'model', 'prompt', 'style', 'lyrics', 'title', 'style_influence', 'dry_run', 'confirm_credit_spend', 'max_credits', 'idempotency_key', 'request_created_at']);
+const GENERATION_LIMITS = { prompt: 2000, style: 1000, lyrics: 5000, title: 80 };
+
+function generationError(code, message, extra = {}) {
+    return Object.assign(new Error(message), { code, ...extra });
+}
+
+function generationBase(cfg) {
+    let base;
+    try { base = new URL(cfg.baseUrl); } catch { throw generationError('GENERATION_BASE_URL', '生成服務網址無效。'); }
+    const local = base.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname);
+    if ((!local && base.origin !== 'https://acemusic.ai') || base.username || base.password || base.pathname !== '/' || base.search || base.hash) {
+        throw generationError('GENERATION_BASE_URL', '生成僅支援 https://acemusic.ai；測試可使用本機回環網址。');
+    }
+    return base.origin;
+}
+
+function generationText(value, name, limit) {
+    if (value === undefined) return '';
+    if (typeof value !== 'string') throw generationError('GENERATION_INPUT', `${name} 必須是文字。`);
+    const text = value.trim();
+    if ([...text].length > limit) throw generationError('GENERATION_INPUT', `${name} 超過 ${limit} 字元，請縮短後再試。`);
+    return text;
+}
+
+function normalizeGeneration(opts) {
+    if (!opts || typeof opts !== 'object' || Array.isArray(opts)) throw generationError('GENERATION_INPUT', '生成參數必須是物件。');
+    const unknown = Object.keys(opts).filter((key) => !GENERATION_FIELDS.has(key));
+    if (unknown.length) throw generationError('GENERATION_INPUT', '含有不支援的生成參數；目前僅支援 v1.1 的文字與歌詞生成。');
+    if (opts.model !== undefined && opts.model !== GENERATION_MODEL) throw generationError('GENERATION_MODEL', '此工具僅支援 ACE Music v1.1 Preview。');
+    for (const key of ['dry_run', 'confirm_credit_spend']) {
+        if (opts[key] !== undefined && typeof opts[key] !== 'boolean') throw generationError('GENERATION_INPUT', `${key} 必須是布林值。`);
+    }
+    const prompt = generationText(opts.prompt, 'prompt', GENERATION_LIMITS.prompt);
+    const style = generationText(opts.style, 'style', GENERATION_LIMITS.style);
+    const lyrics = generationText(opts.lyrics, 'lyrics', GENERATION_LIMITS.lyrics);
+    const title = generationText(opts.title, 'title', GENERATION_LIMITS.title);
+    const mode = opts.mode === undefined ? (prompt ? 'idea' : 'custom') : opts.mode;
+    if (!['idea', 'custom'].includes(mode)) throw generationError('GENERATION_INPUT', 'mode 必須是 idea 或 custom。');
+    if (mode === 'idea' && (!prompt || style || lyrics || title || opts.style_influence !== undefined)) {
+        throw generationError('GENERATION_INPUT', 'Idea 請只填 prompt；Style、Lyrics 與 Title 請使用 Custom。');
+    }
+    if (mode === 'custom' && (prompt || !style)) throw generationError('GENERATION_INPUT', 'Custom 必須填寫 style，並將 prompt 留空。');
+    if (opts.style_influence !== undefined && (typeof opts.style_influence !== 'number' || !Number.isFinite(opts.style_influence) || opts.style_influence < 0 || opts.style_influence > 100)) {
+        throw generationError('GENERATION_INPUT', 'style_influence 必須介於 0 至 100。');
+    }
+    if (opts.max_credits !== undefined && (typeof opts.max_credits !== 'number' || !Number.isFinite(opts.max_credits) || opts.max_credits < 0)) {
+        throw generationError('GENERATION_INPUT', 'max_credits 必須是非負數。');
+    }
+    if (opts.idempotency_key !== undefined && (typeof opts.idempotency_key !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(opts.idempotency_key))) {
+        throw generationError('GENERATION_INPUT', 'idempotency_key 請使用 1 至 128 個英數字、點、底線、冒號或連字號。');
+    }
+    if (opts.request_created_at !== undefined && (!Number.isSafeInteger(opts.request_created_at) || opts.request_created_at <= 0)) {
+        throw generationError('GENERATION_INPUT', 'request_created_at 必須是有效的毫秒時間戳。');
+    }
+    const dryRun = opts.dry_run !== false;
+    if (!dryRun && (opts.confirm_credit_spend !== true || opts.max_credits === undefined || !opts.idempotency_key)) {
+        throw generationError('GENERATION_CREDIT_CONFIRMATION', '實際生成需 confirm_credit_spend=true、明確的 max_credits 與 idempotency_key；預覽不扣額度。');
+    }
+    const body = mode === 'idea'
+        ? { prompt, references: [], model: GENERATION_MODEL, media: [] }
+        : { mode: 'cover', model: GENERATION_MODEL, references: [], style, lyrics, lyricsMode: 'own', style_influence: opts.style_influence ?? 80, ...(title ? { title } : {}) };
+    return { mode, dryRun, body, endpoint: mode === 'idea' ? '/api/idea' : '/api/custom', requestCreatedAt: opts.request_created_at };
+}
+
+/** Pure canonical request for Hub receipt lookup, including when session is offline. */
+export function prepareGenerationRequest(opts = {}) {
+    const normalized = normalizeGeneration(opts);
+    return { endpoint: normalized.endpoint, body: normalized.body };
+}
+
+async function generationFetch(cfg, session, route, options = {}) {
+    const base = generationBase(cfg);
+    try {
+        return await fetch(base + route, {
+            ...options,
+            headers: {
+                'User-Agent': session.ua || cfg.ua,
+                Accept: 'application/json',
+                Origin: base,
+                Referer: base + '/create/',
+                Cookie: session.cookie,
+                ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+            },
+            redirect: 'error',
+            signal: AbortSignal.timeout(45000),
+        });
+    } catch {
+        const submitting = options.method === 'POST';
+        throw generationError(
+            submitting ? 'GENERATION_SUBMISSION_UNKNOWN' : 'GENERATION_NETWORK',
+            submitting ? '生成請求已送出但未取得明確回應；請用原 idempotency_key 查詢，勿重新提交。' : '無法讀取 ACE Music，請稍後檢查連線與登入狀態。',
+            { submission_unknown: submitting },
+        );
+    }
+}
+
+async function generationJson(response, { submitting = false } = {}) {
+    if (!response.ok) {
+        const status = response.status;
+        const uncertain = submitting && (status === 408 || status >= 500);
+        const code = status === 401 ? 'GENERATION_AUTH' : status === 402 ? 'GENERATION_CREDITS' : status === 429 ? 'GENERATION_RATE_LIMIT' : uncertain ? 'GENERATION_SUBMISSION_UNKNOWN' : 'GENERATION_HTTP';
+        throw generationError(code, uncertain ? `生成請求回應 HTTP ${status}，站點是否已建立任務尚未確認；請核對原請求，勿重新提交。` : status === 401 ? '登入已過期，請在 ACE Music 面板重新同步登入狀態。' : `ACE Music 回應 HTTP ${status}；請檢查登入、方案與額度後再處理。`, { http_status: status, submission_unknown: uncertain });
+    }
+    let data;
+    try { data = await response.json(); } catch {
+        throw generationError(submitting ? 'GENERATION_SUBMISSION_UNKNOWN' : 'GENERATION_RESPONSE', submitting ? '生成回應格式無法辨識；請查詢原請求，勿重新提交。' : 'ACE Music 回應格式無法辨識。', { submission_unknown: submitting });
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data) || data.ok === false || data.error) {
+        throw generationError(submitting ? 'GENERATION_SUBMISSION_UNKNOWN' : 'GENERATION_RESPONSE', submitting ? '生成回應未確認成功；請查詢原請求，勿重新提交。' : 'ACE Music 未回傳有效資料。', { submission_unknown: submitting });
+    }
+    return data;
+}
+
+function safeGenerationUrl(value, cfg) {
+    if (typeof value !== 'string' || !value) return undefined;
+    try {
+        const base = generationBase(cfg);
+        const url = new URL(value, base);
+        if (url.origin !== base || url.username || url.password || url.search || url.hash || !url.pathname.startsWith('/data/')) return undefined;
+        return url.pathname;
+    } catch { return undefined; }
+}
+
+function generationSong(song, cfg) {
+    if (!song || typeof song !== 'object' || typeof song.task_id !== 'string') return null;
+    const out = { task_id: song.task_id };
+    for (const key of ['status', 'model', 'capability']) if (typeof song[key] === 'string') out[key] = song[key];
+    if (typeof song.created_at === 'number' && Number.isFinite(song.created_at)) out.created_at = song.created_at;
+    if (typeof song.meta?.title === 'string') out.title = song.meta.title;
+    if (typeof song.result?.duration_sec === 'number' && Number.isFinite(song.result.duration_sec)) out.duration_sec = song.result.duration_sec;
+    for (const key of ['local_audio', 'local_play', 'local_cover']) {
+        const value = safeGenerationUrl(song[key], cfg);
+        if (value) out[key] = value;
+    }
+    return out;
+}
+
+function generationModelInfo(taskIds, songs) {
+    const actualModels = [...new Set(songs.map((song) => song.model).filter((model) => typeof model === 'string' && model.length > 0))];
+    const modelsById = new Map();
+    for (const song of songs) {
+        if (typeof song.model !== 'string' || !song.model) continue;
+        const models = modelsById.get(song.task_id) || new Set();
+        models.add(song.model);
+        modelsById.set(song.task_id, models);
+    }
+    const mismatch = taskIds.filter((id) => [...(modelsById.get(id) || [])].some((model) => model !== GENERATION_MODEL));
+    const unknown = taskIds.filter((id) => !modelsById.has(id));
+    return {
+        requested_model: GENERATION_MODEL,
+        model: actualModels.length === 1 && unknown.length === 0 ? actualModels[0] : null,
+        actual_models: actualModels,
+        model_mismatch_task_ids: mismatch,
+        model_unknown_task_ids: unknown,
+        model_verified: taskIds.length > 0 && mismatch.length === 0 && unknown.length === 0,
+    };
+}
+
+/** Preview reads live cost/model/limits; actual submission is exactly one POST. */
+export async function generateSong(cfg = config(), opts = {}) {
+    const normalized = normalizeGeneration(opts);
+    assertDirectGenerationPermission(cfg, opts);
+    generationBase(cfg);
+    const session = await loadSession(cfg);
+    const status = await generationJson(await generationFetch(cfg, session, '/api/status'));
+    const model = Array.isArray(status.models) && status.models.find((entry) => (typeof entry === 'string' ? entry : entry?.id) === GENERATION_MODEL);
+    if (!model) throw generationError('GENERATION_MODEL_UNAVAILABLE', '目前帳戶未提供 ACE Music v1.1 Preview，已停止生成。');
+    const cost = status.costs?.song;
+    const credits = status.user?.credits;
+    if (typeof cost !== 'number' || !Number.isFinite(cost) || cost < 0) throw generationError('GENERATION_COST_UNKNOWN', '無法確認本次生成費用，已停止生成。');
+    if (typeof credits !== 'number' || !Number.isFinite(credits) || credits < 0) throw generationError('GENERATION_BALANCE_UNKNOWN', '無法確認可用 Credits，已停止生成。');
+    if (credits < cost) throw generationError('GENERATION_INSUFFICIENT_CREDITS', `本次需要 ${cost} Credits，可用 ${credits} Credits，已停止生成。`);
+    if (!normalized.dryRun && opts.max_credits < cost) throw generationError('GENERATION_CREDIT_LIMIT', `本次需要 ${cost} Credits，超過 max_credits=${opts.max_credits}，已停止生成。`);
+    for (const field of ['prompt', 'style', 'lyrics']) {
+        const liveLimit = model.limits?.[field];
+        if (Number.isInteger(liveLimit) && liveLimit > 0 && normalized.body[field] !== undefined) generationText(normalized.body[field], field, Math.min(liveLimit, GENERATION_LIMITS[field]));
+    }
+    const preview = {
+        ok: true,
+        dry_run: normalized.dryRun,
+        model: GENERATION_MODEL,
+        requested_model: GENERATION_MODEL,
+        mode: normalized.mode,
+        estimated_credits: cost,
+        credits_before: credits,
+        ...(typeof status.user?.plan === 'string' ? { plan: status.user.plan } : {}),
+        request_created_at: normalized.requestCreatedAt ?? Date.now(),
+        request: { endpoint: normalized.endpoint, body: normalized.body },
+    };
+    if (normalized.dryRun) return preview;
+    const body = { ...normalized.body, created_at: preview.request_created_at };
+    const data = await generationJson(await generationFetch(cfg, session, normalized.endpoint, { method: 'POST', body: JSON.stringify(body) }), { submitting: true });
+    const songs = [data.song, ...(Array.isArray(data.songs) ? data.songs : []), ...(Array.isArray(data.items) ? data.items : [])].map((song) => generationSong(song, cfg)).filter(Boolean);
+    const ids = [data.task_id, ...(Array.isArray(data.task_ids) ? data.task_ids : []), ...songs.map((song) => song.task_id)].filter((id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(id));
+    const taskIds = [...new Set(ids)];
+    const modelInfo = generationModelInfo(taskIds, songs);
+    return {
+        ok: true, dry_run: false, ...modelInfo, mode: normalized.mode,
+        estimated_credits: cost, credits_before: credits, created_at: preview.request_created_at,
+        task_ids: taskIds, songs,
+        submission_state: taskIds.length ? 'accepted' : 'unresolved',
+        ...(taskIds.length ? {} : { message: '請求已獲回應但未提供可辨識的任務 ID；請查閱歌庫及原請求，勿重送。' }),
+        ...(modelInfo.model_mismatch_task_ids.length ? { model_warning: '伺服器回傳的模型與要求的 v1.1 不同；已保留任務 ID，請查詢原任務，勿重送。' } : {}),
+    };
+}
+
+/** Read only the exact requested IDs; never starts transcription or downloads. */
+export async function generationStatus(cfg = config(), opts = {}) {
+    if (!opts || typeof opts !== 'object' || Array.isArray(opts) || Object.keys(opts).some((key) => key !== 'task_ids')) throw generationError('GENERATION_INPUT', '狀態查詢僅接受 task_ids。');
+    const ids = opts.task_ids;
+    if (!Array.isArray(ids) || ids.length < 1 || ids.length > 10 || ids.some((id) => typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(id))) {
+        throw generationError('GENERATION_INPUT', 'task_ids 必須包含 1 至 10 個有效任務 ID。');
+    }
+    const taskIds = [...new Set(ids)];
+    generationBase(cfg);
+    const session = await loadSession(cfg);
+    const data = await generationJson(await generationFetch(cfg, session, '/api/songs?ids=' + encodeURIComponent(taskIds.join(','))));
+    if (!Array.isArray(data.items)) throw generationError('GENERATION_RESPONSE', 'ACE Music 未提供歌曲狀態清單。');
+    const wanted = new Set(taskIds);
+    const songs = data.items.filter((song) => wanted.has(song?.task_id)).map((song) => generationSong(song, cfg)).filter(Boolean);
+    const found = new Set(songs.map((song) => song.task_id));
+    const statusesById = new Map();
+    for (const song of songs) {
+        if (typeof song.status !== 'string') continue;
+        const statuses = statusesById.get(song.task_id) || new Set();
+        statuses.add(song.status);
+        statusesById.set(song.task_id, statuses);
+    }
+    // Contradictory duplicate rows cannot establish a terminal result.
+    const conflicting = taskIds.filter((id) => (statusesById.get(id)?.size || 0) > 1);
+    const conflictingSet = new Set(conflicting);
+    const coherentSongs = songs.filter((song) => !conflictingSet.has(song.task_id));
+    const failed = [...new Set(coherentSongs.filter((song) => ['failed', 'interrupted', 'cancelled', 'canceled'].includes(song.status)).map((song) => song.task_id))];
+    const succeeded = [...new Set(coherentSongs.filter((song) => song.status === 'succeeded' && !!song.local_audio).map((song) => song.task_id))];
+    const terminal = new Set([...failed, ...succeeded]);
+    const modelInfo = generationModelInfo(taskIds, songs);
+    return {
+        ok: true, ...modelInfo, task_ids: taskIds, songs,
+        missing_task_ids: taskIds.filter((id) => !found.has(id)),
+        conflicting_task_ids: conflicting,
+        succeeded_task_ids: succeeded, failed_task_ids: failed,
+        pending_task_ids: taskIds.filter((id) => !terminal.has(id)),
+        complete: taskIds.every((id) => terminal.has(id)), failed: failed.length > 0,
+        audio_complete: taskIds.every((id) => succeeded.includes(id)),
+        v11_complete: modelInfo.model_verified && taskIds.every((id) => succeeded.includes(id)),
+    };
 }
 
 /* ------------------------------------------------------------------ *

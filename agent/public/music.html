@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HuaiDJ · 創作工作台</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 24'%3E%3Cpath d='M2 12h4l3-8 5 16 4-12 3 4h9' fill='none' stroke='%23dddddd' stroke-width='2'/%3E%3C/svg%3E"><link rel="stylesheet" href="/music/tokens.css"><link rel="stylesheet" href="/music/app.css"><script defer src="/music/app.js"></script></head>
+<body>
+<header><div class="brand"><svg viewBox="0 0 32 24" aria-hidden="true"><path d="M2 12h4l3-8 5 16 4-12 3 4h9"/></svg><strong>HuaiDJ</strong><span>創作工作台</span></div><span id="connection" class="status">正在連接本機中樞</span></header>
+<main>
+<nav aria-label="工作區"><a href="#create">創作</a><a href="#directions">方向</a><a href="#tasks">任務</a><a href="#library">候選庫</a><a href="#research">研究</a><a href="#performance">演出</a><a href="/music/api">完整 API</a></nav>
+<div class="title"><h1>把聲音方向寫清楚</h1><p>預覽、生成、試聽，再決定下一輪。</p></div>
+<div id="notice" role="status" aria-live="polite">正在讀取本機詞典與紀錄…</div>
+<div class="workspace">
+<section id="create" class="surface">
+<h2>創作方向</h2>
+<form id="intent-form">
+<label for="intent">想聽到什麼？</label><textarea id="intent" rows="4" maxlength="4000">重 sub 壓力、微搖擺、交錯打擊、克制變化、前後景深，無人聲</textarea>
+<p class="help">已知詞條可離線翻譯。新描述會保留原文並提醒核對。</p>
+<div class="form-row"><div><label for="model">模型</label><select id="model"><option value="acemusic-v1.1">ACE Music v1.1 Preview</option><option value="acemusic-v1">ACE Music v1</option><option value="ace-step-v1.5-xl">ACE-Step v1.5 XL</option></select></div><div><label for="mode">模式</label><select id="mode"><option value="idea">Idea</option><option value="custom">Custom</option></select></div></div>
+<div class="form-row"><div><label for="seed">探索種子</label><input id="seed" type="number" value="11" min="0" max="4294967295" title="相同輸入與種子會得到相同提示詞計畫；不代表生成音訊可重現。"></div><div><label for="change-limit">每代變動上限</label><select id="change-limit"><option value="1">1 個維度</option><option value="2" selected>2 個維度</option><option value="3">3 個維度</option><option value="6">6 個維度</option></select></div></div>
+<div id="lyrics-field" hidden><label for="lyrics">歌詞 Lyrics</label><textarea id="lyrics" rows="3" maxlength="5000" placeholder="純音樂請留空；聲音描述填在上方。"></textarea></div>
+<details id="advanced-controls"><summary>模型控件</summary><p id="advanced-help" class="help">Idea 使用描述文字。切換 Custom 後可設定適用控件。</p>
+<div id="custom-controls" hidden><label for="song-title">作品標題（選填）</label><input id="song-title" maxlength="200" placeholder="留空由服務決定">
+<div id="influence-controls"><label for="style-influence">風格影響 Style influence（0–100）</label><input id="style-influence" type="number" min="0" max="100" step="1" placeholder="契約預設 80"></div>
+<div id="hd-controls" hidden><div class="form-row"><div><label for="hd-duration">長度（秒）</label><input id="hd-duration" type="number" min="30" max="600" step="10" placeholder="Auto"></div></div><label for="hd-negative">避免的風格 Negative</label><input id="hd-negative" maxlength="1000" placeholder="選填"></div>
+<div id="step-controls" hidden><p class="help">Standard · 文字生成。這裡不會上傳音訊或切換成 Cover / Edit。</p><div class="form-row"><div><label for="step-duration">長度（10–240 秒）</label><input id="step-duration" type="number" min="10" max="240" step="10" placeholder="Auto"></div><div><label for="step-bpm">速度（30–200 BPM）</label><input id="step-bpm" type="number" min="30" max="200" step="1" placeholder="Auto"></div></div>
+<div class="form-row"><div><label for="step-meter">拍號</label><select id="step-meter"><option value="">Auto</option><option>2/4</option><option>3/4</option><option>4/4</option><option>6/8</option></select></div><div><label for="step-key">調性</label><input id="step-key" placeholder="Auto；例如 C minor" maxlength="20"></div></div>
+<label for="step-negative">避免的風格 Negative</label><input id="step-negative" maxlength="1000" placeholder="選填"><label for="step-thinking">Thinking 強度（0–100）</label><input id="step-thinking" type="number" min="0" max="100" step="1" placeholder="留空為關閉"></div></div></details>
+<details><summary>詞條權重與鎖定</summary><p class="help">權重只控制內部抽樣。明確要求與鎖定項會優先保留；互相衝突時需要調整。</p><div id="dictionary" class="dictionary"></div></details>
+<div class="actions"><button class="primary" type="submit">產生方向預覽</button><button id="explore" type="button" title="增加種子並產生另一份可審閱的方向。">換一個方向</button></div>
+</form>
+<details class="reference-area"><summary>登記參考連結</summary><p class="help">只保存在本機供導覽。Spotify 內容的 AI 路徑保持關閉，不會抓取連結。</p><label for="reference-url">單曲或歌單網址</label><input id="reference-url" type="url" placeholder="https://…"><button id="register-reference" type="button">登記引用</button><ul id="references" class="plain-list"></ul></details>
+</section>
+<section id="directions" class="surface preview">
+<div class="section-head"><h2>方向預覽</h2><span id="plan-status" class="meta">尚未產生</span></div>
+<div id="empty-preview" class="empty"><p>低頻、律動、空間，各自保留一個清楚方向。</p><p class="help">預覽會列出選中詞條與實際提交欄位，沒有音訊生成或上傳。</p></div>
+<div id="preview-content" hidden>
+<p id="explanation"></p><div id="selected-terms" class="terms"></div>
+<div id="translation-warning" class="warning" hidden>仍有內容待翻譯核對。請以已知詞條或自行核對的英文重新預覽。</div>
+<div class="section-head"><h3>實際欄位</h3><button id="copy" type="button">複製文字</button></div><div id="prompt-fields"></div>
+<dl class="facts"><dt>生成費用</dt><dd>提交前由執行器核對；目前未知</dd><dt>實際支出</dt><dd id="cost-summary">未知 · 依供應商帳本結算</dd><dt>模型控件</dt><dd id="native-summary">預設</dd><dt>版本</dt><dd id="versions"></dd></dl>
+<details><summary>抽樣與變更依據</summary><pre id="trace"></pre></details>
+<label class="check"><input id="reviewed" type="checkbox">我已核對模型、模式、文字與適用控件</label>
+<button id="prepare" type="button" disabled>準備一個待授權任務</button><p class="help">先保存任務，再由你按下「交給已授權執行器」。此頁不能增加費用授權。</p>
+</div>
+</section>
+</div>
+<div class="lower-grid">
+<section id="tasks" class="surface"><div class="section-head"><h2>任務</h2><button id="refresh" type="button">重新讀取</button></div><p class="help">停止會阻止新增提交；已受理或結果未知的遠端任務可能繼續。</p><div id="jobs" class="list"></div></section>
+<section class="surface"><h2>已保存的方向</h2><div id="history" class="list"></div></section>
+<section id="library" class="surface full-span"><div class="section-head"><h2>候選庫</h2><span id="asset-count" class="meta">尚無音訊</span></div><p class="help">技術測量與人類試聽分開記錄。播放器只在你操作時播放；重新讀取會保留播放與尚未送出的評語。</p><div id="assets" class="asset-grid"></div></section>
+<section id="research" class="surface full-span"><div class="section-head"><h2>公開文字研究</h2><button id="research-stop" type="button">停止研究批次</button></div><p class="help">獨立填寫公開問題；創作方向不會自動帶入。研究來源是資料，不是工具指令。</p>
+<form id="research-form"><label for="research-query">研究問題（最多 128 字）</label><div class="query-row"><input id="research-query" maxlength="128" placeholder="例如：交錯打擊的常見節奏術語" required><button type="submit">準備研究</button></div></form><p id="research-budget" class="help state-line">正在讀取研究授權…</p>
+<div id="research-jobs" class="list"></div><div id="evidence" class="evidence-grid"></div>
+<details><summary>從來源提議詞條</summary><form id="term-form"><label for="term-source">已允許 AI 使用的來源</label><select id="term-source" required><option value="">先完成一項研究</option></select><div class="form-row"><div><label for="term-zh">中文詞條</label><input id="term-zh" maxlength="200" required></div><div><label for="term-en">英文表達</label><input id="term-en" maxlength="200" required></div></div><label for="term-dimension">維度</label><select id="term-dimension"><option value="rhythm">律動</option><option value="bass">低頻</option><option value="space">空間</option><option value="texture">質地</option><option value="development">編排</option></select><label for="term-definition">用法與前提</label><textarea id="term-definition" rows="2" maxlength="1000" required></textarea><button type="submit">保存待審詞條</button></form></details>
+<div id="term-candidates" class="list"></div></section>
+<section id="performance" class="surface full-span"><div class="section-head"><h2>演出準備 · 人工佇列</h2><span id="performance-status" class="meta">未知</span></div><p id="engine-info" class="help">引擎狀態尚未核對。</p>
+<div class="actions compact"><button id="engine-probe" type="button">只讀核對 MixCore</button><button type="button" data-performance="pause">暫停排隊</button><button type="button" data-performance="takeover">人工接管</button><button type="button" data-performance="resume">恢復人工排隊</button><button type="button" data-performance="stop">停止演出準備</button></div>
+<form id="buffer-form"><div class="form-row"><div><label for="target-minutes">目標場次（分鐘）</label><input id="target-minutes" type="number" min="0.1" step="0.1" placeholder="未知，可留空"></div><div><label for="generation-p95">生成到回收 P95（秒）</label><input id="generation-p95" type="number" min="1" step="1" placeholder="未量測，可留空"></div></div><button type="submit">估計曲目緩衝</button></form><p id="buffer-result" class="state-line help">未知 · 先加入人工接受的音訊，再設定目標與量測值。</p>
+<div class="queue-grid"><div><h3>主佇列</h3><div id="main-queue" class="list"></div></div><div><h3>離線備用</h3><div id="backup-queue" class="list"></div></div></div>
+<button id="manifest" type="button">保存待審交接清單</button><details id="manifest-detail" hidden><summary>查看交接清單</summary><pre id="manifest-json"></pre></details><p class="help">這些操作只管理人工佇列與交接資料；不啟動播放，也不寫入 MixCore 曲庫。</p></section>
+</div>
+<footer>HuaiDJ · 空間、相位、律動與無人聲描述仍需實際試聽確認。<a href="/music/capabilities" target="_blank" rel="noreferrer">檢視能力與限制</a></footer>
+</main>
+</body></html>

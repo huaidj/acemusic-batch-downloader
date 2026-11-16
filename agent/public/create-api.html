@@ -1,0 +1,12 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HuaiDJ · Create API 參數</title><link rel="stylesheet" href="/music/tokens.css"><link rel="stylesheet" href="/music/app.css"><script defer src="/music/create-api.js"></script></head><body class="api-page">
+<header><div class="brand"><strong>HuaiDJ</strong><span>Create API 參數</span></div><a href="/music">返回創作工作台</a></header>
+<main><div class="title"><h1>完整參數，先核對再呼叫</h1><p>依官方 Create 前端契約組裝原生 HTTP JSON。</p></div>
+<p class="help">前端已觀察、伺服器實際接受、付費生成與音樂驗收各自記錄。此頁不會自動提交或上傳。</p><div id="notice" role="status" aria-live="polite">正在讀取參數契約…</div>
+<div class="workspace"><section class="surface"><h2>請求參數</h2><label for="request-json">JSON（支援模型條件檢查）</label><textarea id="request-json" rows="16" spellcheck="false">{
+  "mode": "idea",
+  "model": "acemusic-v1.1",
+  "prompt": "Weighty sub-bass, subtle micro-swing, interlocking percussion, sparse distant echoes. Instrumental."
+}</textarea><div class="actions"><button id="validate" class="primary" type="button">驗證並準備 HTTP 請求</button><button id="live-preview" type="button">唯讀核對即時報價</button></div><p class="help">本機驗證不讀登入；即時報價只 GET 站點狀態。真實提交另需獨立有限批次授權。</p><details><summary>授權與預留狀態</summary><pre id="authority">尚未讀取</pre></details></section>
+<section class="surface"><div class="section-head"><h2>原生 API 請求</h2><button id="copy" type="button" disabled>複製請求</button></div><p id="request-state" class="help">先驗證輸入，會明確指出不支援或互相衝突的參數。</p><pre id="native-request">尚未準備請求</pre><dl class="facts"><dt>對外生成 POST</dt><dd>未送出</dd><dt>本次 API 支出</dt><dd>0 Credits</dd><dt>素材上傳</dt><dd>未執行</dd></dl><pre id="live-result" hidden></pre></section></div>
+<section class="surface parameter-section"><h2>參數對照</h2><p class="help">名稱保留 API 拼法；條件由模型驗證器再次檢查，未核實的組合會拒絕。</p><div id="parameter-list"></div><details><summary>完整能力快照與來源</summary><pre id="capabilities"></pre></details></section>
+<footer>網站內部 HTTP 介面尚非穩定公開 API；參數變更時必須重新核對。<a href="/create-api/capabilities" target="_blank" rel="noreferrer">機器可讀契約</a></footer></main></body></html>

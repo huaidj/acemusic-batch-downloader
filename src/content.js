@@ -450,6 +450,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
 .maintenance-menu { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 8px 0 2px; max-height: 170px; overflow-y: auto; }
 .maintenance-menu button { text-align: left; padding: 6px 9px; }
 @media (max-width: 420px) { .toolbar { gap: 6px; padding-left: 10px; padding-right: 10px; } .selection-toolbar button { padding-left: 7px; padding-right: 7px; font-size: 11px; } .option-group .root { margin-left: 0; } }
+.toolbar .music-hub-status { color: var(--muted); font-size: 12px; margin-left: auto; }
 
 .songs { flex: 1; overflow-y: auto; min-height: 120px; padding: 6px 8px; }
 .songs::-webkit-scrollbar { width: 8px; }
@@ -647,6 +648,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       S.options.autoNew = autoNewCb.checked;
       saveSettings();
       if (S.options.autoNew) enableAutoNew();
+      else if (!liveWanted()) stopLive();
     });
     automaticRows.append(el('label', { class: 'chk', title: '開啟之後新完成的歌，自動下載上方勾選的類型（分軌會等分離完成）；需開著這個分頁' }, [autoNewCb, '新歌自動下載']));
     const autoStemsCb = el('input', { type: 'checkbox', 'data-opt': 'autoStems', checked: S.options.autoStems });
@@ -658,6 +660,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
         AUTO_STEMS.queue = [];
         AUTO_STEMS.pending = {};
         saveAutoStemsState();
+        if (!liveWanted()) stopLive();
       } else {
         checkAutoStems();
         startLive();
@@ -766,7 +769,35 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     openPlayerBtn.addEventListener('click', () => openIndependentPlayer());
     toolbar.prepend(openPlayerBtn);
     const randomBox = buildRandom();
-    panel.append(header, randomBox, settings, toolbar, toolbar2, organizeBox, songsBox, progress, footer);
+    const musicHub = el('details', { class: 'rand', 'data-music-hub': '' });
+    musicHub.append(el('summary', { text: 'HuaiDJ 創作中樞' }));
+    const hubUrl = el('input', { type: 'url', value: 'http://127.0.0.1:8788', 'aria-label': '音樂中樞網址', title: '填入本機中樞啟動時顯示的網址；所有任務仍由該 Hub 管理。' });
+    const hubStatus = el('span', { class: 'music-hub-status', text: '尚未讀取中樞', role: 'status' });
+    const hubCheck = el('button', { type: 'button', text: '連接中樞', 'data-music-hub-check': '' });
+    const hubOpen = el('button', { type: 'button', text: '開啟工作台', 'data-music-hub-open': '' });
+    const hubPrompt = el('button', { type: 'button', text: '複製 AI 接入提示', 'data-music-hub-prompt': '' });
+    async function restoreHub() {
+      try { const result = await sendMessage({ type: 'ACE_MUSIC_HUB_GET_CONFIG' }); if (result?.ok && shadow.activeElement !== hubUrl) hubUrl.value = result.base_url; } catch { /* config remains local and optional */ }
+    }
+    restoreHub();
+    async function chooseHub() {
+      const saved = await sendMessage({ type: 'ACE_MUSIC_HUB_CONFIG', base_url: hubUrl.value });
+      if (!saved || !saved.ok) throw new Error(saved && saved.error || '網址無效');
+    }
+    hubCheck.addEventListener('click', async () => {
+      try { await chooseHub(); const result = await sendMessage({ type: 'ACE_MUSIC_HUB_STATUS' }); if (!result?.ok) throw new Error(result?.error || '無法讀取'); hubStatus.textContent = `任務 ${result.jobs} · 候選 ${result.assets} · 待試聽 ${result.awaiting_listen}`; }
+      catch (error) { hubStatus.textContent = error.message; }
+    });
+    hubOpen.addEventListener('click', async () => {
+      try { await chooseHub(); const result = await sendMessage({ type: 'ACE_MUSIC_HUB_OPEN' }); if (!result?.ok) throw new Error(result?.error || '無法開啟'); hubStatus.textContent = '已開啟同一中樞工作台'; }
+      catch (error) { hubStatus.textContent = error.message; }
+    });
+    hubPrompt.addEventListener('click', async () => {
+      try { await chooseHub(); const result = await sendMessage({ type: 'ACE_MUSIC_HUB_PROMPT' }); if (!result?.ok) throw new Error(result?.error || '無法複製'); await navigator.clipboard.writeText(result.text); hubStatus.textContent = '已複製接入提示；沒有附帶憑據或曲庫'; }
+      catch (error) { hubStatus.textContent = error.message; }
+    });
+    musicHub.append(el('div', { class: 'toolbar' }, [hubUrl, hubCheck, hubOpen, hubPrompt, hubStatus]));
+    panel.append(header, randomBox, musicHub, settings, toolbar, toolbar2, organizeBox, songsBox, progress, footer);
     shadow.append(fab, panel);
 
     Object.assign(S.els, {
@@ -2243,13 +2274,28 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
    * 即時同步：訂閱站點 /api/songs/events（SSE），版本變了才抓增量
    * 取代每 8 秒全量抓歌單；SSE 斷線時自動退回輪詢
    * ------------------------------------------------------------------ */
-  const LIVE = { es: null, refused: 0, pulling: null, again: false, lastSafety: 0, progress: {} };
+  const LIVE = { es: null, refused: 0, retryTimer: 0, epoch: 0, pulling: null, again: false, lastSafety: 0, progress: {} };
+  function liveWanted() { return !!(S.options.autoRefresh || S.options.autoNew || S.options.autoStems); }
+  function stopLive() {
+    clearTimeout(LIVE.retryTimer);
+    LIVE.retryTimer = 0;
+    LIVE.again = false;
+    LIVE.epoch++;
+    if (LIVE.es) {
+      LIVE.es.onmessage = LIVE.es.onerror = null;
+      LIVE.es.close();
+      LIVE.es = null;
+    }
+  }
   function liveOpen() {
     return !!(LIVE.es && typeof EventSource === 'function' && LIVE.es.readyState === EventSource.OPEN);
   }
   function startLive() {
+    if (!liveWanted()) return stopLive();
     // 只在歌單成功載入（＝已登入、拿到 ver）之後訂閱；未登入時訂閱只會一直 401 重連
     if (LIVE.es || typeof EventSource !== 'function' || !S.libVer) return;
+    clearTimeout(LIVE.retryTimer);
+    LIVE.retryTimer = 0;
     let es;
     try {
       es = LIVE.es = new EventSource('/api/songs/events');
@@ -2258,6 +2304,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       return;
     }
     es.onmessage = (event) => {
+      if (LIVE.es !== es || !liveWanted()) return;
       LIVE.refused = 0;
       let msg = {};
       try {
@@ -2274,15 +2321,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       if (ver > (S.libVer || 0)) pullChanges();
     };
     es.onerror = () => {
-      if (LIVE.es !== es) return;
+      if (LIVE.es !== es || !liveWanted()) return;
       // 瀏覽器會自己重連；被拒（CLOSED）才由我們退避後重開（5s×2^n，上限 60s）
       if (es.readyState === EventSource.CLOSED) {
         LIVE.es = null;
-        setTimeout(startLive, Math.min(60000, 5000 * 2 ** LIVE.refused++));
+        LIVE.retryTimer = setTimeout(startLive, Math.min(60000, 5000 * 2 ** LIVE.refused++));
       }
     };
   }
   function pullChanges() {
+    if (!liveWanted()) return Promise.resolve();
     if (LIVE.pulling) {
       LIVE.again = true;
       return LIVE.pulling;
@@ -2291,22 +2339,24 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       do {
         LIVE.again = false;
         await pullChangesOnce();
-      } while (LIVE.again);
+      } while (LIVE.again && liveWanted());
     })().finally(() => {
       LIVE.pulling = null;
     });
     return LIVE.pulling;
   }
   async function pullChangesOnce() {
-    if (!S.libVer || !S.loaded) return refreshSongsQuiet();
+    if (!liveWanted()) return;
+    const epoch = LIVE.epoch;
+    if (!S.libVer || !S.loaded) return refreshSongsQuiet({ automatic: true });
     const res = await apiFetch('/api/songs/changes?since=' + encodeURIComponent(S.libVer), {
       credentials: 'same-origin',
       cache: 'no-store',
       headers: { Accept: 'application/json' },
     }).catch(() => null);
     const data = res && res.ok ? await res.json().catch(() => null) : null;
-    if (!data) return;
-    if (data.reset) return refreshSongsQuiet();
+    if (!data || !liveWanted() || LIVE.epoch !== epoch) return;
+    if (data.reset) return refreshSongsQuiet({ automatic: true });
     const byId = new Map(S.songs.map((song) => [song.task_id, song]));
     for (const id of data.gone || []) byId.delete(id);
     for (const item of data.items || []) {
@@ -2618,7 +2668,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       } else {
         S.libVer = result.ver || S.libVer || 0;
         applySongs(result.songs);
-        if (S.host.ok || S.options.autoNew || S.options.autoStems) startLive();
+        startLive();
       }
     } catch (err) {
       S.loadError = '歌單載入失敗：' + ((err && err.message) || err);
@@ -2642,11 +2692,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   }
 
   /** 安靜刷新：背景每 8 秒抓一次，讓「分軌處理中 → 分軌 N」自動出現，不必手動重整頁面 */
-  async function refreshSongsQuiet() {
+  async function refreshSongsQuiet({ automatic = false } = {}) {
+    if (automatic && !liveWanted()) return;
+    const epoch = LIVE.epoch;
     if (S.loading || S.quietLoading) return;
     S.quietLoading = true;
     try {
       const result = await loadSongsFromApi();
+      if (automatic && (!liveWanted() || LIVE.epoch !== epoch)) return;
       if (result.error) {
         if (!S.songs.length && result.error !== S.loadError) {
           S.loadError = result.error;
@@ -2658,7 +2711,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       S.libVer = result.ver || S.libVer || 0;
       S.loaded = true;
       applySongs(result.songs);
-      if (S.host.ok || S.options.autoNew || S.options.autoStems) startLive();
+      startLive();
     } catch (err) {
       /* 背景刷新失敗不吵使用者，等下一次 */
     } finally {
@@ -2669,6 +2722,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   function startAutoRefresh() {
     clearInterval(S.autoTimer);
     S.autoTimer = 0;
+    if (liveWanted()) startLive();
+    else stopLive();
     if (!S.options.autoRefresh) return;
     S.autoTimer = setInterval(() => {
       if (S.els.panel && S.els.panel.hidden) return;
@@ -2680,7 +2735,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
           pullChanges();
         }
       } else {
-        refreshSongsQuiet();
+        refreshSongsQuiet({ automatic: true });
       }
       if (S.host.ok) {
         refreshDownloadIndex(false).then(() => {
@@ -3624,12 +3679,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     })
     .then(() => refreshHostStatus())
     .then(() => {
-      // 有本機中樞或開了新歌自動下載：面板沒打開也要在背景同步歌單（給 agent／自動下載用）
+      // 自動更新、新歌或分軌自動下載需要即時歌單；本機 host 不能覆蓋關閉選項。
       checkAutoStems();
       if (S.options.autoNew) enableAutoNew();
-      if (S.host.ok || S.options.autoNew || S.options.autoStems) {
+      if (liveWanted()) {
         startLive();
-        if (!S.loaded) refreshSongsQuiet();
+        if (!S.loaded) refreshSongsQuiet({ automatic: true });
       }
       return refreshDownloadIndex(true);
     })
@@ -3646,8 +3701,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   window.addEventListener('pagehide', stopLocalStateSync, { once: true });
   // 切回分頁時立刻更新一次歌單（分軌完成後不必手動重整頁面）
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && S.els.panel && !S.els.panel.hidden && S.loaded) {
-      refreshSongsQuiet();
+    if (liveWanted() && !document.hidden && S.els.panel && !S.els.panel.hidden && S.loaded) {
+      refreshSongsQuiet({ automatic: true });
       refreshDownloadIndex(false).then(() => {
         if (S.songs.length) renderSongs();
       });

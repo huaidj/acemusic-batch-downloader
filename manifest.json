@@ -26,7 +26,8 @@
   ],
   "host_permissions": [
     "https://acemusic.ai/*",
-    "https://www.acemusic.ai/*"
+    "https://www.acemusic.ai/*",
+    "http://127.0.0.1/*"
   ],
   "background": {
     "service_worker": "src/background.js"

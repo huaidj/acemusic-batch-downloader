@@ -1,0 +1,24 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+const context = vm.createContext({ URL, AbortSignal });
+vm.runInContext(fs.readFileSync(new URL('../../src/music-hub.js', import.meta.url), 'utf8'), context);
+const { create, normalize } = context.AceMusicHub;
+test('extension connects only to a selected loopback Hub and keeps business state there across worker recreation', async () => {
+  const store = {}, opened = [], requests = [];
+  const chromeApi = { storage: { local: { get: async () => store, set: async value => Object.assign(store, value) } }, tabs: { create: async input => opened.push(input.url) } };
+  const fetchImpl = async (url, options) => { requests.push({ url, method: options.method }); return new Response(JSON.stringify(url.endsWith('/capabilities') ? { name: 'ace-agent-hub', apiVersion: 1, musicAgent: {} } : { ok: true, jobs: [{ status: 'generating' }], assets: [{ human_listen: { status: 'awaiting_listen' } }] })); };
+  assert.equal((await create({ chromeApi, fetchImpl }).dispatch({ type: 'ACE_MUSIC_HUB_CONFIG', base_url: 'http://127.0.0.1:18789' })).ok, true);
+  const secondWorker = create({ chromeApi, fetchImpl });
+  const status = await secondWorker.dispatch({ type: 'ACE_MUSIC_HUB_STATUS' });
+  assert.equal(status.jobs, 1); assert.equal(status.assets, 1); assert.equal(status.awaiting_listen, 1);
+  assert.equal((await secondWorker.dispatch({ type: 'ACE_MUSIC_HUB_OPEN' })).ok, true);
+  assert.deepEqual(opened, ['http://127.0.0.1:18789/music']);
+  assert.ok(requests.every(r => r.method === 'GET'));
+  const prompt = await secondWorker.dispatch({ type: 'ACE_MUSIC_HUB_PROMPT' });
+  assert.match(prompt.text, /18789/);
+  for (const value of ['https://example.com', 'http://localhost:8788', 'http://127.0.0.1@evil.example', 'http://127.0.0.1:8788/path', 'file:///C:/secret']) assert.throws(() => normalize(value));
+  const wrong = create({ chromeApi, fetchImpl: async () => new Response(JSON.stringify({ name: 'other-app', apiVersion: 1 })) });
+  assert.equal((await wrong.dispatch({ type: 'ACE_MUSIC_HUB_STATUS' })).status, 'unsupported');
+});

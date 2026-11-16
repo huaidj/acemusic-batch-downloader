@@ -242,6 +242,8 @@ scenario('S0_manifest_hooks_and_songlist', async () => {
       root: shadow.querySelector('[data-root-folder]')?.value,
       acts: ['select-all', 'select-none', 'refresh', 'download', 'cancel', 'show-folder'].map((a) => ({ a, present: present(`[data-act="${a}"]`) })),
       progress: present('[data-progress]'),
+      selectedCountLabels: shadow.querySelectorAll('.count').length,
+      hubStatusLabels: shadow.querySelectorAll('.music-hub-status[role="status"]').length,
       songRows: shadow.querySelectorAll('[data-song-id]').length,
       titles: [...shadow.querySelectorAll('[data-song-id] .name')].map((n) => n.textContent.trim()),
     };
@@ -253,6 +255,8 @@ scenario('S0_manifest_hooks_and_songlist', async () => {
   assertEqual(hooks.root, 'ai音樂', '根資料夾預設值');
   for (const act of hooks.acts) assert(act.present, `[data-act="${act.a}"] 需存在`);
   assert(hooks.progress, '[data-progress] 需存在');
+  assertEqual(hooks.selectedCountLabels, 1, '歌曲已選計數 .count 必須保持唯一');
+  assertEqual(hooks.hubStatusLabels, 1, '中樞狀態需使用獨立 class 與 status role');
   assertEqual(hooks.songRows, 5, '面板歌曲列數（song-d 未完成須忽略）');
   const titles = sortedUnique(hooks.titles);
   assertEqual(titles, sortedUnique(['Neon Drive', 'Paper Sky', 'Rain: Loop? v2', 'Where Am I', 'Where Am I']), '歌曲標題');
@@ -512,6 +516,9 @@ const panelHasSong = (p, id, timeout = 8000) =>
 scenario('S12_live_new_song_via_sse', async () => {
   // 站點 SSE 推 ver → 面板只抓 /api/songs/changes 增量，不再全量抓歌單
   await freshPanel(page, mock.base);
+  await setOption(page, 'autoNew', false);
+  await setOption(page, 'autoRefresh', true);
+  try {
   await page.waitForFunction(() => true, null, { timeout: 500 }).catch(() => {});
   const waitSse = Date.now() + 8000;
   while (mock.sseClientCount() < 1 && Date.now() < waitSse) await new Promise((r) => setTimeout(r, 50));
@@ -527,7 +534,29 @@ scenario('S12_live_new_song_via_sse', async () => {
   const deltas = mock.log.filter((e) => e.path.startsWith('/api/songs/changes')).length;
   assert(deltas >= 1, 'S12 應呼叫 /api/songs/changes');
   assertEqual(fullLists, 0, 'S12 SSE 連線時不應全量重抓歌單');
-  mock.removeSong('song-live1');
+  assertEqual(mock.log.filter(e => e.method === 'POST').length, 0, 'S12 自動更新不得觸發下載或生成 POST');
+  // 分軌完成自動下載也需要即時歌單；只關自動更新時連線必須保留。
+  await setOption(page, 'autoRefresh', false);
+  await new Promise(r => setTimeout(r, 300));
+  assertEqual(mock.sseClientCount(), 1, 'S12 分軌自動下載仍開啟時應保留 SSE');
+  await setOption(page, 'autoStems', false);
+  const closeDeadline = Date.now() + 3000;
+  while (mock.sseClientCount() && Date.now() < closeDeadline) await new Promise(r => setTimeout(r, 25));
+  assertEqual(mock.sseClientCount(), 0, 'S12 關閉自動更新、新歌及分軌自動下載後必須中止 SSE');
+  mock.clearLog();
+  mock.addSong(liveSong('song-live-paused', 'Paused Live', ['vocal']));
+  await new Promise(r => setTimeout(r, 250));
+  const pushedWhileOff = await page.evaluate(() => !!document.getElementById('acedl-host')?.shadowRoot?.querySelector('[data-song-id="song-live-paused"]'));
+  assertEqual(pushedWhileOff, false, 'S12 關閉後不得持續推入歌曲');
+  assertEqual(mock.log.filter(e => /\/api\/songs\/(events|changes)/.test(e.path)).length, 0, 'S12 關閉後不得重連或拉增量');
+  assertEqual(mock.log.filter(e => e.method === 'POST').length, 0, 'S12 關閉時不得產生自動下載');
+  await setOption(page, 'autoRefresh', true);
+  await panelHasSong(page, 'song-live-paused');
+  } finally {
+    mock.removeSong('song-live1');
+    mock.removeSong('song-live-paused');
+    await setOption(page, 'autoRefresh', true);
+  }
 });
 
 scenario('S13_no_download_marks_unavailable', async () => {

@@ -142,6 +142,8 @@ CLI／Hub／MCP 的下載另外在 `%LOCALAPPDATA%\AceMusicDL\agent.log` 保存�
 | `events [--since seq] [--type t]` | 中樞事件（新歌、自動下載、下載完成） |
 | `wait [--timeout 秒]` | 等下一首新歌（需 Hub＋站點分頁） |
 | `probe` | 站點健康（唯讀：登入、方案、模型） |
+| `generate --request request.json [--json]` | v1.1 直接生成預覽；實際提交另需 `--commit --confirm-credit-spend --max-credits N --idempotency-key KEY` |
+| `generation-status --task-ids id1,id2 [--json]` | 依任務 ID 唯讀查詢生成狀態 |
 | `backups [--keep-days 7] [--keep-last 1] [--max-mb N] [--prune --commit]` | 整理備份清單；預設只預覽，`--prune --commit` 才刪 |
 | `masters` | 母帶清單（唯讀） |
 
@@ -161,8 +163,11 @@ CLI／Hub／MCP 的下載另外在 `%LOCALAPPDATA%\AceMusicDL\agent.log` 保存�
 | 把剛做好的歌全部抓下來 | `ace_download { latest: 1, types: ["all"] }` → `ace_job_status` → `ace_tidy { wait: true }` |
 | 下載／整理 | `ace_download`（`song_ids`／`query`／`latest`／`all`）→ `ace_job_status`；`ace_tidy`；`ace_organize` |
 | 維運 | `ace_backups`（只預覽）、`ace_masters`、`ace_probe`、`ace_hub_status` |
+| 預覽／生成 v1.1 | `ace_generate`（預設只預覽；提交需確認、額度上限與防重送 key） |
+| 查看生成進度 | `ace_generation_status { task_ids: ["任務ID"] }` |
 
 Hub 在跑時自動走 Hub。讀取可本地回落；寫入只在確認沒有建立連線時回落，提交後結果未知不會換一路重送，應查 job ID。
+Hub 在跑時自動走 Hub（p50：overview 1.2 ms、locate 2.7 ms、list 0.5 ms）；既有功能在 Hub 不可用時可回落本地。付費生成只允許經支援生成的 Hub 提交，避免逾時重送。詳細流程見 [直接生成說明](../agent/DIRECT-GENERATION.md)。
 
 ### 6.4 Hub API（`127.0.0.1:8788`）
 `GET /health /capabilities /overview /songs /locate /library /page /page/events /wait /jobs/:id /events(SSE)`；`POST /download /tidy /dedupe /organize /warm /jobs/:id/cancel /shutdown`。詳見 `agent/HUB.md`。
