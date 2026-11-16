@@ -587,6 +587,48 @@ scenario('S15_auto_download_new_song', async () => {
   mock.removeSong('song-live2');
 });
 
+scenario('S16_drag_and_opacity', async () => {
+  // 面板拖標題列、浮動按鈕拖曳不觸發開關、透明度滑桿、位置與透明度存入 aceUi
+  await freshPanel(page, mock.base);
+  const box = (sel) =>
+    page.evaluate((s) => {
+      const r = document.getElementById('acedl-host').shadowRoot.querySelector(s).getBoundingClientRect();
+      return { left: Math.round(r.left), top: Math.round(r.top) };
+    }, sel);
+  const before = await box('.panel');
+  const hdr = await box('.panel header');
+  await page.mouse.move(hdr.left + 40, hdr.top + 14);
+  await page.mouse.down();
+  await page.mouse.move(hdr.left - 160, hdr.top + 34, { steps: 6 });
+  await page.mouse.up();
+  const after = await box('.panel');
+  assertEqual([after.left - before.left, after.top - before.top], [-200, 20], 'S16 面板應跟著拖曳移動');
+  await page.evaluate(() => {
+    const input = document.getElementById('acedl-host').shadowRoot.querySelector('[data-ui="alpha"]');
+    input.value = '60';
+    input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new Event('change'));
+  });
+  const bg = await page.evaluate(() => getComputedStyle(document.getElementById('acedl-host').shadowRoot.querySelector('.panel')).backgroundColor);
+  assert(/0\.6\)$/.test(bg), `S16 透明度應套用到面板背景：${bg}`);
+  await page.evaluate(() => document.getElementById('acedl-host').shadowRoot.querySelector('[data-act="close"]').click());
+  const fab = await box('.fab');
+  await page.mouse.move(fab.left + 15, fab.top + 12);
+  await page.mouse.down();
+  await page.mouse.move(fab.left - 220, fab.top - 140, { steps: 6 });
+  await page.mouse.up();
+  const opened = await page.evaluate(() => !document.getElementById('acedl-host').shadowRoot.querySelector('.panel').hidden);
+  assertEqual(opened, false, 'S16 拖曳浮動按鈕不應打開面板');
+  await new Promise((r) => setTimeout(r, 200));
+  const storage = await readStorage(context);
+  assert(storage.aceUi && storage.aceUi.alpha === 60 && storage.aceUi.panelPos && storage.aceUi.fabPos, `S16 aceUi 應保存透明度與位置：${JSON.stringify(storage.aceUi)}`);
+  // 還原，避免影響後續情境
+  await page.evaluate(() => chrome.storage && 0);
+  await openPanel(page);
+  const h2 = await box('.panel header');
+  await page.mouse.dblclick(h2.left + 40, h2.top + 14);
+});
+
 scenario('S7_logged_out_shows_login_hint', async () => {
   await context.clearCookies();
   await page.goto(mock.base + '/create/?auth-off', { waitUntil: 'domcontentloaded' });

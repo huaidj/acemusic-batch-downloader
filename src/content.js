@@ -178,131 +178,161 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
   }
 
   function sendBadge(text) {
-    sendMessage({ type: 'ACE_BADGE', text: text || '', color: '#5b8def' }).catch(() => {});
+    sendMessage({ type: 'ACE_BADGE', text: text || '', color: '#a8792c' }).catch(() => {});
   }
 
   /* ------------------------------------------------------------------ *
    * 樣式（用 constructed stylesheet，避開頁面 CSP 對 inline style 的限制）
    * ------------------------------------------------------------------ */
+  // 視覺：暖石墨底＋單一低彩度琥珀強調色；不用藍紫漸層與發光（避免「AI 產品味」）。
+  // 透明度由 --alpha 控制（面板標題列的滑桿，存在 aceUi）。
   const CSS = `
-:host { all: initial; }
+:host {
+  all: initial;
+  --alpha: .92;
+  --bg-rgb: 24, 23, 21;
+  --text: #ece8e1; --muted: #a8a299; --faint: #7a756d;
+  --line: rgba(255, 248, 235, .08); --line-strong: rgba(255, 248, 235, .14);
+  --surface: rgba(255, 248, 235, .04); --surface-hover: rgba(255, 248, 235, .08);
+  --field: rgba(0, 0, 0, .28);
+  --accent: #d2a24c; --accent-hover: #ddb062; --accent-ink: #1c1913; --accent-soft: rgba(210, 162, 76, .14);
+  --ok: #9fc49b; --ok-soft: rgba(159, 196, 155, .12);
+  --warn: #e0b45c; --warn-soft: rgba(224, 180, 92, .12);
+  --err: #e3907f;
+  --font: system-ui, "Segoe UI", "Microsoft JhengHei", "PingFang TC", sans-serif;
+}
 * { box-sizing: border-box; }
+
+/* 浮動按鈕：實色膠囊、可拖曳 */
 .fab {
   position: fixed; right: 18px; bottom: 18px; z-index: 2147483647;
   display: inline-flex; align-items: center; gap: 8px;
-  padding: 10px 16px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14);
-  background: linear-gradient(135deg, #2563eb, #7c3aed); color: #fff; cursor: pointer;
-  font: 600 13px/1.2 system-ui, "Segoe UI", "Microsoft JhengHei", "PingFang TC", sans-serif;
-  box-shadow: 0 10px 30px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.06) inset;
-  user-select: none;
+  padding: 9px 15px 9px 13px; border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: rgba(var(--bg-rgb), .94); color: var(--text); cursor: pointer;
+  font: 600 13px/1.2 var(--font); letter-spacing: .2px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+  backdrop-filter: blur(10px);
+  user-select: none; touch-action: none;
 }
-.fab:hover { filter: brightness(1.08); }
-.fab.running { background: linear-gradient(135deg, #0f766e, #2563eb); }
-.fab .dot { width: 7px; height: 7px; border-radius: 50%; background: #34d399; box-shadow: 0 0 8px #34d399; }
-.fab.running .dot { background: #fbbf24; box-shadow: 0 0 8px #fbbf24; animation: acedl-pulse 1s infinite; }
-@keyframes acedl-pulse { 50% { opacity: .35; } }
+.fab:hover { border-color: rgba(210, 162, 76, .5); }
+.fab.dragging { cursor: grabbing; box-shadow: 0 10px 26px rgba(0, 0, 0, .45); }
+.fab .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.fab.running .dot { background: var(--ok); animation: acedl-pulse 1.2s ease-in-out infinite; }
+@keyframes acedl-pulse { 50% { opacity: .3; } }
 
+/* 面板：半透明＋背景模糊 */
 .panel {
-  position: fixed; right: 18px; bottom: 74px; z-index: 2147483647;
+  position: fixed; right: 18px; bottom: 70px; z-index: 2147483647;
   width: 470px; max-width: 94vw; max-height: min(80vh, 860px);
   display: flex; flex-direction: column;
-  background: #141417; color: #e8e8ea; border: 1px solid #2e2e35; border-radius: 16px;
-  box-shadow: 0 24px 70px rgba(0,0,0,.6);
-  font: 13px/1.45 system-ui, "Segoe UI", "Microsoft JhengHei", "PingFang TC", sans-serif;
+  background: rgba(var(--bg-rgb), var(--alpha));
+  backdrop-filter: blur(16px) saturate(115%);
+  color: var(--text); border: 1px solid var(--line-strong); border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .45);
+  font: 13px/1.45 var(--font);
   overflow: hidden;
 }
 .panel[hidden] { display: none; }
-.panel header { display: flex; align-items: center; gap: 8px; padding: 12px 14px 10px; border-bottom: 1px solid #26262c; }
+.panel header {
+  display: flex; align-items: center; gap: 8px; padding: 11px 12px 10px 14px;
+  border-bottom: 1px solid var(--line); cursor: grab; user-select: none; touch-action: none;
+}
+.panel.dragging header { cursor: grabbing; }
 .panel header .title { font-weight: 700; font-size: 14px; letter-spacing: .2px; }
-.panel header .sub { color: #8b8b95; font-size: 11px; flex: 1; }
+.panel header .sub { color: var(--faint); font-size: 11px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.alpha { display: inline-flex; align-items: center; gap: 5px; color: var(--faint); font-size: 10.5px; cursor: default; }
+.alpha input { width: 64px; accent-color: var(--accent); cursor: pointer; }
 .iconbtn {
-  width: 28px; height: 28px; border-radius: 8px; border: 1px solid #33333a; background: #1c1c21;
-  color: #cfcfd6; cursor: pointer; font-size: 14px; line-height: 1;
+  width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1;
 }
-.iconbtn:hover { background: #26262d; }
+.iconbtn:hover { background: var(--surface-hover); color: var(--text); }
 
-.opts { display: flex; flex-wrap: wrap; gap: 6px 10px; padding: 10px 14px; border-bottom: 1px solid #232329; align-items: center; }
-.chk { display: inline-flex; align-items: center; gap: 5px; color: #cfcfd6; cursor: pointer; font-size: 12px; }
-.chk input { accent-color: #5b8def; }
+.opts { display: flex; flex-wrap: wrap; gap: 6px 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); align-items: center; }
+.chk { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); cursor: pointer; font-size: 12px; }
+.chk:hover { color: var(--text); }
+.chk input { accent-color: var(--accent); }
 .chk select.mini {
-  padding: 2px 4px; border-radius: 6px; border: 1px solid #33333a; background: #0f0f12;
-  color: #e8e8ea; font-size: 11.5px; outline: none;
+  padding: 2px 4px; border-radius: 6px; border: 1px solid var(--line); background: var(--field);
+  color: var(--text); font-size: 11.5px; outline: none;
 }
-.sep { width: 1px; height: 16px; background: #2e2e35; margin: 0 2px; }
-.root { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #9a9aa4; margin-left: auto; }
+.sep { width: 1px; height: 16px; background: var(--line-strong); margin: 0 2px; }
+.root { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-left: auto; }
 .root input {
-  width: 128px; padding: 4px 8px; border-radius: 7px; border: 1px solid #33333a;
-  background: #0f0f12; color: #e8e8ea; font-size: 12px; outline: none;
+  width: 128px; padding: 4px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--field);
+  color: var(--text); font-size: 12px; outline: none;
 }
-.root input:focus { border-color: #5b8def; }
+.root input:focus { border-color: var(--accent); }
 
-.toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid #232329; }
+.toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
 .toolbar button, .footer button, .rowbtn {
-  border: 1px solid #33333a; background: #1c1c21; color: #d8d8de; border-radius: 8px;
-  padding: 5px 10px; font-size: 12px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 8px;
+  padding: 5px 10px; font-size: 12px; cursor: pointer; white-space: nowrap;
 }
-.toolbar button:hover, .footer button:hover, .rowbtn:hover { background: #26262d; }
-.toolbar button.on { border-color: #5b8def; color: #93c5fd; background: #14203a; }
+.toolbar button:hover, .footer button:hover, .rowbtn:hover { background: var(--surface-hover); border-color: var(--line-strong); }
+.toolbar button.on { border-color: rgba(210, 162, 76, .55); color: var(--accent); background: var(--accent-soft); }
 .organize {
   display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start;
-  padding: 8px 14px; border-bottom: 1px solid #232329; background: #12141a;
-  font-size: 11.5px; color: #d8d8de;
+  padding: 8px 14px; border-bottom: 1px solid var(--line); background: rgba(0, 0, 0, .12);
+  font-size: 11.5px; color: var(--text);
 }
 .organize[hidden] { display: none; }
 .organize .grow { flex: 1; min-width: 180px; }
-.organize .hint { padding: 0; text-align: left; font-size: 10.5px; color: #8b8b95; }
-.toolbar .count { color: #9a9aa4; font-size: 12px; margin-left: auto; }
+.organize .hint { padding: 0; text-align: left; font-size: 10.5px; color: var(--faint); }
+.toolbar .count { color: var(--muted); font-size: 12px; margin-left: auto; }
 
 .songs { flex: 1; overflow-y: auto; min-height: 120px; padding: 6px 8px; }
 .songs::-webkit-scrollbar { width: 8px; }
-.songs::-webkit-scrollbar-thumb { background: #33333a; border-radius: 8px; }
+.songs::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 8px; }
 .song { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 9px; }
-.song:hover { background: #1b1b20; }
-.song input[type=checkbox] { accent-color: #5b8def; flex: none; }
-.song .cover { width: 30px; height: 30px; border-radius: 6px; object-fit: cover; background: #232329; flex: none; }
+.song:hover { background: var(--surface); }
+.song input[type=checkbox] { accent-color: var(--accent); flex: none; }
+.song .cover { width: 30px; height: 30px; border-radius: 6px; object-fit: cover; background: var(--surface-hover); flex: none; }
 .song .body { flex: 1; min-width: 0; }
 .song .name { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .song .meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
-.badge { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; border: 1px solid #33333a; color: #9a9aa4; }
-.badge.ok { color: #86efac; border-color: #1f5136; background: #10231a; }
-.badge.warn { color: #fbbf24; border-color: #4d3a12; background: #241c0d; }
+.badge { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.badge.ok { color: var(--ok); border-color: rgba(159, 196, 155, .3); background: var(--ok-soft); }
+.badge.warn { color: var(--warn); border-color: rgba(224, 180, 92, .3); background: var(--warn-soft); }
 .badge.dim { opacity: .7; }
 .rowbtn { flex: none; padding: 4px 9px; font-size: 11.5px; }
-.hint { color: #8b8b95; font-size: 12px; padding: 16px 12px; text-align: center; }
-.hint.err { color: #fca5a5; }
-.hint a { color: #7aa7ff; }
+.hint { color: var(--faint); font-size: 12px; padding: 16px 12px; text-align: center; }
+.hint.err { color: var(--err); }
+.hint a { color: var(--accent); }
 
-.progress { border-top: 1px solid #26262c; padding: 10px 14px 8px; }
+.progress { border-top: 1px solid var(--line); padding: 10px 14px 8px; }
 .progress[hidden] { display: none; }
-.bar { height: 5px; border-radius: 999px; background: #26262c; overflow: hidden; }
-.bar i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #2563eb, #8b5cf6); transition: width .2s ease; }
-.stats { display: flex; gap: 10px; margin-top: 7px; color: #b9b9c2; font-size: 11.5px; flex-wrap: wrap; }
-.stats b { color: #fff; font-weight: 600; }
-.current { margin-top: 5px; color: #8b8b95; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.failed { margin-top: 6px; font-size: 11px; color: #cfcfd6; }
-.failed summary { cursor: pointer; color: #fca5a5; }
+.bar { height: 4px; border-radius: 999px; background: var(--surface-hover); overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0%; background: var(--accent); transition: width .2s ease; }
+.stats { display: flex; gap: 10px; margin-top: 7px; color: var(--muted); font-size: 11.5px; flex-wrap: wrap; }
+.stats b { color: var(--text); font-weight: 600; }
+.current { margin-top: 5px; color: var(--faint); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.failed { margin-top: 6px; font-size: 11px; color: var(--muted); }
+.failed summary { cursor: pointer; color: var(--err); }
 .failed ul { margin: 4px 0 0; padding-left: 18px; max-height: 110px; overflow: auto; }
-.failed li { color: #f3b3b3; word-break: break-all; }
+.failed li { color: var(--err); word-break: break-all; }
 .showfolder { margin-top: 8px; }
 
-.footer { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; border-top: 1px solid #26262c; background: #101013; }
+.footer { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; border-top: 1px solid var(--line); background: rgba(0, 0, 0, .14); }
 .primary {
-  flex: 1 1 150px; white-space: nowrap; padding: 9px 12px; border-radius: 10px; cursor: pointer;
-  border: 1px solid rgba(255,255,255,.10);
-  background: linear-gradient(135deg, #2563eb, #7c3aed); color: #fff; font-weight: 700; font-size: 13px;
+  flex: 1 1 150px; white-space: nowrap; padding: 9px 12px; border-radius: 9px; cursor: pointer;
+  border: 1px solid transparent; background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 13px;
 }
-.primary:disabled { opacity: .45; cursor: not-allowed; }
-.primary:not(:disabled):hover { filter: brightness(1.08); }
-.ghost { padding: 9px 12px; border-radius: 10px; white-space: nowrap; cursor: pointer; border: 1px solid #44444d; background: #1c1c21; color: #e8e8ea; font-size: 12.5px; }
+.primary:disabled { background: var(--surface-hover); color: var(--faint); border-color: var(--line); cursor: not-allowed; }
+.primary:not(:disabled):hover { background: var(--accent-hover); }
+.ghost { padding: 9px 12px; border-radius: 9px; white-space: nowrap; cursor: pointer; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); font-size: 12.5px; }
+.ghost:hover { background: var(--surface-hover); }
 .ghost[hidden] { display: none; }
-.foothint { color: #6f6f7a; font-size: 10.5px; flex-basis: 100%; margin-top: 2px; }
+.foothint { color: var(--faint); font-size: 10.5px; flex-basis: 100%; margin-top: 2px; }
 .tidybar { flex-basis: 100%; margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
 .tidybar[hidden] { display: none; }
-.tidybar .track { height: 6px; border-radius: 999px; background: #232329; overflow: hidden; }
-.tidybar .track i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #5b8def, #7ee2a8); transition: width .4s ease; }
-.tidybar .label { color: #9aa0b5; font-size: 10.5px; }
+.tidybar .track { height: 4px; border-radius: 999px; background: var(--surface-hover); overflow: hidden; }
+.tidybar .track i { display: block; height: 100%; width: 0%; background: var(--ok); transition: width .4s ease; }
+.tidybar .label { color: var(--muted); font-size: 10.5px; }
 .toast:empty { display: none; }
-.toast { color: #93c5fd; font-size: 11px; margin-left: 6px; }
+.toast { color: var(--accent); font-size: 11px; margin-left: 6px; }
+@media (prefers-reduced-motion: reduce) { .fab.running .dot { animation: none; } .bar i, .tidybar .track i { transition: none; } }
 `;
 
   function applyStyles(root) {
@@ -338,7 +368,9 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     const refreshBtn = el('button', { class: 'iconbtn', type: 'button', 'data-act': 'refresh', title: '重新整理歌單' }, ['↻']);
     const titleBox = el('div', { class: 'title', text: 'ACE 批量下載' });
     const subBox = el('div', { class: 'sub', text: '分軌 · MIDI · WAV · 自動改名' });
-    const header = el('header', null, [titleBox, subBox, refreshBtn, closeBtn]);
+    const alphaInput = el('input', { type: 'range', min: '40', max: '100', step: '5', 'data-ui': 'alpha', 'aria-label': '面板不透明度' });
+    const alphaBox = el('label', { class: 'alpha', title: '面板不透明度（拖曳標題列可移動面板，雙擊標題列回到預設位置）' }, ['透明', alphaInput]);
+    const header = el('header', { title: '拖曳移動；雙擊回到預設位置' }, [titleBox, subBox, alphaBox, refreshBtn, closeBtn]);
 
     const optRows = el('div', { class: 'opts' });
     const typeLabels = { stems: '分軌', midi: 'MIDI', musicxml: 'MusicXML', mp3: 'MP3', wav: 'WAV', cover: '封面' };
@@ -494,7 +526,15 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       rootInput,
     });
 
-    fab.addEventListener('click', () => togglePanel(true));
+    // 拖曳後的 click 不算開關（拖動浮動按鈕不應順便打開面板）
+    fab.addEventListener('click', () => {
+      if (UI.suppressClick) {
+        UI.suppressClick = false;
+        return;
+      }
+      togglePanel(true);
+    });
+    setupDragAndAlpha({ fab, panel, header, alphaInput });
     closeBtn.addEventListener('click', () => togglePanel(false));
     refreshBtn.addEventListener('click', () => {
       if (S.running) return flash('下載進行中，完成後再重新整理');
@@ -555,10 +595,150 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     updateCounts();
   }
 
+  /* ------------------------------------------------------------------ *
+   * 介面偏好：面板不透明度、面板／浮動按鈕位置（chrome.storage aceUi）
+   * 拖曳：面板拖標題列、浮動按鈕直接拖；移動 >4px 才算拖曳（點一下照常開關）；
+   *       位置夾在視窗內，視窗縮放時重新夾；雙擊標題列回到預設位置。
+   * ------------------------------------------------------------------ */
+  const KEY_UI = 'aceUi';
+  const UI = { alpha: 92, panelPos: null, fabPos: null, suppressClick: false };
+  const EDGE = 8;
+
+  function clampPos(el, left, top) {
+    const w = el.offsetWidth || 0;
+    const h = el.offsetHeight || 0;
+    const maxLeft = Math.max(EDGE, window.innerWidth - w - EDGE);
+    const maxTop = Math.max(EDGE, window.innerHeight - h - EDGE);
+    return { left: Math.round(clamp(left, EDGE, maxLeft)), top: Math.round(clamp(top, EDGE, maxTop)) };
+  }
+  function placeAt(el, pos) {
+    if (!pos) {
+      el.style.left = el.style.top = el.style.right = el.style.bottom = '';
+      return;
+    }
+    const p = clampPos(el, pos.left, pos.top);
+    el.style.left = p.left + 'px';
+    el.style.top = p.top + 'px';
+    el.style.right = 'auto';
+    el.style.bottom = 'auto';
+  }
+  function applyAlpha(value) {
+    const pct = clamp(Math.round(Number(value) || 92), 40, 100);
+    UI.alpha = pct;
+    if (S.els.host) S.els.host.style.setProperty('--alpha', String(pct / 100));
+    const input = S.els.alphaInput;
+    if (input && Number(input.value) !== pct) input.value = String(pct);
+  }
+  function saveUi() {
+    return storageSet({ [KEY_UI]: { alpha: UI.alpha, panelPos: UI.panelPos, fabPos: UI.fabPos } });
+  }
+  async function loadUi() {
+    const got = await storageGet([KEY_UI]);
+    const data = (got && got[KEY_UI]) || {};
+    const okPos = (p) => (p && Number.isFinite(p.left) && Number.isFinite(p.top) ? { left: p.left, top: p.top } : null);
+    UI.panelPos = okPos(data.panelPos);
+    UI.fabPos = okPos(data.fabPos);
+    applyAlpha(data.alpha != null ? data.alpha : UI.alpha);
+    placeAt(S.els.fab, UI.fabPos);
+    if (!S.els.panel.hidden) placePanel();
+  }
+  /** 面板位置：使用者拖過就用記住的；否則若浮動按鈕被移過，貼在按鈕旁邊；都沒有用 CSS 預設 */
+  function placePanel() {
+    const panel = S.els.panel;
+    if (UI.panelPos) return placeAt(panel, UI.panelPos);
+    if (!UI.fabPos) return placeAt(panel, null);
+    const fab = S.els.fab.getBoundingClientRect();
+    const w = panel.offsetWidth;
+    const h = panel.offsetHeight;
+    const above = fab.top - h - 10;
+    const top = above >= EDGE ? above : fab.bottom + 10;
+    placeAt(panel, { left: fab.right - w, top });
+  }
+
+  function makeDraggable(handle, target, { onStart, onEnd, ignore } = {}) {
+    let drag = null;
+    handle.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      if (ignore && ignore(event)) return;
+      const rect = target.getBoundingClientRect();
+      drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, moved: false };
+      handle.setPointerCapture(event.pointerId);
+    });
+    handle.addEventListener('pointermove', (event) => {
+      if (!drag || event.pointerId !== drag.id) return;
+      const dx = event.clientX - drag.x;
+      const dy = event.clientY - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+      if (!drag.moved) {
+        drag.moved = true;
+        target.classList.add('dragging');
+        if (onStart) onStart();
+      }
+      placeAt(target, { left: drag.left + dx, top: drag.top + dy });
+    });
+    const finish = (event) => {
+      if (!drag || event.pointerId !== drag.id) return;
+      const moved = drag.moved;
+      drag = null;
+      target.classList.remove('dragging');
+      if (moved && onEnd) {
+        const rect = target.getBoundingClientRect();
+        onEnd({ left: Math.round(rect.left), top: Math.round(rect.top) });
+      }
+    };
+    handle.addEventListener('pointerup', finish);
+    handle.addEventListener('pointercancel', finish);
+  }
+
+  function setupDragAndAlpha({ fab, panel, header, alphaInput }) {
+    S.els.alphaInput = alphaInput;
+    alphaInput.value = String(UI.alpha);
+    alphaInput.addEventListener('input', () => applyAlpha(alphaInput.value));
+    alphaInput.addEventListener('change', () => saveUi());
+
+    makeDraggable(header, panel, {
+      // 標題列上的按鈕、滑桿照常操作，不觸發拖曳
+      ignore: (event) => !!event.target.closest('button, input, select, label'),
+      onEnd: (pos) => {
+        UI.panelPos = pos;
+        saveUi();
+      },
+    });
+    makeDraggable(fab, fab, {
+      onStart: () => {
+        UI.suppressClick = true;
+      },
+      onEnd: (pos) => {
+        UI.fabPos = pos;
+        saveUi();
+        // 面板沒被單獨拖過 → 跟著按鈕走
+        if (!panel.hidden && !UI.panelPos) placePanel();
+      },
+    });
+    header.addEventListener('dblclick', (event) => {
+      if (event.target.closest('button, input, select, label')) return;
+      UI.panelPos = null;
+      UI.fabPos = null;
+      placeAt(fab, null);
+      placeAt(panel, null);
+      saveUi();
+    });
+    let resizeTimer = 0;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        if (UI.fabPos) placeAt(fab, UI.fabPos);
+        if (!panel.hidden) placePanel();
+      }, 100);
+    });
+    loadUi().catch(() => {});
+  }
+
   function togglePanel(open) {
     const panel = S.els.panel;
     const shouldOpen = typeof open === 'boolean' ? open : panel.hidden;
     panel.hidden = !shouldOpen;
+    if (shouldOpen) placePanel();
     if (shouldOpen) {
       loadSettings().then(() => {
         if (!S.loaded && !S.loading) fetchSongs();
@@ -1215,7 +1395,8 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     return !!(LIVE.es && typeof EventSource === 'function' && LIVE.es.readyState === EventSource.OPEN);
   }
   function startLive() {
-    if (LIVE.es || typeof EventSource !== 'function') return;
+    // 只在歌單成功載入（＝已登入、拿到 ver）之後訂閱；未登入時訂閱只會一直 401 重連
+    if (LIVE.es || typeof EventSource !== 'function' || !S.libVer) return;
     let es;
     try {
       es = LIVE.es = new EventSource('/api/songs/events');
@@ -1453,6 +1634,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       } else {
         S.libVer = result.ver || S.libVer || 0;
         applySongs(result.songs);
+        if (S.host.ok || S.options.autoNew) startLive();
       }
     } catch (err) {
       S.loadError = '歌單載入失敗：' + ((err && err.message) || err);
@@ -1492,6 +1674,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       S.libVer = result.ver || S.libVer || 0;
       S.loaded = true;
       applySongs(result.songs);
+      if (S.host.ok || S.options.autoNew) startLive();
     } catch (err) {
       /* 背景刷新失敗不吵使用者，等下一次 */
     } finally {
