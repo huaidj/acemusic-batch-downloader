@@ -29,4 +29,4 @@ ACE Music 批量下載器（以下稱「本擴充功能」）只在使用者自�
 
 ## 聯絡
 
-有隱私相關問題請開 GitHub Issue：<https://github.com/yutianyu111602-glitch/acemusic-batch-downloader/issues>
+有隱私相關問題請開 GitHub Issue：<https://github.com/huaidj/acemusic-batch-downloader/issues>

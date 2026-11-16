@@ -2,7 +2,7 @@
 
 在 [acemusic.ai](https://acemusic.ai/create/) 的 Create 歌曲庫頁面加入一個面板，把一首或全部歌曲的**分軌（stems）、MIDI、MusicXML、MP3、WAV、封面**一次下載完，自動改名、分類；另外提供 CLI／MCP／常駐 Hub 給 agent 使用。
 
-[GitHub Releases](https://github.com/yutianyu111602-glitch/acemusic-batch-downloader/releases) · [隱私政策](https://yutianyu111602-glitch.github.io/acemusic-batch-downloader/privacy.html) · [MIT License](LICENSE)
+[GitHub Releases](https://github.com/huaidj/acemusic-batch-downloader/releases) · [隱私政策](https://huaidj.github.io/acemusic-batch-downloader/privacy.html) · [MIT License](LICENSE)
 
 > 只在使用者自己的登入 session 下操作自己的歌曲，不下載他人內容、不改站點資料。
 

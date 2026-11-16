@@ -109,7 +109,7 @@ No data is sent to the developer or third parties. Locally processed data is lis
 
 **Privacy Policy URL** [REQUIRED]
 
-https://yutianyu111602-glitch.github.io/acemusic-batch-downloader/privacy.html
+https://huaidj.github.io/acemusic-batch-downloader/privacy.html
 
 （原始文件：[PRIVACY.md](../PRIVACY.md)）
 
@@ -130,11 +130,11 @@ yutianyu111602@users.noreply.github.com
 
 **Support URL / Email** [RECOMMENDED]
 
-https://github.com/yutianyu111602-glitch/acemusic-batch-downloader/issues
+https://github.com/huaidj/acemusic-batch-downloader/issues
 
 **Homepage URL** [RECOMMENDED]
 
-https://github.com/yutianyu111602-glitch/acemusic-batch-downloader
+https://github.com/huaidj/acemusic-batch-downloader
 
 ## Version History
 
