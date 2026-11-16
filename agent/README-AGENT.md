@@ -2,6 +2,7 @@
 
 給 AI agent（Claude Code、Codex、DSH、Cursor…）用的無頭介面。agent 可以直接：
 
+新增唯讀工具 `ace_site_likes`：讀取 ACE 網頁原生拇指點讚（`meta.rating === "good"`）快照，`sync: true` 唯讀抓取全部分頁；任何一頁失敗都保留上次完整資料，不改網站上的讚。它不是面板心形收藏（`ace_favorites`），也不是播放器本機收藏。CLI：`site-likes [--sync]`。
 新增唯讀工具 `ace_download_index`：按歌曲 ID、下載來源及實存檔案核對，區分已下載、待核對、缺檔。
 新增 `ace_player`：啟動獨立本機播放器，回傳入口，不提交生成或新下載。CLI 對應 `local-index` 與 `player`。
 

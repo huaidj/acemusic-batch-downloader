@@ -158,6 +158,7 @@ CLI／Hub／MCP 的下載另外在 `%LOCALAPPDATA%\AceMusicDL\agent.log` 保存�
 | 等我做完下一首、下載好給我路徑 | `ace_wait_new_song { wait_download: true }` |
 | 最近發生什麼 | `ace_events` |
 | 核對歌曲下載證據 | `ace_download_index` |
+| 網站原生拇指點讚 | `ace_site_likes`（播放器「網站點讚」檢視同一來源） |
 | 開啟播放器入口 | `ace_player` |
 | 曲庫每類有多少 | `ace_library` |
 | 把剛做好的歌全部抓下來 | `ace_download { latest: 1, types: ["all"] }` → `ace_job_status` → `ace_tidy { wait: true }` |

@@ -51,6 +51,8 @@ input::placeholder { color: var(--faint); }
 .scope-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 9px 24px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; min-height: 45px; }
 #view-actions { display: flex; align-items: center; gap: 5px; }
 #view-actions button { min-height: 26px; padding: 3px 8px; font-size: 12px; }
+#view-actions { flex-wrap: wrap; justify-content: flex-end; }
+.site-likes-status { color: var(--muted); font-size: 12px; max-width: 46ch; overflow-wrap: anywhere; }
 .table-scroll { overflow: auto; flex: 1; min-height: 0; }
 table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 12px; }
 table.file-table { min-width: 860px; }

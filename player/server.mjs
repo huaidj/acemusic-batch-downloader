@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { config, replaceFileAtomic } from '../agent/lib/config.mjs';
 import { buildAudioLibrary } from '../agent/lib/audio-library.mjs';
+import { readSiteLikes, siteLikesView } from '../agent/lib/site-likes.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BODY_LIMIT = 256 * 1024;
@@ -150,6 +151,20 @@ export function createPlayerServer(options = {}) {
   const stateDir = options.stateDir || process.env.ACE_PLAYER_STATE_DIR || path.join(cfg.stateDir, 'player-state');
   const stateFile = path.join(stateDir, 'state.json');
   const buildLibrary = options.buildLibrary || buildAudioLibrary;
+  // 網站原生點讚：唯讀來源，與本機收藏 state.favorites 分開保存，不寫入播放器 CAS 狀態。
+  const readLikes = options.readSiteLikes || (async () => siteLikesView(await readSiteLikes(cfg)));
+  const syncLikes = options.syncSiteLikes || (async () => (await import('../agent/lib/ace.mjs')).syncSiteLikesFromSite(cfg));
+  const likesIntervalMs = options.siteLikesIntervalMs ?? Number(process.env.ACE_PLAYER_SITE_LIKES_INTERVAL_MS || 10 * 60 * 1000);
+  let likesSync = null;
+  let likesTimer = 0;
+  const runLikesSync = () => {
+    if (!likesSync) likesSync = Promise.resolve().then(syncLikes).finally(() => { likesSync = null; });
+    return likesSync;
+  };
+  const likesRevision = async () => {
+    // 輪詢用標記：點讚內容或最近一次同步結果有變才通知前端重讀。
+    try { const view = await readLikes(); return view.synced || view.lastAttempt ? `${view.revision || ''}|${view.lastAttempt?.at || ''}` : ''; } catch { return ''; }
+  };
   const hub = createHubProbe();
   const probeHub = options.probeHub || hub.probe;
   let snapshot;
@@ -261,7 +276,19 @@ export function createPlayerServer(options = {}) {
       const method = req.method || 'GET';
       if (url.pathname === '/api/health' && method === 'GET') return json(res, 200, { ok: true, service: 'huaidj-player', version: '1.7.5', pid: process.pid });
       if (url.pathname === '/api/selection' && method === 'GET') return json(res, 200, selection);
-      if (url.pathname === '/api/library/revision' && method === 'GET') return json(res, 200, { ok: true, revision: String((await library()).library.revision || '') });
+      if (url.pathname === '/api/library/revision' && method === 'GET') {
+        const [indexed, likes] = await Promise.all([library(), likesRevision()]);
+        return json(res, 200, { ok: true, revision: String(indexed.library.revision || ''), siteLikesRevision: likes });
+      }
+      if (url.pathname === '/api/site-likes' && method === 'GET') {
+        if (url.search) throw failure(400, '網站點讚查詢不接受參數', 'INVALID_REQUEST');
+        return json(res, 200, { ...(await readLikes()), syncing: !!likesSync });
+      }
+      if (url.pathname === '/api/site-likes/sync' && method === 'POST') {
+        const body = await readBody(req, true);
+        if (Object.keys(body).length) throw failure(400, '同步網站點讚不接受參數', 'INVALID_REQUEST');
+        return json(res, 200, await runLikesSync());
+      }
       if (url.pathname === '/api/select' && method === 'POST') {
         const body = await readBody(req);
         if (Object.keys(body).some((key) => key !== 'songId') || !validId(body.songId)) throw failure(400, '歌曲 ID 不正確', 'INVALID_REQUEST');
@@ -332,8 +359,19 @@ export function createPlayerServer(options = {}) {
       if (status >= 500) console.error('[HuaiDJ Player]', err.code || err.name || 'error');
     }
   });
+  // 自動同步只在明確要求時啟用（正式啟動入口）；測試與嵌入使用者不會意外連到站點。
+  if (options.autoSyncSiteLikes) {
+    server.once('listening', () => {
+      runLikesSync().catch(() => {});
+      if (likesIntervalMs > 0) {
+        likesTimer = setInterval(() => { runLikesSync().catch(() => {}); }, Math.max(60000, likesIntervalMs));
+        likesTimer.unref?.();
+      }
+    });
+  }
   server.on('close', () => {
     hub.close();
+    clearInterval(likesTimer);
     for (const watcher of libraryWatchers) watcher.close();
   });
   server.playerStateFile = stateFile;
@@ -343,7 +381,7 @@ export function createPlayerServer(options = {}) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.ACE_PLAYER_PORT || 8790);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('ACE_PLAYER_PORT 必須是 1 到 65535 的整數');
-  const server = createPlayerServer();
+  const server = createPlayerServer({ autoSyncSiteLikes: process.env.ACE_PLAYER_SITE_LIKES !== '0' });
   server.once('error', (err) => { console.error('播放器無法啟動：', err.code || err.name); process.exitCode = 1; });
   server.listen(port, '127.0.0.1', () => console.log(`HuaiDJ Player 1.7.5 http://127.0.0.1:${port}`));
 }

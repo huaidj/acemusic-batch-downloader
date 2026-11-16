@@ -11,6 +11,7 @@
     shuffle: '<path d="M3 6h3c4 0 8 12 12 12h3m-4-4 4 4-4 4M3 18h3c2 0 3-2 5-5m2-2c2-3 3-5 5-5h3m-4-4 4 4-4 4"/>',
     repeat: '<path d="m17 2 4 4-4 4M3 10V8a2 2 0 0 1 2-2h16M7 22l-4-4 4-4m14 0v2a2 2 0 0 1-2 2H3"/>',
     repeatOne: '<path d="m17 2 4 4-4 4M3 10V8a2 2 0 0 1 2-2h16M7 22l-4-4 4-4m14 0v2a2 2 0 0 1-2 2H3m9-8v5m-2-3 2-2"/>',
+    like: '<path d="M7 10v11H3V10Zm0 0 4-7a2 2 0 0 1 3 2l-1 4h6a2 2 0 0 1 2 2.3l-1.3 7A2 2 0 0 1 17.7 21H7"/>',
     heart: '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/>',
     library: '<path d="M4 3v18M9 3v18M15 4l5 16M3 21h18"/>',
     folder: '<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11H3Z"/>',
@@ -32,6 +33,11 @@
   let files = new Map();
   let tracks = new Map();
   let trackForSong = new Map();
+  // 網站原生點讚（唯讀，來自 /api/site-likes）；與本機收藏 state.favorites 分開。
+  let siteLikes = { synced: false, complete: false, revision: '', likes: [], fetchedAt: null, lastAttempt: null };
+  let siteOnlyTracks = new Map();
+  let siteLikesSyncing = false;
+  let siteLikesHead = '';
   let view = 'library';
   let selection = null;
   let inspectorTab = 'details';
@@ -117,6 +123,52 @@
     return file && trackForSong.get(file.songId) || [...tracks.values()].find((track) => (track.files || []).some((item) => item.id === fileId) || (track.stems && track.stems.files || []).some((item) => item.id === fileId)) || null;
   }
   function favorite(trackId) { return state.favorites.includes(trackId); }
+  function trackOfSong(songId) { return trackForSong.get(songId) || tracks.get(songId) || null; }
+  function siteLikedTrack(like) {
+    const local = trackOfSong(like.task_id);
+    if (local) return local;
+    // 尚未下載到本機的網站點讚仍要可見，不能因為曲庫找不到就算成 0。
+    // 佔位項目保持穩定（背景輪詢重讀點讚時不清空），讓已選取的詳細面板仍找得到它。
+    const title = like.title || '（未命名歌曲）';
+    const existing = siteOnlyTracks.get(like.task_id);
+    if (existing) { existing.title = title; return existing; }
+    const placeholder = { id: like.task_id, songId: like.task_id, title, files: [], stems: { count: 0, status: 'missing', files: [] }, formats: {}, siteOnly: true };
+    siteOnlyTracks.set(like.task_id, placeholder);
+    return placeholder;
+  }
+  function siteLikeStatusText() {
+    if (siteLikesSyncing) return '正在讀取網站點讚…';
+    const failed = siteLikes.lastAttempt && siteLikes.lastAttempt.ok === false;
+    if (!siteLikes.synced) return failed ? `網站點讚尚未同步：${siteLikes.lastAttempt.error || '讀取失敗'}` : '網站點讚尚未同步';
+    const at = siteLikes.fetchedAt ? new Date(siteLikes.fetchedAt).toLocaleString('zh-Hant', { hour12: false }) : '';
+    return `網站點讚 ${siteLikes.likes.length} 首 · 上次完整同步 ${at}${failed ? ` · 最近一次同步失敗，保留上次資料（${siteLikes.lastAttempt.error || ''}）` : ''}`;
+  }
+  async function loadSiteLikes(head) {
+    try {
+      const next = await request('/api/site-likes', { signal: AbortSignal.timeout(4000) });
+      if (!next || !Array.isArray(next.likes)) return false;
+      const changed = next.revision !== siteLikes.revision || next.fetchedAt !== siteLikes.fetchedAt || JSON.stringify(next.lastAttempt) !== JSON.stringify(siteLikes.lastAttempt);
+      siteLikes = next;
+      if (typeof head === 'string') siteLikesHead = head;
+      return changed;
+    } catch (_) { return false; }
+  }
+  async function syncSiteLikesNow() {
+    if (siteLikesSyncing) return;
+    siteLikesSyncing = true;
+    renderTable();
+    try {
+      const result = await request('/api/site-likes/sync', { method: 'POST', body: '{}' });
+      siteLikes = result;
+      notice(result.ok === false ? `同步網站點讚失敗：${result.error || '未知錯誤'}；已保留上次成功的資料。` : '');
+    } catch (error) {
+      notice(`同步網站點讚失敗：${error.message}；已保留上次成功的資料。`);
+    } finally {
+      siteLikesSyncing = false;
+      renderNavigation();
+      renderTable();
+    }
+  }
   function preferredFile(track) {
     if (!track) return null;
     const available = (track.files || []).map((item) => files.get(item.id) || item).filter(playable);
@@ -439,6 +491,7 @@
     if (view === 'local') rows = library.files.map((file) => ({ kind: 'file', id: file.id, file }));
     else if (view === 'history') rows = state.history.map((entry, index) => ({ kind: 'file', id: entry.fileId, file: files.get(entry.fileId), historyAt: entry.at, index })).filter((row) => row.file);
     else if (isPlaylistView()) rows = (activePlaylist()?.fileIds || []).map((id, index) => ({ kind: 'file', id, file: files.get(id), index }));
+    else if (view === 'site-likes') rows = siteLikes.likes.map((like) => { const track = siteLikedTrack(like); return { kind: 'track', id: track.id, track, siteLikedAt: like.created_at }; });
     else rows = library.tracks.filter((track) => view !== 'favorites' || favorite(track.id)).map((track) => ({ kind: 'track', id: track.id, track }));
     const needle = query.trim().toLocaleLowerCase();
     rows = rows.filter((row) => {
@@ -487,10 +540,10 @@
     return `<button class="icon-button" data-action="${action}" data-id="${esc(id)}" title="${esc(title)}" aria-label="${esc(title)}" ${extra}>${icon(glyph)}</button>`;
   }
   function renderNavigation() {
-    const navItems = [['library', '曲庫', 'library', library.tracks.length], ['local', '本機檔案', 'folder', library.files.length], ['favorites', '收藏', 'heart', state.favorites.filter((id) => tracks.has(id)).length], ['history', '播放歷史', 'history', state.history.length]];
+    const navItems = [['library', '曲庫', 'library', library.tracks.length], ['local', '本機檔案', 'folder', library.files.length], ['site-likes', '網站點讚', 'like', siteLikes.likes.length], ['favorites', '本機收藏', 'heart', state.favorites.filter((id) => tracks.has(id)).length], ['history', '播放歷史', 'history', state.history.length]];
     $('navigation').innerHTML = navItems.map(([id, name, glyph, count]) => `<button class="nav-button ${view === id ? 'active' : ''}" data-view="${id}" ${view === id ? 'aria-current="page"' : ''}>${icon(glyph)}<span>${name}</span><small>${count}</small></button>`).join('');
     $('playlists').innerHTML = state.playlists.map((list) => `<button class="nav-button ${view === `playlist:${list.id}` ? 'active' : ''}" data-view="playlist:${esc(list.id)}" title="${esc(list.name)}">${icon('playlist')}<span>${esc(list.name)}</span><small>${list.fileIds.length}</small></button>`).join('') || '<span class="empty-playlists">按 ＋ 建立播放清單</span>';
-    const title = ({ library: '曲庫', local: '本機檔案', favorites: '收藏', history: '播放歷史' })[view] || activePlaylist()?.name || '播放清單';
+    const title = ({ library: '曲庫', local: '本機檔案', 'site-likes': '網站點讚', favorites: '本機收藏', history: '播放歷史' })[view] || activePlaylist()?.name || '播放清單';
     $('view-title').textContent = title;
     $('hub-status').textContent = library.hub?.online ? 'ACE Hub 已連接' : '本機曲庫 · Hub 離線';
     $('hub-status').classList.toggle('online', !!library.hub?.online);
@@ -509,7 +562,7 @@
       const ownTrack = row.track || currentTrack(row.id);
       const selected = selection && selection.kind === row.kind && selection.id === row.id;
       const playing = activeFileId && (fileView ? activeFileId === row.id : ownTrack && currentTrack(activeFileId)?.id === ownTrack.id);
-      const subtitle = fileView ? row.file?.relativePath || '清單仍保留此項目，可移除' : file?.name || (formatStatus(row.track, 'mp3').status === 'uncertain' || formatStatus(row.track, 'wav').status === 'uncertain' ? '本機檔案來源待核對' : '尚無可播放的本機音檔');
+      const subtitle = fileView ? row.file?.relativePath || '清單仍保留此項目，可移除' : row.track?.siteOnly ? '網站點讚 · 尚無本機音檔' : file?.name || (formatStatus(row.track, 'mp3').status === 'uncertain' || formatStatus(row.track, 'wav').status === 'uncertain' ? '本機檔案來源待核對' : '尚無可播放的本機音檔');
       const rowId = `${row.kind}:${row.id}`;
       const buttons = file ? actionButton('queue-add', file.id, '加入播放佇列', 'plus') : '';
       return `<tr data-row="${esc(rowId)}" data-index="${row.index ?? ''}" class="${selected ? 'selected' : ''} ${playing ? 'playing' : ''}" tabindex="0" aria-selected="${!!selected}"><td class="play-cell">${actionButton('row-play', rowId, `播放 ${title}`, 'play', playable(file) ? '' : 'disabled')}</td><td class="title-cell"><span class="song-title" title="${esc(title)}">${esc(title)}</span><span class="song-subtitle" title="${esc(subtitle)}">${esc(subtitle)}</span></td><td class="duration-cell">${time(row.track?.duration || row.file?.duration)}</td>${fileView ? `<td>${esc(formatOf(row.file).toUpperCase() || '—')}</td><td class="duration-cell">${row.file ? size(row.file.bytes) : '—'}</td><td class="status-cell">${row.file ? fileStatusBadge(row.file) : statusBadge('missing')}</td>${isPlaylistView() ? `<td class="order-cell">${actionButton('playlist-up', row.index, '向上移動', 'up', row.index === 0 ? 'disabled' : '')}${actionButton('playlist-down', row.index, '向下移動', 'down', row.index === activePlaylist().fileIds.length - 1 ? 'disabled' : '')}${actionButton('playlist-remove', row.index, '從清單移除', 'close')}</td>` : ''}` : `<td class="status-cell">${statusBadge(formatStatus(row.track, 'mp3').status, formatStatus(row.track, 'mp3').count)}</td><td class="status-cell">${statusBadge(formatStatus(row.track, 'wav').status, formatStatus(row.track, 'wav').count)}</td><td class="status-cell">${statusBadge(row.track.stems?.status || 'missing', row.track.stems?.count)}</td>`}<td class="row-actions">${buttons}${ownTrack ? actionButton('favorite', ownTrack.id, favorite(ownTrack.id) ? '取消收藏' : '收藏', 'heart', `aria-pressed="${favorite(ownTrack.id)}"`) : ''}</td></tr>`;
@@ -519,9 +572,10 @@
     if (rows.some((row) => playable(row.file || preferredFile(row.track)))) actions.push('<button data-command="play-visible">播放目前清單</button>');
     if (isPlaylistView()) actions.push('<button data-command="rename-playlist">改名</button><button data-command="delete-playlist">刪除清單</button>');
     if (view === 'history' && state.history.length) actions.push('<button data-command="clear-history">清除歷史</button>');
+    if (view === 'site-likes') actions.push(`<span class="site-likes-status" role="status">${esc(siteLikeStatusText())}</span><button data-command="sync-site-likes" ${siteLikesSyncing ? 'disabled' : ''}>同步網站點讚</button>`);
     $('view-actions').innerHTML = actions.join('');
     $('empty-state').hidden = rows.length > 0;
-    $('empty-state').innerHTML = `<strong>${query || statusFilter !== 'all' || formatFilter !== 'all' ? '沒有符合的項目' : view === 'favorites' ? '還沒有收藏歌曲' : isPlaylistView() ? '這張清單還沒有音樂' : view === 'history' ? '播放過的檔案會留在這裡' : '本機曲庫目前沒有歌曲'}</strong>${isPlaylistView() ? '選一首歌曲，在右側加入這張清單。' : '調整篩選條件，或刷新本機曲庫。'}`;
+    $('empty-state').innerHTML = `<strong>${query || statusFilter !== 'all' || formatFilter !== 'all' ? '沒有符合的項目' : view === 'site-likes' ? (siteLikes.synced ? '網站上還沒有點讚的歌曲' : '尚未同步網站點讚') : view === 'favorites' ? '還沒有本機收藏歌曲' : isPlaylistView() ? '這張清單還沒有音樂' : view === 'history' ? '播放過的檔案會留在這裡' : '本機曲庫目前沒有歌曲'}</strong>${isPlaylistView() ? '選一首歌曲，在右側加入這張清單。' : view === 'site-likes' && !query && statusFilter === 'all' && formatFilter === 'all' ? '在 acemusic.ai 歌曲卡片按拇指向上，然後按「同步網站點讚」。這裡只讀取，不會更改網站上的讚。' : '調整篩選條件，或刷新本機曲庫。'}`;
   }
   function selectRow(kind, id) {
     selection = { kind, id };
@@ -538,7 +592,7 @@
     $('queue-tab').setAttribute('aria-selected', String(inspectorTab === 'queue'));
     $('detail-content').hidden = inspectorTab !== 'details';
     $('queue-content').hidden = inspectorTab !== 'queue';
-    const selectedTrack = selection?.kind === 'track' ? tracks.get(selection.id) : selection ? currentTrack(selection.id) : null;
+    const selectedTrack = selection?.kind === 'track' ? tracks.get(selection.id) || siteOnlyTracks.get(selection.id) : selection ? currentTrack(selection.id) : null;
     const selectedFile = selection?.kind === 'file' ? files.get(selection.id) : preferredFile(selectedTrack);
     if (!selection) $('detail-content').innerHTML = '<div class="inspector-empty">選一首歌曲，查看實際檔案、格式與下載狀態。<br><br>「有紀錄」與「待核對」不代表來源已驗證。</div>';
     else {
@@ -627,7 +681,10 @@
     libraryPolling = true;
     try {
       const head = await request('/api/library/revision', { signal: AbortSignal.timeout(4000) });
-      if (!head.ok || typeof head.revision !== 'string' || !head.revision || head.revision === library.revision || libraryRefreshDeferred()) return;
+      if (!head.ok || typeof head.revision !== 'string') return;
+      // 網站點讚只更新導覽計數與該檢視，不碰 audio.src、佇列、草稿或播放進度。
+      if (typeof head.siteLikesRevision === 'string' && head.siteLikesRevision !== siteLikesHead && !libraryRefreshDeferred() && await loadSiteLikes(head.siteLikesRevision)) { renderNavigation(); if (view === 'site-likes') renderTable(); }
+      if (!head.revision || head.revision === library.revision || libraryRefreshDeferred()) return;
       await loadLibrary(false, true);
     } catch (_) { /* Quiet refresh must never replace playback or an editing draft with an error screen. */ }
     finally { libraryPolling = false; }
@@ -970,6 +1027,7 @@
       const list = activePlaylist();
       if (list && confirm(`刪除播放清單「${list.name}」？本機音檔會保留。`)) { state.playlists = state.playlists.filter((item) => item.id !== list.id); changed(); switchView('library'); }
     } else if (command === 'clear-history') { state.history = []; changed(); renderAll(); }
+    else if (command === 'sync-site-likes') syncSiteLikesNow();
   });
   $('table-body').addEventListener('dblclick', (event) => {
     if (event.target.closest('button')) return;
@@ -1087,7 +1145,7 @@
     $('play-format').value = preferredFormat;
     renderTransport();
     try {
-      const [libraryData, stateData] = await Promise.all([request('/api/library'), request('/api/state')]);
+      const [libraryData, stateData] = await Promise.all([request('/api/library'), request('/api/state'), loadSiteLikes()]);
       indexLibrary(libraryData);
       state = normalizedState(stateData);
       lastSavedSnapshot = canonicalSnapshot(state);

@@ -82,6 +82,11 @@ const TOOLS = [
         inputSchema: { type: 'object', properties: { root: { type: 'string' }, full: { type: 'boolean' } }, additionalProperties: false },
     },
     {
+        name: 'ace_site_likes',
+        description: '讀取 ACE 網頁原生「拇指向上」點讚（meta.rating=good）快照；sync=true 時唯讀抓取全部分頁，完整才替換，不修改網站上的讚。與面板心形收藏、播放器本機收藏不同。',
+        inputSchema: { type: 'object', properties: { sync: { type: 'boolean' } }, additionalProperties: false },
+    },
+    {
         name: 'ace_player',
         description: '啟動獨立本機播放器服務並回傳入口；song_id可定位歌曲，不自動播放、不下載或生成。',
         inputSchema: { type: 'object', properties: { song_id: { type: 'string' } }, additionalProperties: false },
@@ -363,6 +368,7 @@ async function callTool(name, args) {
             try { return await hubCall('/download-index?root=' + encodeURIComponent(options.root) + (options.full ? '&full=1' : ''), { timeoutMs: 30000 }); }
             catch { return ACE.localDownloadIndex(config(), options); }
         }
+        case 'ace_site_likes': return args.sync ? ACE.syncSiteLikesFromSite(config()) : ACE.siteLikes(config());
         case 'ace_player': return ACE.startPlayer(config(), { songId: args.song_id || '' });
         case 'ace_session_status': {
             const [status, page] = await Promise.all([ACE.sessionStatus(), ACE.pageChannelStatus()]);

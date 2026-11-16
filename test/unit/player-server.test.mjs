@@ -202,3 +202,60 @@ test('player revision endpoint observes completed background files and metadata 
   assert.equal((await request(port, '/api/library')).json.files.length, 2);
   assert.deepEqual((await request(port, '/api/state')).json, playback, 'background indexing does not alter playback state');
 });
+
+test('site likes are a separate read-only source: sync never touches local favorites or the CAS state', async (t) => {
+  const f = await fixture(t);
+  let likes = { ok: true, synced: false, complete: false, revision: '', count: 0, likes: [], fetchedAt: null, lastAttempt: null };
+  let syncs = 0;
+  const { port } = await f.start({
+    readSiteLikes: async () => likes,
+    syncSiteLikes: async () => {
+      syncs += 1;
+      likes = { ok: true, synced: true, complete: true, revision: 'rev-1', count: 2, fetchedAt: '2026-11-17T00:00:00Z', lastAttempt: { at: '2026-11-17T00:00:00Z', ok: true },
+        likes: [{ task_id: 'song-fixture', title: 'Fixture', model: 'm', created_at: 2 }, { task_id: 'not-downloaded', title: 'Remote only', model: 'm', created_at: 1 }] };
+      return likes;
+    },
+  });
+  const saved = await request(port, '/api/state', { method: 'PUT', body: { expectedRevision: 0, favorites: ['song-fixture'] } });
+  assert.equal(saved.status, 200);
+  const before = await request(port, '/api/site-likes');
+  assert.equal(before.status, 200); assert.equal(before.json.synced, false); assert.equal(before.json.syncing, false);
+  const head0 = await request(port, '/api/library/revision');
+  assert.equal(head0.json.siteLikesRevision, '');
+  const synced = await request(port, '/api/site-likes/sync', { method: 'POST' });
+  assert.equal(synced.status, 200); assert.equal(syncs, 1);
+  assert.deepEqual(synced.json.likes.map((item) => item.task_id), ['song-fixture', 'not-downloaded']);
+  const head1 = await request(port, '/api/library/revision');
+  assert.equal(head1.json.siteLikesRevision, 'rev-1|2026-11-17T00:00:00Z');
+  assert.equal(head1.json.revision, 'fixture-index');
+  const state = await request(port, '/api/state');
+  assert.deepEqual(state.json.favorites, ['song-fixture']);
+  assert.equal(state.json.revision, 1);
+  assert.equal((await request(port, '/api/site-likes/sync', { method: 'POST', body: { unlike: 'song-fixture' } })).status, 400);
+  assert.equal((await request(port, '/api/site-likes?x=1')).status, 400);
+  assert.equal((await request(port, '/api/site-likes', { method: 'POST', body: {} })).status, 404);
+});
+
+test('concurrent site-like sync requests share one in-flight read', async (t) => {
+  const f = await fixture(t);
+  let syncs = 0; let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const view = { ok: true, synced: true, complete: true, revision: 'r', count: 0, likes: [], fetchedAt: 'x', lastAttempt: null };
+  const { port } = await f.start({ readSiteLikes: async () => view, syncSiteLikes: async () => { syncs += 1; await gate; return view; } });
+  const pending = [request(port, '/api/site-likes/sync', { method: 'POST' }), request(port, '/api/site-likes/sync', { method: 'POST' })];
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal((await request(port, '/api/site-likes')).json.syncing, true);
+  release();
+  const results = await Promise.all(pending);
+  assert.ok(results.every((item) => item.status === 200));
+  assert.equal(syncs, 1);
+});
+
+test('site-like auto sync is off unless explicitly enabled', async (t) => {
+  const f = await fixture(t);
+  let syncs = 0;
+  await f.start({ readSiteLikes: async () => ({ likes: [] }), syncSiteLikes: async () => { syncs += 1; return {}; } });
+  await f.start({ autoSyncSiteLikes: true, siteLikesIntervalMs: 0, readSiteLikes: async () => ({ likes: [] }), syncSiteLikes: async () => { syncs += 1; return {}; } });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(syncs, 1);
+});

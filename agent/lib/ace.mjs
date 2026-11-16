@@ -13,6 +13,7 @@ import { sameFileContent, moveFileSafely, recordRelocations } from './file-ops.m
 export { localDownloadIndex } from './local-index-service.mjs';
 export { startPlayer } from './player-process.mjs';
 import { assertDirectGenerationPermission } from './provider-policy.mjs';
+import * as SiteLikes from './site-likes.mjs';
 
 const { N, P, PR } = loadShared();
 const SNAPSHOT_NAME = 'library-snapshot';
@@ -645,6 +646,30 @@ export async function pageChannelStatus(cfg = config(), { freshMs = 10 * 60 * 10
         fresh: page ? ageMs < freshMs : false,
         unavailable: unavailableCount,
     };
+}
+
+/* ------------------------------------------------------------------ *
+ * 網站原生點讚（唯讀）。不走 listSongs 的快照回落：點讚必須來自完整的即時分頁。
+ * ------------------------------------------------------------------ */
+export async function syncSiteLikesFromSite(cfg = config(), { pageLimit = 50, maxPages = 200 } = {}) {
+    let session;
+    try {
+        session = await loadSession(cfg);
+    } catch (err) {
+        return SiteLikes.syncSiteLikes(cfg, async () => { throw Object.assign(new Error(err.message), { code: 'NO_SESSION' }); }, { maxPages });
+    }
+    const fetchPage = async (after) => {
+        const params = new URLSearchParams({ limit: String(pageLimit), sort: 'new' });
+        if (after) params.set('after', after);
+        const res = await aceFetch(cfg, session, '/api/songs?' + params.toString(), { method: 'GET', headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(30000) });
+        const data = res.status === 200 ? await res.json().catch(() => null) : (await res.body?.cancel(), null);
+        return { status: res.status, data };
+    };
+    return SiteLikes.syncSiteLikes(cfg, fetchPage, { maxPages });
+}
+
+export async function siteLikes(cfg = config()) {
+    return SiteLikes.siteLikesView(await SiteLikes.readSiteLikes(cfg));
 }
 
 function withKnown(songs, known) {

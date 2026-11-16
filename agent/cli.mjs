@@ -37,6 +37,7 @@ function usage() {
   node cli.mjs prompt [--model id] [--mode idea|custom] [--seed N] [--lock-a A07] [--lock-b B03] [--count 6]  隨機提示詞（依模型＋模式選詞典）
   node cli.mjs library [--sizes] [--json]      曲庫分類總覽（成品MP3/WAV、採樣包各樂器、MIDI…）
   node cli.mjs local-index [--root 名稱] [--full] [--json] 按歌曲ID核對真實檔案，不猜同名
+  node cli.mjs site-likes [--sync]   ACE 網頁原生拇指點讚快照；--sync 唯讀抓取全部分頁，不改網站上的讚
   node cli.mjs player [--background] [--json] 啟動獨立本機播放器
   node cli.mjs events [--since seq] [--type t]  中樞事件（新歌、自動下載、下載完成）
   node cli.mjs wait [--timeout 秒]             等待下一首新歌（需 Hub＋開著站點分頁）
@@ -141,6 +142,7 @@ async function main() {
             return printJson({ ok: false, code: err.code || 'LOCAL_INDEX_ERROR', error: err.message || '本機索引未就緒' });
         }
     }
+    if (cmd === 'site-likes') return printJson(args.flags.sync ? await ACE.syncSiteLikesFromSite(cfg) : await ACE.siteLikes(cfg));
     if (cmd === 'player') return printJson(await ACE.startPlayer(cfg, { songId: args.flags['focus-id'] ? decodeURIComponent(String(args.flags['focus-id'])) : '' }));
 
     if (!cmd || cmd === 'help' || cmd === '--help') return usage();
