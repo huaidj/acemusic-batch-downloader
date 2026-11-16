@@ -138,7 +138,7 @@ function waitForEvent(match, timeoutMs) {
 }
 
 /* 頁面 → agent：面板寫入 page-songs／page-unavailable／page-events 時立即處理並推 SSE（不等 TTL） */
-const PAGE_FILES = new Set(['page-songs.json', 'page-unavailable.json', 'page-events.json']);
+const PAGE_FILES = new Set(['page-songs.json', 'page-unavailable.json', 'page-events.json', 'page-favorites.json']);
 const pageTimers = new Map();
 let pageWatcher = null;
 let lastPageEvent = null;
@@ -156,6 +156,7 @@ function startPageWatch() {
           ingestPageEvents().catch(() => {});
           return;
         }
+        if (name === 'page-favorites.json') return; // 只廣播 page 事件；收藏不影響曲庫快照
         snapshotAt = 0;
         refreshSnapshot(true).catch(() => {});
       }, name === 'page-events.json' ? 60 : 200));
@@ -357,6 +358,7 @@ const ENDPOINTS = [
   { method: 'GET', path: '/songs', query: 'q, undownloaded=1, limit, compact=0', desc: '歌單（記憶體快照）' },
   { method: 'GET', path: '/locate', query: 'latest, q, song, views=1, limit_files', desc: '歌曲 → 本機真實目錄與檔案' },
   { method: 'GET', path: '/library', query: 'sizes=1', desc: '曲庫分類總覽' },
+  { method: 'GET', path: '/favorites', desc: '面板的收藏清單（新 → 舊）' },
   { method: 'GET', path: '/prompts/random', query: 'model, mode(idea|custom), seed, lock_a, lock_b, count', desc: '隨機提示詞（依模型＋模式選詞典；不提交生成）' },
   { method: 'GET', path: '/page', desc: '頁面通道健康度' },
   { method: 'GET', path: '/page/events', query: 'since, type, limit', desc: '事件環' },
@@ -384,7 +386,7 @@ function capabilities() {
     sse: ['job', 'progress', 'snapshot', 'page', 'event'],
     fileTypes: [...ACE.FILE_TYPES, 'all'],
     selector: '{ song_ids?: string[], query?: string, latest?: number, all?: boolean }（無條件且 all≠true → 不選任何歌）',
-    pageFiles: ['page-songs.json', 'page-unavailable.json', 'page-events.json'],
+    pageFiles: ['page-songs.json', 'page-unavailable.json', 'page-events.json', 'page-favorites.json'],
     auth: { token: !!TOKEN, header: 'X-Hub-Token', extensionAllowlist: EXT_ALLOW.size ? [...EXT_ALLOW] : null },
   };
 }
@@ -508,6 +510,10 @@ const server = http.createServer(async (req, res) => {
       const already = since ? EVENTS.find((e) => e.seq > since && match(e)) : null;
       const event = already || (await waitForEvent(match, timeoutMs));
       return json(res, 200, { ok: true, timedOut: !event, event });
+    }
+
+    if (pathname === '/favorites' && req.method === 'GET') {
+      return json(res, 200, await ACE.readFavorites(cfg));
     }
 
     if (pathname === '/prompts/random' && req.method === 'GET') {

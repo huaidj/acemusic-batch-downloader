@@ -94,6 +94,11 @@ const TOOLS = [
         },
     },
     {
+        name: 'ace_favorites',
+        description: '面板電臺裡收藏的歌曲清單（新 → 舊）。要拿檔案路徑再用 ace_locate { song_id }。',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    },
+    {
         name: 'ace_random_prompt',
         description: '隨機提示詞（12×12 風格矩陣，依「音樂模型＋模式」選詞典與字數上限）。回傳文字＋追溯資訊（格子、seed、詞典版本、字數／上限）。目前只有 acemusic-v1.1 有驗證過的詞典；其他模型回 no_dictionary（不硬截斷、不亂填）。只產生文字，不提交生成、不扣 credit。',
         inputSchema: {
@@ -349,6 +354,13 @@ async function callTool(name, args) {
                 return { ...(await hubCall('/library' + (args.sizes ? '?sizes=1' : ''), { timeoutMs: 15000 })), hub: true };
             } catch {
                 return await ACE.libraryOverview(undefined, { withSizes: !!args.sizes });
+            }
+        }
+        case 'ace_favorites': {
+            try {
+                return { ...(await hubCall('/favorites', { timeoutMs: 1500 })), hub: true };
+            } catch {
+                return await ACE.readFavorites();
             }
         }
         case 'ace_random_prompt': {

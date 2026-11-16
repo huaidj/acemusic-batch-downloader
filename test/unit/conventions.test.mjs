@@ -149,3 +149,12 @@ test('來源限制：ACE_HUB_EXTENSIONS 只允許清單內擴充功能', async (
     hub.child.kill();
   }
 });
+
+test('🔒 面板匯出的每個頁面檔名都在 background 白名單（否則會被靜默拒絕）', () => {
+  const content = read('src/content.js');
+  const used = [...content.matchAll(/type: 'ACE_HOST_EXPORT_PAGE',\s*name: '([a-z-]+)'/g)].map((m) => m[1]);
+  assert.ok(used.length >= 3, '應找到面板的頁面匯出呼叫：' + used.join(','));
+  const whitelist = arrayLiteral(read('src/background.js'), 'PAGE_EXPORT_NAMES');
+  const missing = [...new Set(used)].filter((n) => !whitelist.includes(n));
+  assert.deepEqual(missing, [], 'background.js 的 PAGE_EXPORT_NAMES 缺少：' + missing.join(','));
+});

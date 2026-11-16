@@ -92,6 +92,13 @@ export async function readPageSongs(cfg = config()) {
     return { savedAt: Number(raw.savedAt) || 0, songs };
 }
 
+/** 面板的收藏清單（page-favorites.json）：新 → 舊；附上歌名與（若歌單裡有）本機狀態 */
+export async function readFavorites(cfg = config()) {
+    const raw = await readJson(path.join(cfg.stateDir, 'page-favorites.json'), null);
+    const list = raw && Array.isArray(raw.favorites) ? raw.favorites : [];
+    return { ok: true, savedAt: raw && raw.savedAt ? new Date(raw.savedAt).toISOString() : null, total: list.length, favorites: list.map((f) => ({ task_id: f.task_id, title: f.title || '', at: f.at || 0 })) };
+}
+
 /** 面板送來的頁面事件（song_new／auto_download／download_done），由舊到新 */
 export async function readPageEvents(cfg = config(), { since = 0 } = {}) {
     const raw = await readJson(path.join(cfg.stateDir, 'page-events.json'), null);

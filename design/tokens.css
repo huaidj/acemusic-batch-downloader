@@ -1,0 +1,97 @@
+/* design/tokens.css — 視覺的唯一真源（面板、電臺、之後的 SUB RITUAL 前臺共用）
+ *
+ * 規則：
+ *  - 顏色／字級／間距／圓角／動態只在這裡定義；元件只能引用變數，不寫死色碼。
+ *  - 擴充功能面板的 CSS 是 JS 字串（Shadow DOM，用 :host），無法 @import；
+ *    它的 :host 變數必須與下方「共用色彩」逐項相同——test/unit/design.test.mjs 會比對，不一致測試失敗。
+ *  - 改色：先改這裡 → 同步 src/content.js 的 :host → 跑測試 → 更新 docs/DESIGN-SYSTEM.md 的色卡。
+ *  - 設計原則見 docs/DESIGN-SYSTEM.md（安靜的工具，不是聊天玩具；單一低彩度強調色；不用漸層與發光）。
+ */
+
+:root {
+  /* ── 共用色彩（深色，預設）。面板 :host 必須逐項一致 ── */
+  --bg-rgb: 24, 23, 21;              /* 暖石墨；半透明時用 rgba(var(--bg-rgb), var(--alpha)) */
+  --alpha: .92;
+  --text: #ece8e1;
+  --muted: #a8a299;
+  --faint: #7a756d;
+  --line: rgba(255, 248, 235, .08);
+  --line-strong: rgba(255, 248, 235, .14);
+  --surface: rgba(255, 248, 235, .04);
+  --surface-hover: rgba(255, 248, 235, .08);
+  --field: rgba(0, 0, 0, .28);
+  --accent: #d2a24c;                 /* 唯一強調色：低彩度琥珀 */
+  --accent-hover: #ddb062;
+  --accent-ink: #1c1913;             /* 強調色上的文字 */
+  --accent-soft: rgba(210, 162, 76, .14);
+  --ok: #9fc49b;
+  --ok-soft: rgba(159, 196, 155, .12);
+  --warn: #e0b45c;
+  --warn-soft: rgba(224, 180, 92, .12);
+  --err: #e3907f;
+  --font: system-ui, "Segoe UI", "Microsoft JhengHei", "PingFang TC", sans-serif;
+
+  /* ── 前臺專用（面板不需要）── */
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  /* 字級（px）：資訊密度高的工具介面，最大 20。行高 1.45（內文）／1.2（標題） */
+  --fs-1: 10.5px;  /* 輔助、計數 */
+  --fs-2: 11.5px;  /* 次要 */
+  --fs-3: 12.5px;  /* 內文（控制項） */
+  --fs-4: 14px;    /* 區塊標題 */
+  --fs-5: 17px;    /* 頁面標題 */
+  --fs-6: 20px;    /* 僅限空狀態／大數字 */
+
+  /* 間距：4px 網格 */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+
+  /* 圓角 */
+  --r-1: 6px;   /* 輸入框、晶片 */
+  --r-2: 8px;   /* 按鈕 */
+  --r-3: 10px;  /* 主按鈕、卡片 */
+  --r-4: 14px;  /* 面板、對話框 */
+  --r-pill: 999px;
+
+  /* 陰影：只有兩層，不發光 */
+  --shadow-1: 0 6px 18px rgba(0, 0, 0, .35);
+  --shadow-2: 0 18px 50px rgba(0, 0, 0, .45);
+
+  /* 動態：只做狀態回饋，≤150ms；尊重 prefers-reduced-motion */
+  --dur-1: 80ms; --dur-2: 120ms; --dur-3: 150ms;
+  --ease: cubic-bezier(.2, .0, .2, 1);
+
+  /* 版面 */
+  --player-h: 64px;         /* 底部固定播放器高度（前臺） */
+  --content-max: 1180px;
+}
+
+/* 淺色主題（前臺可選；面板目前只有深色）。同一個強調色，亮度反轉的是表面與文字 */
+:root[data-theme="light"] {
+  --bg-rgb: 247, 244, 238;
+  --text: #25221d;
+  --muted: #5d574d;
+  --faint: #8a8478;
+  --line: rgba(37, 34, 29, .1);
+  --line-strong: rgba(37, 34, 29, .18);
+  --surface: rgba(37, 34, 29, .04);
+  --surface-hover: rgba(37, 34, 29, .08);
+  --field: rgba(255, 255, 255, .7);
+  --accent: #a8792c;
+  --accent-hover: #946a25;
+  --accent-ink: #fffaf0;
+  --accent-soft: rgba(168, 121, 44, .14);
+  --ok: #4f7b4b; --ok-soft: rgba(79, 123, 75, .12);
+  --warn: #8f6514; --warn-soft: rgba(143, 101, 20, .12);
+  --err: #b5503d;
+  --shadow-1: 0 6px 18px rgba(37, 34, 29, .12);
+  --shadow-2: 0 18px 50px rgba(37, 34, 29, .18);
+}
+
+/* 全域可及性：所有可聚焦元素有清楚的鍵盤焦點 */
+:where(button, input, select, textarea, summary, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

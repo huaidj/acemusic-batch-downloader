@@ -15,7 +15,7 @@
 - **狀態顯示**：每首歌顯示已下載／部分／未下載；「只看未下載」過濾
 - **即時同步＋新歌自動下載**：訂閱站點推送，新歌完成約 50 ms 出現；可選「新歌自動下載」（MIDI／MusicXML 需另勾，因可能扣 credit）
 - **Agent 中樞**：CLI、MCP（16 個工具，含 `ace_locate` 找最新歌曲真實路徑、`ace_wait_new_song` 等新歌）、常駐 Agent Hub（127.0.0.1:8788，熱路徑 <2 ms）
-- 完整說明：[docs/GUIDE.md](docs/GUIDE.md)
+- 完整說明：[docs/GUIDE.md](docs/GUIDE.md)｜開發規範：[docs/CONVENTIONS.md](docs/CONVENTIONS.md)｜設計系統：[docs/DESIGN-SYSTEM.md](docs/DESIGN-SYSTEM.md)
 - **可選本機工具**：native messaging host 負責改名／搬檔／叫用 CLI（不裝也能下載）
 
 ## 安裝
