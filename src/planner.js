@@ -79,6 +79,7 @@
     const folders = { ...((state && state.folderByTask) || {}) };
     const owners = { ...((state && state.ownerByFolder) || {}) };
     const history = (state && state.history) || {};
+    const unavailable = (state && state.unavailable) || {};
     const tasks = [];
     const warnings = [];
     const seen = new Set();
@@ -117,6 +118,11 @@
         });
         const hist = history[song.task_id] && history[song.task_id].files && history[song.task_id].files[file.key];
         file.skip = !opts.force && !!hist && hist.path === file.path;
+        // 站點已回 no_download 的檔案（例如這首歌沒有 MIDI）：不再請求；force 可重試
+        if (!file.skip && !opts.force && isUnavailable(unavailable, song.task_id, file.kind)) {
+          file.skip = true;
+          file.unavailable = true;
+        }
         total += 1;
         if (file.skip) skipped += 1;
         else toDownload += 1;
@@ -215,8 +221,51 @@
     return h;
   }
 
+  /** 站點不提供的檔案種類（no_download）：{ [taskId]: { [kind]: { code, at } } } */
+  function isUnavailable(map, taskId, kind) {
+    return !!(map && taskId && kind && map[taskId] && map[taskId][kind]);
+  }
+
+  /** 記一筆「站點不提供」（回傳新物件，不修改傳入值） */
+  function markUnavailable(map, taskId, kind, code) {
+    const next = { ...(map || {}) };
+    if (!taskId || !kind) return next;
+    next[taskId] = { ...(next[taskId] || {}), [kind]: { code: code || 'no_download', at: Date.now() } };
+    return next;
+  }
+
+  /** 合併多個來源（面板 storage＋agent-state），同一項取較新的紀錄 */
+  function mergeUnavailable(...maps) {
+    const out = {};
+    for (const map of maps) {
+      for (const [taskId, kinds] of Object.entries(map || {})) {
+        if (!kinds || typeof kinds !== 'object') continue;
+        for (const [kind, info] of Object.entries(kinds)) {
+          const prev = out[taskId] && out[taskId][kind];
+          if (!prev || Number((info && info.at) || 0) > Number(prev.at || 0)) {
+            out[taskId] = { ...(out[taskId] || {}), [kind]: info || { code: 'no_download', at: 0 } };
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 狀態明細的一項：站點不提供且本機沒有 → 標 N/A（不計入 total，不偽裝已下載）；
+   * 檔案其實存在就照常算已下載。
+   */
+  function statusItem(type, label, have, na) {
+    if (na && !have) return { type, label, have: 0, total: 0, done: true, na: true };
+    return { type, label, have: have ? 1 : 0, total: 1, done: !!have };
+  }
+
   const api = {
     FILE_KINDS,
+    isUnavailable,
+    markUnavailable,
+    mergeUnavailable,
+    statusItem,
     KIND_LABELS,
     normalizeOptions,
     isDone,

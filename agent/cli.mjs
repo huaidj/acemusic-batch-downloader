@@ -28,7 +28,7 @@ async function hubTry(pathname, { method = 'GET', body, timeoutMs = 1200 } = {})
 }
 
 function usage() {
-    console.log(`ACE Music 批量下載器 CLI  v1.6.4
+    console.log(`ACE Music 批量下載器 CLI  v1.6.5
 
 用法：
   node cli.mjs doctor                         檢查登入狀態與環境
@@ -506,7 +506,7 @@ async function main() {
             console.log(`  ${song.task_id}  ${song.title}`);
             console.log(`     分軌：${song.stems ? song.stems.count + ' 軌（mode ' + song.stems.mode + '：' + song.stems.types.join(', ') + '）' : '無'}  MIDI：${song.midi_available ? '有' : '無'}  封面：${song.cover ? '有' : '無'}`);
             const d = song.downloaded || { have: 0, total: 0, detail: [] };
-            const detail = (d.detail || []).map((item) => (item.total > 1 ? `${item.label} ${item.have}/${item.total}` : `${item.label}${item.done ? '✓' : '✗'}`)).join('、');
+            const detail = (d.detail || []).map((item) => (item.na ? `${item.label} 不可用` : item.total > 1 ? `${item.label} ${item.have}/${item.total}` : `${item.label}${item.done ? '✓' : '✗'}`)).join('、');
             const status = d.allDone ? '已下載' : d.any ? `部分 ${d.have}/${d.total}` : '未下載';
             console.log(`     下載：${status}${detail ? '（' + detail + '）' : ''}`);
         }

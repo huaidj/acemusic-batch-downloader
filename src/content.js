@@ -37,6 +37,7 @@
   const KEY_SETTINGS = 'aceSettings';
   const KEY_HISTORY = 'aceHistory';
   const KEY_FOLDERS = 'aceFolders';
+const KEY_UNAVAILABLE = 'aceUnavailable';
 
   const S = {
     options: { ...DEFAULT_OPTIONS },
@@ -71,6 +72,8 @@
     agentAliases: {},
     removedPaths: {},
     removedRel: new Map(),
+    unavailable: {},
+    agentUnavailable: {},
     onlyUndownloaded: false,
   };
 
@@ -1021,6 +1024,8 @@
       // 去重紀錄：removedPaths/aliases 讓面板知道「這個檔案/歌曲已由 keeper 代替」，不再重下
       S.agentAliases = TEST_MODE ? {} : data.aliases || {};
       S.removedPaths = TEST_MODE ? {} : data.removedPaths || {};
+      S.agentUnavailable = TEST_MODE ? {} : data.unavailable || {};
+      S.unavailable = P.mergeUnavailable(S.unavailable, S.agentUnavailable);
       const downloadsRoot = String((S.host && S.host.downloadsRoot) || '').replace(/[\\/]+$/, '');
       const toRel = (abs) => {
         const value = String(abs || '');
@@ -1109,15 +1114,17 @@
     const stemsHave = stemsTotal ? Math.min(stemsTotal, stemsFound.size) : 0;
     const detail = [];
     if (stemsTotal) detail.push({ label: '分軌', have: stemsHave, total: stemsTotal, done: stemsHave >= stemsTotal });
-    if (P.midiAvailable(song)) detail.push({ label: 'MIDI', have: midi ? 1 : 0, total: 1, done: midi });
-    if (P.midiAvailable(song)) detail.push({ label: 'MusicXML', have: musicxml ? 1 : 0, total: 1, done: musicxml });
+    const na = (kind) => P.isUnavailable(S.unavailable, song.task_id, kind);
+    if (P.midiAvailable(song)) detail.push(P.statusItem('midi', 'MIDI', midi, na('midi')));
+    if (P.midiAvailable(song)) detail.push(P.statusItem('musicxml', 'MusicXML', musicxml, na('musicxml')));
     if (song.local_cover) detail.push({ label: '封面', have: cover ? 1 : 0, total: 1, done: cover });
     const have = detail.reduce((sum, item) => sum + item.have, 0);
     const total = detail.reduce((sum, item) => sum + item.total, 0);
+    const anyNa = detail.some((item) => item.na);
     return {
       have,
       total,
-      allDone: total > 0 && have >= total,
+      allDone: have >= total && (total > 0 || anyNa),
       any: have > 0,
       mp3,
       wav,
@@ -1128,7 +1135,7 @@
 
   function downloadStatusLabel(status) {
     const detail = status.detail
-      .map((item) => (item.total > 1 ? `${item.label} ${item.have}/${item.total}` : `${item.label}${item.done ? '✓' : '✗'}`))
+      .map((item) => (item.na ? `${item.label} 不可用（站點不提供）` : item.total > 1 ? `${item.label} ${item.have}/${item.total}` : `${item.label}${item.done ? '✓' : '✗'}`))
       .join('、');
     if (!status.known) return { text: '狀態未知', cls: 'dim', title: '本機整理工具未安裝，無法檢查已下載檔案' };
     if (status.allDone) return { text: '已下載', cls: 'ok', title: '已下載：' + detail };
@@ -1483,11 +1490,28 @@
   }
 
   async function loadDownloadState() {
-    const got = await storageGet([KEY_HISTORY, KEY_FOLDERS]);
+    const got = await storageGet([KEY_HISTORY, KEY_FOLDERS, KEY_UNAVAILABLE]);
     S.history = got[KEY_HISTORY] && typeof got[KEY_HISTORY] === 'object' ? got[KEY_HISTORY] : {};
+    const localNa = got[KEY_UNAVAILABLE] && typeof got[KEY_UNAVAILABLE] === 'object' ? got[KEY_UNAVAILABLE] : {};
+    S.unavailable = P.mergeUnavailable(localNa, S.agentUnavailable);
     const folders = got[KEY_FOLDERS] && typeof got[KEY_FOLDERS] === 'object' ? got[KEY_FOLDERS] : {};
     S.folderByTask = folders.folderByTask && typeof folders.folderByTask === 'object' ? folders.folderByTask : {};
     S.ownerByFolder = folders.ownerByFolder && typeof folders.ownerByFolder === 'object' ? folders.ownerByFolder : {};
+  }
+
+  /** 寫入「站點不提供」紀錄；prep worker 會並行，用 promise 鏈序列化避免互相覆蓋 */
+  let unavailableChain = Promise.resolve();
+  function recordUnavailable(taskId, kind) {
+    unavailableChain = unavailableChain
+      .then(async () => {
+        const got = await storageGet([KEY_UNAVAILABLE]);
+        const prev = (got && got[KEY_UNAVAILABLE]) || {};
+        const next = P.markUnavailable(prev, taskId, kind, 'no_download');
+        S.unavailable = P.mergeUnavailable(S.unavailable, next);
+        await storageSet({ [KEY_UNAVAILABLE]: next });
+      })
+      .catch(() => {});
+    return unavailableChain;
   }
 
   function saveFolders() {
@@ -1642,7 +1666,7 @@
         force: S.options.force,
         origin: location.origin,
       },
-      state: { folderByTask: S.folderByTask, ownerByFolder: S.ownerByFolder, history: S.history },
+      state: { folderByTask: S.folderByTask, ownerByFolder: S.ownerByFolder, history: S.history, unavailable: S.unavailable },
       origin: location.origin,
     });
     S.folderByTask = plan.folderByTask;
@@ -1765,6 +1789,10 @@
             }
             if (err && (err.code === 'WAV_UNSUPPORTED' || err.code === 'NOT_AVAILABLE')) {
               entry.unsupported = true;
+              if (err.code === 'NOT_AVAILABLE') {
+                // 記住「站點不提供」：下次不再請求，狀態顯示「不可用」而不是「部分」
+                await recordUnavailable(entry.task.task_id, entry.file.kind);
+              }
               if (!S.cancelled && S.running) {
                 S.progress.skipped = (Number(S.progress.skipped) || 0) + 1;
                 renderProgressSoon();

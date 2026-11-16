@@ -4,7 +4,7 @@
 import * as ACE from './lib/ace.mjs';
 import { config, readJson, exists } from './lib/config.mjs';
 
-const SERVER = { name: 'ace-music-downloader', version: '1.6.4' };
+const SERVER = { name: 'ace-music-downloader', version: '1.6.5' };
 const jobs = new Map();
 let jobSeq = 0;
 const HUB_URL = process.env.ACE_HUB_URL || 'http://127.0.0.1:8788';

@@ -122,7 +122,7 @@ export async function listSongs(cfg = config(), { pageLimit = 50, maxPages = 40,
     return includeKnown ? known : fresh;
 }
 
-export function summarizeSong(song, index) {
+export function summarizeSong(song, index, unavailable = {}) {
     const group = P.pickStemGroup(song.stems);
     const summary = {
         task_id: song.task_id,
@@ -134,7 +134,7 @@ export function summarizeSong(song, index) {
         cover: !!song.local_cover,
         local_audio: !!song.local_audio,
     };
-    if (index) summary.downloaded = songDownloadSummary(song, index);
+    if (index) summary.downloaded = songDownloadSummary(song, index, unavailable);
     return summary;
 }
 
@@ -175,7 +175,7 @@ export async function collectDownloadIndex(cfg = config(), { refresh = false } =
 }
 
 /** 每首歌已下載進度（依檔名比對，含 CLI/擴充功能/站點下載的檔案） */
-export function songDownloadSummary(song, index) {
+export function songDownloadSummary(song, index, unavailable = {}) {
     const rawTitle = (song.meta && song.meta.title) || '';
     const title = N.songFolderLabel(rawTitle);
     // 檔名可能用完整標題（songFolderLabel 遇到 '[' 會截斷），兩種都比對
@@ -217,12 +217,15 @@ export function songDownloadSummary(song, index) {
     const stemsHave = stemsTotal ? Math.min(stemsTotal, stems.size) : 0;
     const detail = [];
     if (stemsTotal) detail.push({ type: 'stems', label: '分軌', have: stemsHave, total: stemsTotal, done: stemsHave >= stemsTotal });
-    if (P.midiAvailable(song)) detail.push({ type: 'midi', label: 'MIDI', have: midi ? 1 : 0, total: 1, done: midi });
-    if (P.midiAvailable(song)) detail.push({ type: 'musicxml', label: 'MusicXML', have: musicxml ? 1 : 0, total: 1, done: musicxml });
+    const na = (kind) => P.isUnavailable(unavailable, song.task_id, kind);
+    if (P.midiAvailable(song)) detail.push(P.statusItem('midi', 'MIDI', midi, na('midi')));
+    if (P.midiAvailable(song)) detail.push(P.statusItem('musicxml', 'MusicXML', musicxml, na('musicxml')));
     if (song.local_cover) detail.push({ type: 'cover', label: '封面', have: cover ? 1 : 0, total: 1, done: cover });
     const have = detail.reduce((sum, item) => sum + item.have, 0);
     const total = detail.reduce((sum, item) => sum + item.total, 0);
-    return { have, total, allDone: total > 0 && have >= total, any: have > 0, mp3, wav, detail };
+    const unavailableKinds = detail.filter((item) => item.na).map((item) => item.type);
+    const allDone = have >= total && (total > 0 || unavailableKinds.length > 0);
+    return { have, total, allDone, any: have > 0, mp3, wav, detail, unavailable: unavailableKinds };
 }
 
 async function createApiFile(cfg, session, songId, kind) {
@@ -317,6 +320,7 @@ export async function loadState(cfg = config()) {
         history: raw.history || {},
         aliases: raw.aliases || {},
         removedPaths: raw.removedPaths || {},
+        unavailable: raw.unavailable || {},
     };
 }
 
@@ -327,6 +331,7 @@ async function saveState(cfg, buildPlanResult, state) {
         history: state.history,
         aliases: state.aliases || {},
         removedPaths: state.removedPaths || {},
+        unavailable: state.unavailable || {},
     });
 }
 
@@ -472,6 +477,11 @@ export async function runDownload({ songs, options = {}, concurrency = 4, onProg
             } catch (err) {
                 if (err && (err.code === 'WAV_UNSUPPORTED' || err.code === 'NOT_AVAILABLE' || err.code === 'RATE_LIMIT')) {
                     skipped += 1;
+                    if (err.code === 'NOT_AVAILABLE') {
+                        // 記住「站點不提供」，下次不再請求、狀態顯示 N/A（force 可重試）
+                        state.unavailable = P.markUnavailable(state.unavailable, task.task_id, file.kind, 'no_download');
+                        await saveState(cfg, plan, state);
+                    }
                     if (onProgress) onProgress({ done, skipped, failed, total, current: file.path, bytes, skippedReason: err.message });
                     continue;
                 }
@@ -1333,7 +1343,7 @@ export async function buildLibrarySnapshot(cfg = config(), { refresh = false } =
         collectDownloadIndex(cfg, { refresh }),
         loadState(cfg),
     ]);
-    const rows = applyAliases(songs.map((song) => summarizeSong(song, index)), state);
+    const rows = applyAliases(songs.map((song) => summarizeSong(song, index, state.unavailable)), state);
     const counts = { songs: rows.length, downloaded: 0, partial: 0, undownloaded: 0, midiAvailable: 0 };
     for (const row of rows) {
         const downloaded = row.downloaded;
