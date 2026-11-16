@@ -22,7 +22,7 @@ async function hubTry(pathname, { method = 'GET', body, timeoutMs = 1200 } = {})
     }
 }
 function usage() {
-    console.log(`ACE Music 批量下載器 CLI  v1.8.4
+    console.log(`ACE Music 批量下載器 CLI  v1.8.5
 
 用法：
   node cli.mjs create capabilities            Create 頁面完整 API 參數契約
@@ -56,6 +56,7 @@ function usage() {
   node cli.mjs extract-mp3 [選項]              把所有歌曲的成品 MP3 集中到 ai音樂\\成品MP3\\（會自動補齊漏掉的）
   node cli.mjs extract-samples                 把分軌/採樣集中到 ai音樂\\採樣包\\（按樂器類型分資料夾）
   node cli.mjs favorites [--dry-run] [--force] [--sync]  把站點點讚／面板愛心的歌複製到 ai音樂\\收藏\\（整首歌的檔案）
+  node cli.mjs wav-names [--dry-run]  成品WAV 分類後把乾淨名字複製到 整理輸出\\（來源檔不動）
   node cli.mjs strip-fingerprints [--dry-run|--restore]  就地抹掉既有檔案裡的 ACE metadata 指紋（檔長、inode 不變）
   node cli.mjs classify-files [--copy]         依檔案屬性分類 MIDI/MusicXML/封面/壓縮檔/其他（預設搬移，--copy 保留原檔）
   node cli.mjs dedupe-songs [--commit]         歌名資料夾內與分類庫相同的副本（預設預覽）
@@ -103,6 +104,13 @@ favorites 選項：
 strip-fingerprints 選項：
   --dry-run  只列出命中哪些檔案／frame，不改檔
   --restore  用最近一次備份把指紋原 bytes 寫回（同一份備份只還原一次）
+  --root <資料夾>  最上層資料夾（預設 ai音樂）
+  --json     以 JSON 輸出
+
+wav-names 選項：
+  --dry-run  只列出會複製成什麼名字，不動檔案
+  --out <名稱>  輸出資料夾（預設 整理輸出，位於 ai音樂 底下）
+  --folder <名稱>  來源資料夾（預設 成品WAV）
   --root <資料夾>  最上層資料夾（預設 ai音樂）
   --json     以 JSON 輸出
 
@@ -493,6 +501,24 @@ async function main() {
         if (result.failed.length) {
             for (const fail of result.failed.slice(0, 10)) console.log(`  ✗ ${fail.title || fail.task_id}：${fail.error}`);
         }
+        return;
+    }
+
+    if (cmd === 'wav-names') {
+        const root = args.flags.root ? String(args.flags.root) : 'ai音樂';
+        const folder = args.flags.folder ? String(args.flags.folder) : '成品WAV';
+        const outFolder = args.flags.out ? String(args.flags.out) : '整理輸出';
+        const result = await ACE.copyCollectedWavs({ root, folder, outFolder, dryRun: !!args.flags['dry-run'], cfg });
+        if (args.flags.json) return printJson(result);
+        const headline = result.dryRun ? `預計複製 ${result.planned}` : `複製 ${result.copied}`;
+        console.log(`WAV 整理輸出：掃 ${result.total} 檔、${headline}、上次已複製 ${result.already}、無證據保留 ${result.loose}、失敗 ${result.failed.length}`);
+        console.log(`  來源：${result.folder}`);
+        console.log(`  輸出：${result.outDir}`);
+        if (result.dryRun) {
+            for (const item of result.items.slice(0, 10)) console.log(`  ${item.from} → ${item.to}`);
+            console.log('  （dry-run：沒有複製任何檔案）');
+        }
+        if (result.failed.length) for (const fail of result.failed.slice(0, 10)) console.log(`  ✗ ${fail.file}：${fail.error}`);
         return;
     }
 

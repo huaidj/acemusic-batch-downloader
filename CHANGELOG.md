@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.8.5 — 2026-11-17（成品WAV 分類後複製整理輸出）
+
+- 一鍵整理新增 `wavnames` 步驟：`成品WAV` 分類後，把乾淨名字**複製**到 `ai音樂/整理輸出/成品WAV/`；**來源檔永不移動、不改名**，插件與索引照樣讀得到原本路徑。
+- 每次生成有兩首同名歌：用 task id 區分，依 `created_at` 依序 `<歌名>.wav`、`<歌名> (2).wav`、`(3)…`；同名但內容不同不覆寫（改用下一個編號）。
+- 所有權只認證據、不猜同名檔：`agent-state.json` 的 wav 紀錄、`verified-audio.json` 的驗證紀錄、舊檔名尾碼 `[8hex]`（對到唯一 task id）。沒有證據、或兩個 task 都認領同一個檔，一律不複製。
+- `整理輸出` 與 `收藏` 同級隔離：歌曲索引、`locate`／曲庫總覽用的檔案索引、內容去重、空殼清理、檔案分類、音頻屬性分類、`organize` 全部跳過，不會被去重搬走或算成第二份。
+- 新增 CLI `wav-names [--dry-run] [--out 名稱] [--folder 名稱] [--root 名稱] [--json]`；重跑只跳過已複製的檔，耗時以 size 比對為主。
+- 面板整理進度新增「WAV 整理輸出」步驟。
+- 測試：`test/unit/wav-names.test.mjs` 6 個案例（尾碼／history／proof 歸屬、兩首同名編號、來源不動、重跑不重複、不覆寫既有副本、dry-run）。
+
+## 1.8.4 — 2026-11-17（DeepSeek 研究上線：搜尋＋思考；面板維護整合）
+
 ## 1.8.4 — 2026-11-17（DeepSeek 研究上線：搜尋＋思考；面板維護整合）
 
 - DeepSeek 研究正式可用：`/music/research` 由 `auth_required` 變成 `ready`；金鑰只從伺服器環境變數 `DEEPSEEK_API_KEY` 讀取，不寫入請求、狀態或 SQLite。授權為有限批次（$2／200 次／2026-12-17 到期，`allowed_kinds`＝search、fetch、analyze）。

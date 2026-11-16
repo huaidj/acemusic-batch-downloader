@@ -1873,10 +1873,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     }
   }
 
-  const TIDY_WEIGHTS = { organize: 4, mp3: 26, samples: 8, classify: 8, dedupe: 6, content: 14, folders: 5, audio: 24, favorites: 3, fingerprints: 2 };
+  const TIDY_WEIGHTS = { organize: 4, mp3: 26, wavnames: 3, samples: 8, classify: 8, dedupe: 6, content: 14, folders: 5, audio: 21, favorites: 3, fingerprints: 2 };
   const TIDY_LABELS = {
     organize: '整理舊檔',
     mp3: '補齊成品MP3',
+    wavnames: 'WAV 整理輸出',
     samples: '採樣包分類',
     classify: '檔案分類',
     dedupe: '去重',
@@ -1966,9 +1967,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       const btn = S.els.tidyBtn;
       if (btn) btn.classList.add('on');
       if (silent) {
-        if (S.els.footHint) S.els.footHint.textContent = '已下載完成，背景自動整理中（成品MP3／採樣包／分類／音頻屬性／收藏夾／指紋清除）…';
+        if (S.els.footHint) S.els.footHint.textContent = '已下載完成，背景自動整理中（成品MP3／成品WAV 整理輸出／採樣包／分類／音頻屬性／收藏夾／指紋清除）…';
       } else {
-        flash('已開始一鍵整理（背景執行）：舊檔 → 成品MP3 → 採樣包 → 分類 → 音頻屬性分類 → 收藏夾 → 指紋清除');
+        flash('已開始一鍵整理（背景執行）：舊檔 → 成品MP3 → 成品WAV（複製整理輸出） → 採樣包 → 分類 → 音頻屬性分類 → 收藏夾 → 指紋清除');
       }
       startStatusPoll({
         name: 'tidy-status',

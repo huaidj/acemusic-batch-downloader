@@ -67,7 +67,7 @@
 
 ### 3.3 一鍵整理流程
 
-`舊檔改名 → 成品MP3 → 成品WAV → 採樣包／採樣包WAV → 檔案分類（MIDI／MusicXML／封面／壓縮檔／其他）→ 內容去重 → 空殼清理 → 音頻屬性分類（hardlink）→ 收藏夾 → 指紋清除`
+`舊檔改名 → 成品MP3 → 成品WAV（乾淨名字複製到 整理輸出\成品WAV\，來源不動）→ 採樣包／採樣包WAV → 檔案分類（MIDI／MusicXML／封面／壓縮檔／其他）→ 內容去重 → 空殼清理 → 音頻屬性分類（hardlink）→ 收藏夾 → 指紋清除`
 
 - **內容去重**：相同內容（size→sha256）只留一份，其餘搬到 `%LOCALAPPDATA%\AceMusicDL\organize-backups\`（不直接刪）。
 - **hardlink 不是重複**：`音頻分類` 的檔案與原檔是同一份資料，刪了也省不到空間，還會讓 BPM／Key 檢視缺檔。
@@ -79,7 +79,7 @@
 | 功能 | 自動時機 | 手動入口 | 產物／紀錄 |
 |---|---|---|---|
 | 指紋清除 | 下載寫檔前（WAV＋MP3）；一鍵整理最後一步 | 面板「維護 → 指紋清除」、`cli.mjs strip-fingerprints [--dry-run\|--restore]` | 就地抹掉 ACE metadata；`fingerprint-backups\` 可還原；已驗證音檔的 sha256 同步更新 |
-| 自動分類 | 一鍵整理、下載完自動整理、背景自動整理 | 面板「維護」內各按鈕；`extract-mp3`／`extract-samples`／`classify-files`／`classify-audio` | 成品MP3／WAV、採樣包（按樂器）、MIDI／MusicXML／封面、音頻分類（hardlink，不佔空間） |
+| 自動分類 | 一鍵整理、下載完自動整理、背景自動整理 | 面板「維護」內各按鈕；`extract-mp3`／`extract-samples`／`classify-files`／`classify-audio` | 成品MP3／WAV（WAV 分類後把乾淨名字複製到 `整理輸出\成品WAV\`，來源不動、兩首同名依 task 編號 `(2)(3)`）、採樣包（按樂器）、MIDI／MusicXML／封面、音頻分類（hardlink，不佔空間） |
 | 命名（命名爐） | 下載時只套標準檔名（`<歌名> - Vocals.mp3`）；命名爐本身要人工「採用」 | 面板「維護 → 命名爐」 | 同組分軌／版本一個雙語名（銘／儀／並／抽）；改名紀錄 `_命名爐改名紀錄.json`，套用後自動重建本機索引並通知面板 |
 
 三個功能的分工：**命名爐**決定歌怎麼叫、**分類**決定檔案放哪裡、**指紋清除**決定檔案裡留下什麼。命名爐在擴充功能頁面套用改名後會自動重建索引（檔案模式仍提示回面板「維護 → 一鍵整理」）。
@@ -148,6 +148,7 @@ CLI／Hub／MCP 的下載另外在 `%LOCALAPPDATA%\AceMusicDL\agent.log` 保存�
 | `tidy-all` | 一鍵整理 |
 | `favorites [--dry-run] [--force] [--sync]` | 站點點讚／面板愛心的歌複製到 `ai音樂\收藏\` |
 | `strip-fingerprints [--dry-run\|--restore]` | 就地抹掉既有檔案裡的 ACE metadata 指紋 |
+| `wav-names [--dry-run]` | 成品WAV 複製乾淨名字到 `整理輸出\`（來源不動） |
 | `dedupe-content [--commit]` | 內容去重（預設預覽） |
 | `classify-audio` | 音頻屬性分類 |
 | `hub --background\|--status\|--stop` | 常駐中樞 |
