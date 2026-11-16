@@ -1216,6 +1216,63 @@ scenario('S29_exact_local_index_handles_classified_files_uncertainty_and_old_hos
   }
 });
 
+scenario('S30_prompt_fill_reads_back_and_keeps_draft_when_form_is_missing', async () => {
+  // 驗收 #11：填入後讀回；頁面改寫內容時放棄；找不到或看不到輸入框時保留草稿並可改用複製；全程不按 Generate
+  await freshPanel(page, mock.base);
+  const q = (sel) => page.locator(sel);
+  const toast = () => q('[data-toast]').textContent();
+  await page.evaluate(() => {
+    localStorage.setItem('aceModel', 'acemusic-v1.1');
+    localStorage.setItem('createMode', 'idea');
+    document.getElementById('ideaMode').style.display = 'block';
+    document.getElementById('customMode').style.display = 'none';
+    document.getElementById('modelBtn').textContent = 'ACE Music v1.1 Preview';
+    document.getElementById('prompt').value = '';
+  });
+  await q('[data-rand-box] summary').click();
+  await page.waitForFunction(() => /Idea/.test(document.getElementById('acedl-host')?.shadowRoot?.querySelector('[data-rand-ctx]')?.textContent || ''), null, { timeout: 3000 });
+  await q('[data-rand="roll"]').click();
+  const draft = await q('[data-rand-text]').inputValue();
+  assert(/^Song title: "[^"]+"\. /.test(draft), 'S30 Idea 草稿應以歌名開頭');
+
+  // 1) 正常填入：頁面上的值與草稿逐字相同
+  await q('[data-rand="apply"]').click();
+  assertEqual(await page.locator('#prompt').inputValue(), draft, 'S30 填入後讀回應與草稿相同');
+  assert(/已填入/.test(await toast()), 'S30 應提示已填入');
+
+  // 2) 站點改寫輸入內容（例如截短）：讀回不一致 → 放棄並提示改用複製，草稿不變
+  // 擴充功能在隔離環境執行，看不到頁面 JS 的屬性覆寫；真實站點是在 input 事件裡改寫實際值（例如受控元件截短）。
+  await page.evaluate(() => {
+    const node = document.getElementById('prompt');
+    node.value = '';
+    window.__truncate = () => { if (node.value.length > 40) node.value = node.value.slice(0, 40); };
+    node.addEventListener('input', window.__truncate);
+  });
+  await q('[data-rand="apply"]').click();
+  assert(/讀回的內容不一致/.test(await toast()), 'S30 讀回不一致時應明確放棄');
+  assertEqual(await q('[data-rand-text]').inputValue(), draft, 'S30 讀回失敗不改動草稿');
+
+  // 3) 輸入框被隱藏：不填入，說明原因
+  await page.evaluate(() => {
+    const node = document.getElementById('prompt');
+    node.removeEventListener('input', window.__truncate);
+    node.value = 'page draft stays';
+    document.getElementById('ideaMode').style.display = 'none';
+  });
+  await q('[data-rand="apply"]').click();
+  assert(/沒顯示/.test(await toast()), 'S30 輸入框看不到時應說明');
+  assertEqual(await page.evaluate(() => document.getElementById('prompt').value), 'page draft stays', 'S30 看不到的輸入框不被改寫');
+
+  // 4) 站點改版找不到輸入框：保留草稿，複製仍可用
+  await page.evaluate(() => { document.getElementById('ideaMode').style.display = 'block'; document.getElementById('prompt').remove(); });
+  await q('[data-rand="apply"]').click();
+  assert(/找不到頁面的輸入框/.test(await toast()), 'S30 找不到輸入框時應建議改用複製');
+  assertEqual(await q('[data-rand-text]').inputValue(), draft, 'S30 找不到表單仍保留完整草稿');
+  assertEqual(await q('[data-rand="copy"]').isDisabled(), false, 'S30 複製仍可用');
+  assertEqual(await page.evaluate(() => window.__gen), 0, 'S30 絕不能按 Generate');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+});
+
 scenario('S7_logged_out_shows_login_hint', async () => {
   await context.clearCookies();
   await page.goto(mock.base + '/create/?auth-off', { waitUntil: 'domcontentloaded' });

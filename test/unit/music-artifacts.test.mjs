@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createMusicArtifactCollector } from '../../agent/lib/music-artifacts.mjs';
 
-const TEST_ROOT = process.platform === 'win32' ? 'F:\\DevData\\Temp\\HuaiDJ-ACE-Agent-20261116-phase2-artifacts' : path.join(os.tmpdir(), 'HuaiDJ-ACE-Agent-phase2-artifacts');
+const TEST_ROOT = path.join(process.env.ACE_TEST_TEMP || os.tmpdir(), 'HuaiDJ-ACE-phase2-artifacts');
 fs.mkdirSync(TEST_ROOT, { recursive: true });
 const hash = value => createHash('sha256').update(value).digest('hex');
 let samples;
@@ -407,4 +407,47 @@ test('R2 fakeIP cannot pass on missing, malformed, redirected or private indepen
       for (const text of ['secret-query', 'signature=', 'raw-private-detail', 'fixture=local_only']) assert.equal(evidence.includes(text), false);
     });
   }
+});
+
+test('#15 a generation pair is accepted song by song: both succeed as two separate artifacts', async t => {
+  const fix = await fixture(t);
+  const result = await fix.collect(['so_pair_a', 'so_pair_b']);
+  assert.equal(result.ok, true, JSON.stringify(result.errors));
+  assert.equal(result.status, 'collected');
+  assert.deepEqual(result.artifacts.map(a => a.remote_task_id).sort(), ['so_pair_a', 'so_pair_b']);
+  assert.notEqual(result.artifacts[0].id, result.artifacts[1].id);
+  assert.notEqual(result.artifacts[0].path, result.artifacts[1].path);
+  assert.ok(result.artifacts.every(a => a.technical_review.human_listen.accepted === false), 'each take still needs its own human listen');
+});
+
+test('#15 one song of a pair failing is partial: the good take is kept, the failure stays attached to its own song', async t => {
+  for (const [label, songs, routes, code] of [
+    ['remote failed', { so_pair_b: { status: 'failed' } }, {}, 'TASK_NOT_SUCCEEDED'],
+    ['still generating', { so_pair_b: { status: 'running' } }, {}, 'TASK_NOT_SUCCEEDED'],
+    ['download error', { so_pair_b: { local_audio: '/data/broken.mp3' } }, { '/data/broken.mp3': { status: 500, body: Buffer.from('x') } }, 'DOWNLOAD_HTTP'],
+  ]) {
+    const fix = await fixture(t, { songs, routes });
+    const result = await fix.collect(['so_pair_a', 'so_pair_b']);
+    assert.equal(result.ok, false, label);
+    assert.equal(result.status, 'partial', label + ' is never reported as collected');
+    assert.deepEqual(result.artifacts.map(a => a.remote_task_id), ['so_pair_a'], label);
+    assert.deepEqual(result.errors.map(e => [e.remote_task_id, e.code]), [['so_pair_b', code]], label);
+  }
+});
+
+test('#15 retrying a partial pair reuses the good take and only fetches the missing one', async t => {
+  let broken = true;
+  const fix = await fixture(t, { songs: { so_pair_b: { local_audio: '/data/later.mp3' } }, routes: { '/data/later.mp3': (req, res, bytes) => {
+    if (broken) { res.writeHead(503, { 'Content-Type': 'text/plain' }); return res.end('busy'); }
+    res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': bytes.normal.length }); res.end(bytes.normal);
+  } } });
+  const first = await fix.collect(['so_pair_a', 'so_pair_b']);
+  assert.equal(first.status, 'partial');
+  broken = false;
+  const second = await fix.collect(['so_pair_a', 'so_pair_b']);
+  assert.equal(second.status, 'collected', JSON.stringify(second.errors));
+  assert.equal(second.reused, 1, 'the already verified take is not downloaded again');
+  assert.equal(second.downloaded, 1);
+  assert.equal(second.artifacts.find(a => a.remote_task_id === 'so_pair_a').id, first.artifacts[0].id);
+  assert.ok(fix.requests.every(r => r.method === 'GET'), 'a retry never re-generates');
 });
