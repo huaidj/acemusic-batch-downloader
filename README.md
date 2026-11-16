@@ -14,7 +14,7 @@
 - **不重複下載**：比對本機檔案、下載紀錄、去重紀錄；已存在的自動跳過
 - **狀態顯示**：每首歌顯示已下載／部分／未下載；「只看未下載」過濾
 - **即時同步＋新歌自動下載**：訂閱站點推送，新歌完成約 50 ms 出現；可選「新歌自動下載」（MIDI／MusicXML 需另勾，因可能扣 credit）
-- **Agent 中樞**：CLI、MCP（16 個工具，含 `ace_locate` 找最新歌曲真實路徑、`ace_wait_new_song` 等新歌）、常駐 Agent Hub（127.0.0.1:8788，熱路徑 <2 ms）
+- **Agent 中樞**：CLI、MCP（含 `ace_locate` 找最新歌曲真實路徑、`ace_wait_new_song` 等新歌、`ace_generate` 預覽及明確提交 v1.1）、常駐 Agent Hub（127.0.0.1:8788，既有查詢熱路徑 <2 ms）
 - 完整說明：[docs/GUIDE.md](docs/GUIDE.md)｜開發規範：[docs/CONVENTIONS.md](docs/CONVENTIONS.md)｜設計系統：[docs/DESIGN-SYSTEM.md](docs/DESIGN-SYSTEM.md)
 - **可選本機工具**：native messaging host 負責改名／搬檔／叫用 CLI（不裝也能下載）
 
@@ -53,6 +53,8 @@ node agent\cli.mjs tidy-all
 ```
 
 MCP（stdio）：`node <repo>\agent\mcp.mjs`，工具包含 `ace_overview`、`ace_list_songs`、`ace_download`、`ace_job_status`、`ace_organize`、`ace_warm`、`ace_hub_status` 等。
+
+本機直接生成 v1.1：`ace_generate` 預設只預覽；實際提交需明確額度上限、防重送 key 與支援生成的 Hub。`ace_generation_status` 查詢音訊進度與實際模型。沿用已同步的本機登入，不使用第三方代理；參數與驗證邊界見 [直接生成說明](agent/DIRECT-GENERATION.md)。
 
 常駐 Hub（多 agent 共用、單一寫入者、job 佇列、SSE）：
 

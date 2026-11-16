@@ -28,7 +28,7 @@ async function hubWaitJob(jobId, timeoutMs = 20000) {
     while (Date.now() < deadline) {
         const data = await hubCall('/jobs/' + encodeURIComponent(jobId), { timeoutMs: 1500 });
         const job = data.job || {};
-        if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') return job;
+        if (['done', 'failed', 'cancelled', 'interrupted', 'unresolved'].includes(job.status)) return job;
         await new Promise((resolve) => setTimeout(resolve, 150));
     }
     throw new Error('hub job 逾時');
@@ -150,6 +150,39 @@ const TOOLS = [
         name: 'ace_probe',
         description: '站點健康（唯讀、不扣額度）：/api/status 是否可連、是否登入、方案、可用模型。',
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    },
+    {
+        name: 'ace_generate',
+        description: '沿用本機登入直接呼叫 ACE Music v1.1 Preview；預設只預覽提示詞與即時費用。實際送出須 dry_run=false、confirm_credit_spend=true、max_credits 與唯一 idempotency_key，且 Hub 必須支援生成；失敗後不可換 key 自動重送。',
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+        inputSchema: {
+            type: 'object',
+            properties: {
+                mode: { type: 'string', enum: ['idea', 'custom'], description: '省略時由 prompt 或 style 推斷' },
+                model: { type: 'string', enum: ['acemusic-v1.1'], default: 'acemusic-v1.1' },
+                prompt: { type: 'string', maxLength: 2000, description: 'Idea 模式描述（不可與 style／lyrics 混用）' },
+                style: { type: 'string', maxLength: 1000, description: 'Custom 模式的曲風與聲音方向' },
+                lyrics: { type: 'string', maxLength: 5000, description: 'Custom 歌詞；純器樂可留空' },
+                title: { type: 'string', maxLength: 80 },
+                style_influence: { type: 'number', minimum: 0, maximum: 100 },
+                dry_run: { type: 'boolean', default: true, description: '預設 true，不送生成請求、不扣額度' },
+                confirm_credit_spend: { type: 'boolean', description: '明確同意消耗站點 Credits 才設 true' },
+                max_credits: { type: 'number', minimum: 0, description: '本次允許的最高站點費用；低於即時成本即拒絕' },
+                idempotency_key: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$', description: '一次生成固定使用同一 key；逾時亦不可自動換 key' },
+            },
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'ace_generation_status',
+        description: '以送出結果中的精確 task_ids 查 v1.1 生成狀態、實際模型與音訊連結；唯讀，不以最新歌曲猜測結果。',
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+        inputSchema: {
+            type: 'object',
+            properties: { task_ids: { type: 'array', minItems: 1, maxItems: 10, uniqueItems: true, items: { type: 'string', minLength: 1, maxLength: 160, pattern: '^[A-Za-z0-9_-]+$' } } },
+            required: ['task_ids'],
+            additionalProperties: false,
+        },
     },
     {
         name: 'ace_list_songs',
@@ -297,6 +330,31 @@ async function callTool(name, args) {
                 return { connected: true, ...health };
             } catch (err) {
                 return { connected: false, error: String((err && err.message) || err), url: HUB_URL };
+            }
+        }
+        case 'ace_generate': {
+            if (Object.hasOwn(args, 'request_created_at')) throw new Error('request_created_at 是內部收據欄位，不能由工具輸入指定。');
+            const dryRun = args.dry_run !== false;
+            let capable = false;
+            try {
+                const caps = await hubCall('/capabilities', { timeoutMs: 2000 });
+                capable = Array.isArray(caps.endpoints) && caps.endpoints.some((entry) => entry.method === 'POST' && entry.path === '/generate');
+            } catch { /* 唯讀 preflight 失敗可回落預覽；付費送出必須有 Hub */ }
+            if (!capable) {
+                if (dryRun) return { ...(await ACE.generateSong(undefined, { ...args, dry_run: true })), hub: false };
+                throw new Error('Hub 未啟動或尚未支援生成；請先更新並啟動 Hub。未送出站點生成請求。');
+            }
+            // POST 後沒有本地 fallback；逾時可能已入列，用同 key 查原收據。
+            const submitted = await hubCall('/generate', { method: 'POST', body: { ...args, dry_run: dryRun }, timeoutMs: 15000 });
+            if (submitted.jobId) hubJobs.add(submitted.jobId);
+            return { ...submitted, hub: true };
+        }
+        case 'ace_generation_status': {
+            const query = new URLSearchParams({ task_ids: Array.isArray(args.task_ids) ? args.task_ids.join(',') : '' });
+            try {
+                return { ...(await hubCall('/generation-status?' + query.toString(), { timeoutMs: 15000 })), hub: true };
+            } catch {
+                return { ...(await ACE.generationStatus(undefined, { task_ids: args.task_ids })), hub: false };
             }
         }
         case 'ace_warm': {
@@ -529,7 +587,7 @@ async function callTool(name, args) {
         }
         case 'ace_job_status': {
             const jobId = String(args.job_id || '');
-            if (hubJobs.has(jobId)) {
+            if (hubJobs.has(jobId) || /^job_[A-Za-z0-9_]+$/.test(jobId)) {
                 try {
                     const data = await hubCall('/jobs/' + encodeURIComponent(jobId), { timeoutMs: 1500 });
                     return { hub: true, ...data.job };
@@ -551,7 +609,7 @@ async function callTool(name, args) {
         }
         case 'ace_job_cancel': {
             const jobId = String(args.job_id || '');
-            if (hubJobs.has(jobId)) {
+            if (hubJobs.has(jobId) || /^job_[A-Za-z0-9_]+$/.test(jobId)) {
                 try {
                     const data = await hubCall('/jobs/' + encodeURIComponent(jobId) + '/cancel', { method: 'POST', timeoutMs: 1500 });
                     return { hub: true, jobId, cancelRequested: true };
@@ -585,7 +643,7 @@ async function handleMessage(message) {
             protocolVersion: (params && params.protocolVersion) || '2024-11-05',
             capabilities: { tools: {} },
             serverInfo: SERVER,
-            instructions: 'ACE Music 批量下載器 MCP。開場用 ace_overview；要拿檔案路徑（例如最新製作的歌在哪）直接用 ace_locate（免網路、免登入）。下載前用 ace_session_status 確認登入，再用 ace_list_songs / ace_download，ace_organize 整理舊檔。',
+            instructions: 'ACE Music 本機 MCP。開場用 ace_overview；檔案路徑用 ace_locate。ace_generate 預設只預覽；實際生成須明確 Credits 授權與上限、固定 idempotency_key，且走支援生成的 Hub。POST 逾時或回應未明時不可自動換 key 重送。生成結果以 task_ids 交給 ace_generation_status；下載前確認登入。',
         });
     }
     if (method === 'notifications/initialized' || method === 'initialized') return;

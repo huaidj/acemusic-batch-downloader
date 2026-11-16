@@ -35,6 +35,9 @@ function usage() {
   node cli.mjs events [--since seq] [--type t]  中樞事件（新歌、自動下載、下載完成）
   node cli.mjs wait [--timeout 秒]             等待下一首新歌（需 Hub＋開著站點分頁）
   node cli.mjs probe                           站點健康（唯讀）
+  node cli.mjs generate --request song.json [--json]  預覽 v1.1 提示詞與費用（預設不生成）
+  node cli.mjs generate --request song.json --commit --confirm-credit-spend --max-credits 4 --idempotency-key <key>  單次生成（需 Hub）
+  node cli.mjs generation-status --task-ids id1,id2 [--song <task_id>] [--json]  唯讀查生成結果
   node cli.mjs backups [--keep-days 7] [--keep-last 1] [--max-mb N] [--prune --commit]  整理備份清單／清理（預設只預覽）
   node cli.mjs masters                         母帶清單（俱樂部版／舊版對照，唯讀）
   node cli.mjs list [--query 關鍵字] [--undownloaded] [--json] 列出可下載歌曲
@@ -90,7 +93,7 @@ function parseArgs(argv) {
         if (token.startsWith('--')) {
             const key = token.slice(2);
             const next = argv[i + 1];
-            if (key === 'all' || key === 'force' || key === 'json' || key === 'type-folders' || key === 'dry-run' || key === 'commit' || key === 'background' || key === 'status' || key === 'move' || key === 'refresh' || key === 'copy') {
+            if (key === 'all' || key === 'force' || key === 'json' || key === 'type-folders' || key === 'dry-run' || key === 'commit' || key === 'background' || key === 'status' || key === 'move' || key === 'refresh' || key === 'copy' || key === 'confirm-credit-spend') {
                 out.flags[key] = true;
             } else if (key === 'song') {
                 (out.multi.song = out.multi.song || []).push(next);
@@ -132,6 +135,47 @@ async function main() {
         printJson(data || { ok: false, status: 'unsupported', error: '此 Hub 不支援音樂準備介面。', http: status });
         if (status >= 400 || data?.ok === false) process.exitCode = 1;
         return;
+    }
+
+    if (cmd === 'generate') {
+        let body = {};
+        if (args.flags.request) {
+            if (typeof args.flags.request !== 'string') throw new Error('--request 必須提供 JSON 檔路徑');
+            body = await readJson(path.resolve(args.flags.request), null);
+            if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('無法讀取生成請求 JSON');
+        }
+        for (const field of ['mode', 'model', 'prompt', 'style', 'lyrics', 'title']) {
+            if (args.flags[field] !== undefined) body[field] = args.flags[field];
+        }
+        for (const field of ['style_influence', 'max_credits']) {
+            const flag = field.replaceAll('_', '-');
+            if (args.flags[flag] !== undefined) body[field] = Number(args.flags[flag]);
+        }
+        if (args.flags['idempotency-key'] !== undefined) body.idempotency_key = args.flags['idempotency-key'];
+        if (Object.hasOwn(body, 'request_created_at')) throw new Error('request_created_at 是內部收據欄位，請從請求 JSON 移除。');
+        body.dry_run = args.flags.commit !== true || args.flags['dry-run'] === true;
+        body.confirm_credit_spend = args.flags['confirm-credit-spend'] === true;
+        let capable = false;
+        try {
+            const caps = await hubJson('/capabilities', { timeoutMs: 2000 });
+            capable = Array.isArray(caps.endpoints) && caps.endpoints.some((entry) => entry.method === 'POST' && entry.path === '/generate');
+        } catch { /* 唯讀 preflight */ }
+        if (!capable) {
+            if (!body.dry_run) throw new Error('Hub 未啟動或尚未支援生成；未送出站點生成請求。');
+            return printJson({ ...(await ACE.generateSong(cfg, body)), hub: false });
+        }
+        // 實際 POST 失敗不回落：使用固定 key 查收據，避免重複扣額度。
+        return printJson({ ...(await hubJson('/generate', { method: 'POST', body, timeoutMs: 15000 })), hub: true });
+    }
+
+    if (cmd === 'generation-status') {
+        if (args.flags['task-ids'] !== undefined && typeof args.flags['task-ids'] !== 'string') throw new Error('--task-ids 必須提供逗號分隔的任務 ID');
+        const task_ids = [...(args.multi.song || []), ...String(args.flags['task-ids'] || '').split(',').map((id) => id.trim()).filter(Boolean)];
+        const query = new URLSearchParams({ task_ids: task_ids.join(',') });
+        let result;
+        try { result = { ...(await hubJson('/generation-status?' + query.toString(), { timeoutMs: 15000 })), hub: true }; }
+        catch { result = { ...(await ACE.generationStatus(cfg, { task_ids })), hub: false }; }
+        return printJson(result);
     }
 
     if (cmd === 'doctor') {

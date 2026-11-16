@@ -4,6 +4,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { config, cachePeek } from './lib/config.mjs';
 import * as ACE from './lib/ace.mjs';
@@ -193,6 +194,64 @@ const idempotent = new Map();
 let jobSeq = 0;
 let writeChain = Promise.resolve();
 const MAX_JOBS = 200;
+const GENERATION_RECEIPTS_FILE = path.join(cfg.stateDir, 'generation-receipts.json');
+const generationReceipts = new Map();
+let generationReceiptError = '';
+
+function stableJson(value) {
+  if (Array.isArray(value)) return '[' + value.map(stableJson).join(',') + ']';
+  if (value && typeof value === 'object') return '{' + Object.keys(value).filter((key) => value[key] !== undefined && key !== 'created_at').sort().map((key) => JSON.stringify(key) + ':' + stableJson(value[key])).join(',') + '}';
+  return JSON.stringify(value);
+}
+
+function digest(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex');
+}
+
+function saveGenerationReceipts() {
+  fs.mkdirSync(cfg.stateDir, { recursive: true });
+  const temporary = GENERATION_RECEIPTS_FILE + '.' + process.pid + '.tmp';
+  const descriptor = fs.openSync(temporary, 'w', 0o600);
+  try {
+    fs.writeFileSync(descriptor, JSON.stringify({ version: 1, receipts: [...generationReceipts.values()] }, null, 2));
+    fs.fsyncSync(descriptor);
+  } finally { fs.closeSync(descriptor); }
+  fs.renameSync(temporary, GENERATION_RECEIPTS_FILE);
+}
+
+function persistGenerationJob(job) {
+  const receipt = generationReceipts.get(job.meta && job.meta.generationReceiptKey);
+  if (!receipt) return;
+  receipt.job = publicJob(job);
+  saveGenerationReceipts();
+}
+
+function restoreGenerationReceipts() {
+  if (!fs.existsSync(GENERATION_RECEIPTS_FILE)) return;
+  try {
+    const stored = JSON.parse(fs.readFileSync(GENERATION_RECEIPTS_FILE, 'utf8'));
+    if (stored.version !== 1 || !Array.isArray(stored.receipts)) throw new Error('unsupported receipt format');
+    for (const receipt of stored.receipts) {
+      if (!receipt || !/^[a-f0-9]{64}$/.test(receipt.key) || !/^[a-f0-9]{64}$/.test(receipt.fingerprint) || !receipt.job || !/^job_[A-Za-z0-9_]+$/.test(receipt.job.id) || receipt.job.kind !== 'generate') throw new Error('invalid receipt');
+      const job = { ...receipt.job, request_created_at: receipt.request_created_at, meta: { generationReceiptKey: receipt.key }, progress: receipt.job.progress || null };
+      if (job.status === 'queued' || job.status === 'running') {
+        job.status = 'interrupted';
+        job.error_code = 'GENERATION_HUB_INTERRUPTED';
+        job.submission_unknown = true;
+        job.submission_state = 'unknown';
+        job.finishedAt = new Date().toISOString();
+        job.error = 'Hub 已重啟，這次生成的送出結果尚未確認；不會自動重送，請依 created_at 與曲庫核對。';
+        receipt.job = publicJob(job);
+      }
+      generationReceipts.set(receipt.key, receipt);
+      jobs.set(job.id, job);
+      jobOrder.push(job.id);
+    }
+  } catch {
+    // 收據損壞時保留檔案且停用付費生成；讀取與下載仍可使用。
+    generationReceiptError = '生成收據無法讀取；為避免重複扣額度，請先修復 generation-receipts.json。';
+  }
+}
 
 function publicJob(job) {
   return {
@@ -205,6 +264,12 @@ function publicJob(job) {
     progress: job.progress || null,
     result: job.result === undefined ? null : job.result,
     error: job.error || '',
+    ...(job.kind === 'generate' ? {
+      error_code: job.error_code || null,
+      submission_unknown: !!job.submission_unknown,
+      submission_state: job.submission_state || null,
+      request_created_at: job.request_created_at || null,
+    } : {}),
     cancelled: !!job.cancelled,
   };
 }
@@ -213,7 +278,7 @@ function trimJobs() {
   while (jobOrder.length > MAX_JOBS) {
     const id = jobOrder[0];
     const job = jobs.get(id);
-    if (!job || job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') {
+    if (!job || ['done', 'failed', 'cancelled', 'interrupted', 'unresolved'].includes(job.status)) {
       jobOrder.shift();
       jobs.delete(id);
     } else {
@@ -223,8 +288,9 @@ function trimJobs() {
 }
 
 function addJob(kind, meta = {}) {
-  jobSeq += 1;
-  const job = { id: `job_${Date.now().toString(36)}_${jobSeq}`, kind, status: 'queued', createdAt: new Date().toISOString(), progress: null, meta };
+  let id;
+  do { jobSeq += 1; id = `job_${Date.now().toString(36)}_${jobSeq}`; } while (jobs.has(id));
+  const job = { id, kind, status: 'queued', createdAt: new Date().toISOString(), progress: null, meta };
   jobs.set(job.id, job);
   jobOrder.push(job.id);
   trimJobs();
@@ -236,6 +302,11 @@ function enqueue(job, runner) {
     if (job.cancelled) {
       job.status = 'cancelled';
       job.finishedAt = new Date().toISOString();
+      if (job.kind === 'generate') {
+        job.submission_state = 'not_submitted';
+        job.submission_unknown = false;
+        try { persistGenerationJob(job); } catch { job.error = '取消狀態無法寫入收據；保留原收據且不會自動重送。'; }
+      }
       broadcast('job', publicJob(job));
       return;
     }
@@ -243,13 +314,26 @@ function enqueue(job, runner) {
     job.startedAt = new Date().toISOString();
     broadcast('job', publicJob(job));
     try {
+      if (job.kind === 'generate') persistGenerationJob(job);
       job.result = await runner();
-      job.status = job.cancelled ? 'cancelled' : 'done';
+      if (job.kind === 'generate') {
+        job.submission_state = job.result.submission_state;
+        job.submission_unknown = job.result.submission_state === 'unresolved';
+      }
+      job.status = job.cancelled ? 'cancelled' : job.submission_unknown ? 'unresolved' : 'done';
     } catch (err) {
-      job.status = 'failed';
+      job.submission_unknown = job.kind === 'generate' && (!!err.submission_unknown || err.code === 'GENERATION_SUBMISSION_UNKNOWN');
+      job.status = job.submission_unknown ? 'unresolved' : 'failed';
       job.error = String((err && err.message) || err);
+      if (job.kind === 'generate') {
+        job.error_code = err.code || null;
+        job.submission_state = job.submission_unknown ? 'unknown' : 'not_submitted';
+      }
     } finally {
       job.finishedAt = new Date().toISOString();
+      if (job.kind === 'generate') {
+        try { persistGenerationJob(job); } catch { job.error = (job.error ? job.error + '；' : '') + '收據更新失敗；保留原收據且不會自動重送。'; }
+      }
       broadcast('job', publicJob(job));
     }
   });
@@ -368,6 +452,8 @@ const ENDPOINTS = [
   { method: 'GET', path: '/events', desc: 'SSE：job / progress / snapshot / page / event' },
   { method: 'GET', path: '/jobs', desc: '最近 job' },
   { method: 'GET', path: '/jobs/:id', desc: 'job 詳情' },
+  { method: 'POST', path: '/generate', body: 'mode, prompt|style, lyrics, title, style_influence, dry_run=true, confirm_credit_spend, max_credits, idempotency_key', desc: 'v1.1 Preview 生成預覽／單次送出（持久化收據）' },
+  { method: 'GET', path: '/generation-status', query: 'task_ids（逗號分隔，最多 10 筆）', desc: '依精確 task_id 唯讀查生成結果' },
   { method: 'POST', path: '/download', body: 'Selector＋types, root, type_folders, force, concurrency, dry_run, idempotency_key', desc: '下載 job' },
   { method: 'POST', path: '/tidy', body: 'root', desc: '一鍵整理 job' },
   { method: 'POST', path: '/dedupe', body: 'kind, commit, include_custom', desc: '去重 job' },
@@ -391,6 +477,7 @@ function capabilities() {
     selector: '{ song_ids?: string[], query?: string, latest?: number, all?: boolean }（無條件且 all≠true → 不選任何歌）',
     pageFiles: ['page-songs.json', 'page-unavailable.json', 'page-events.json', 'page-favorites.json'],
     auth: { token: !!TOKEN, header: 'X-Hub-Token', extensionAllowlist: EXT_ALLOW.size ? [...EXT_ALLOW] : null },
+    generation: { model: 'acemusic-v1.1', defaultDryRun: true, persistentReceipts: true, available: !generationReceiptError },
   };
 }
 
@@ -546,6 +633,57 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, total: rows.length, songs: compact ? compactRows(rows) : rows });
     }
 
+    if (pathname === '/generation-status' && req.method === 'GET') {
+      const task_ids = String(url.searchParams.get('task_ids') || '').split(',').map((id) => id.trim()).filter(Boolean);
+      return json(res, 200, await ACE.generationStatus(cfg, { task_ids }));
+    }
+
+    if (pathname === '/generate' && req.method === 'POST') {
+      const body = await readBody(req);
+      const allowed = new Set(['mode', 'model', 'prompt', 'style', 'lyrics', 'title', 'style_influence', 'dry_run', 'confirm_credit_spend', 'max_credits', 'idempotency_key']);
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => !allowed.has(key))) return json(res, 400, { ok: false, error: '生成請求包含不支援的欄位。' });
+      // 先以純函式比對收據。扣完最後一筆額度或登入失效後仍能查原結果。
+      let request;
+      try { request = ACE.prepareGenerationRequest(body); }
+      catch (err) { return json(res, 400, { ok: false, error: err.message, error_code: err.code || null, submission_unknown: false }); }
+      const fingerprint = digest(stableJson(request));
+      const key = typeof body.idempotency_key === 'string' ? digest(body.idempotency_key) : '';
+      const existing = body.dry_run === false && key ? generationReceipts.get(key) : null;
+      if (existing) {
+        if (existing.fingerprint !== fingerprint) return json(res, 409, { ok: false, error: '相同 idempotency_key 已用於不同生成內容；請核對原收據。' });
+        return json(res, 200, { ok: true, jobId: existing.job.id, idempotent: true, request_created_at: existing.request_created_at, job: existing.job });
+      }
+      // 預覽只讀；實際送出仍由核心重新核對即時費用及所有授權欄位。
+      const preview = await ACE.generateSong(cfg, { ...body, dry_run: true });
+      if (body.dry_run !== false) return json(res, 200, preview);
+      if (generationReceiptError) return json(res, 503, { ok: false, error: generationReceiptError });
+      if (body.confirm_credit_spend !== true || !Number.isFinite(body.max_credits) || body.max_credits < 0 || typeof body.idempotency_key !== 'string' || !body.idempotency_key.trim()) {
+        return json(res, 400, { ok: false, error: '實際生成必須明確提供 confirm_credit_spend=true、max_credits 與 idempotency_key。' });
+      }
+      if (!preview.request || typeof preview.request !== 'object' || !Number.isSafeInteger(preview.request_created_at) || preview.request_created_at <= 0) return json(res, 502, { ok: false, error: '無法準備可追蹤的生成請求；未送出站點請求。' });
+      // 多個相同請求可能同時等預覽；回來後再核對一次，才可保留單一收據。
+      const concurrent = generationReceipts.get(key);
+      if (concurrent) {
+        if (concurrent.fingerprint !== fingerprint) return json(res, 409, { ok: false, error: '相同 idempotency_key 已用於不同生成內容；請核對原收據。' });
+        return json(res, 200, { ok: true, jobId: concurrent.job.id, idempotent: true, request_created_at: concurrent.request_created_at, job: concurrent.job });
+      }
+      const job = addJob('generate', { generationReceiptKey: key });
+      job.request_created_at = preview.request_created_at;
+      const receipt = { key, fingerprint, request_created_at: preview.request_created_at, job: publicJob(job) };
+      generationReceipts.set(key, receipt);
+      try {
+        // 必須先落盤，才允許任何有扣額度風險的網路請求。
+        saveGenerationReceipts();
+      } catch {
+        generationReceipts.delete(key);
+        jobs.delete(job.id);
+        jobOrder.splice(jobOrder.indexOf(job.id), 1);
+        return json(res, 503, { ok: false, error: '生成收據無法寫入，未送出站點請求。' });
+      }
+      enqueue(job, () => ACE.generateSong(cfg, { ...body, request_created_at: receipt.request_created_at }));
+      return json(res, 202, { ok: true, jobId: job.id, request_created_at: receipt.request_created_at, status: 'queued', hint: '用 /jobs/:id 查送出結果；勿以新 key 重送。' });
+    }
+
     if (pathname === '/jobs' && req.method === 'GET') {
       const list = [...jobs.values()].slice(-50).reverse().map(publicJob);
       return json(res, 200, { ok: true, jobs: list });
@@ -553,10 +691,16 @@ const server = http.createServer(async (req, res) => {
 
     const jobMatch = pathname.match(/^\/jobs\/([A-Za-z0-9_]+)(\/cancel)?$/);
     if (jobMatch) {
-      const job = jobs.get(jobMatch[1]);
+      const saved = [...generationReceipts.values()].find((receipt) => receipt.job.id === jobMatch[1]);
+      const job = jobs.get(jobMatch[1]) || (saved && { ...saved.job, meta: { generationReceiptKey: saved.key } });
       if (!job) return json(res, 404, { ok: false, error: 'job not found' });
       if (jobMatch[2] && req.method === 'POST') {
+        if (job.kind === 'generate' && job.status !== 'queued') return json(res, 409, { ok: false, error: '生成已送出或狀態未明；本機取消不能撤回站點任務，請查生成結果。' });
         job.cancelled = true;
+        if (job.kind === 'generate') {
+          job.submission_state = 'not_submitted';
+          persistGenerationJob(job);
+        }
         broadcast('job', publicJob(job));
         return json(res, 200, { ok: true, cancelled: true, job: publicJob(job) });
       }
@@ -662,6 +806,7 @@ const server = http.createServer(async (req, res) => {
  * 啟動
  * ------------------------------------------------------------------ */
 acquireLock();
+restoreGenerationReceipts();
 server.on('error', (err) => {
   if (err && err.code === 'EADDRINUSE') {
     console.error(`[hub] port ${PORT} 已被占用`);

@@ -25,7 +25,7 @@ agent / CLI / MCP ──HTTP──► agent/hub.mjs (127.0.0.1:8788)
 - **單一寫入者**：`%LOCALAPPDATA%\AceMusicDL\hub.lock` 記錄 pid；已有活著的 hub 就拒絕啟動（exit 2）。
 - **讀取**：直接讀記憶體 snapshot，不碰磁碟、不打站點。
 - **寫入**：一律進佇列，序列執行；完成後 `clearFsCaches` 並刷新 snapshot。
-- **回落**：hub 不在時，CLI/MCP 完全照舊（本地 in-process），功能不減。
+- **回落**：既有下載／查詢功能可回落本地。付費生成只能由支援 `/generate` 的 Hub 提交；連線錯誤或提交逾時不改走本地重送。
 
 ## 3. API（全部 JSON；只綁 127.0.0.1）
 
@@ -36,6 +36,8 @@ agent / CLI / MCP ──HTTP──► agent/hub.mjs (127.0.0.1:8788)
 | GET | `/overview` | 快照摘要（歌曲數／已下載／未下載／MIDI 可用） |
 | GET | `/songs?undownloaded=1&q=&limit=50&compact=1` | 歌單（讀快照；`compact=0` 回完整） |
 | POST | `/download` | `{song_ids?, all?, query?, types?, root?, type_folders?, force?, concurrency?, dry_run?, idempotency_key?}` → `202 {jobId}` |
+| POST | `/generate` | v1.1 直接生成；預設 `dry_run:true` 只讀成本及模型。實際請求需 `confirm_credit_spend:true`、`max_credits`、`idempotency_key`，回生成提交 job |
+| GET | `/generation-status` | `task_ids=id1,id2` 精確查詢站點生成狀態（唯讀，不觸發生成） |
 | POST | `/tidy` | `{root?}` → job（`tidyAll`） |
 | POST | `/dedupe` | `{kind:"content"\|"folders", commit?, include_custom?}` → job |
 | POST | `/organize` | `{commit?, root?, type_folders?}` → job |
@@ -78,7 +80,8 @@ agent / CLI / MCP ──HTTP──► agent/hub.mjs (127.0.0.1:8788)
 
 - 只綁 `127.0.0.1`；不開放區網。
 - 可選 `ACE_HUB_TOKEN`：設定後要求 `x-hub-token` 標頭。
-- 不新增任何站點 API 呼叫；沿用既有 session／cookie。
+- 生成沿用既有本機 session／Cookie；只向 ACE Music 同源 API 發送，不使用第三方代理。生成預設預覽，費用由即時 `/api/status` 取得。
+- `generation-receipts.json` 在送出前保存請求指紋、時間戳與 job 紀錄；同 key 不重送，Hub 重啟後仍保留結果不明的紀錄。它不是伺服器提供的冪等保證。
 
 ## 6. 失敗模式
 

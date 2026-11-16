@@ -116,12 +116,15 @@ args = ["F:\\code\\acemusic-batch-downloader\\agent\\mcp.mjs"]
 | `ace_backups` | 整理備份清單＋依規則可刪預覽（MCP 只預覽，不刪） |
 | `ace_masters` | 母帶清單（俱樂部版／舊版對照；WAV 取樣率／位元深度／長度，唯讀） |
 | `ace_probe` | 站點健康（唯讀 `/api/status`：是否登入、方案、模型；不回個資） |
+| `ace_generate` | 直接使用本機登入生成 ACE Music v1.1；預設只預覽。實際生成需明確額度上限、確認與防重送 key；必須有支援生成的 Hub |
+| `ace_generation_status` | 依指定 `task_ids` 唯讀查詢生成進度、實際模型與音訊是否可用 |
 | `ace_warm`／`ace_hub_status`／`ace_session_status` | 預熱快取／Hub 狀態／登入＋頁面通道狀態 |
 
 典型「拿最新歌曲路徑」流程：`ace_locate {}` → 直接得到 `songs[0].dirs[].dir` 與 `files[].path`。
 典型「把剛做好的歌全部抓下來」：`ace_download { latest: 1, types: ["all"] }` → `ace_job_status` → `ace_tidy { wait: true }` → `ace_locate {}`。
 選歌參數（`song_ids`／`query`／`latest`／`all`）在 `ace_download`、CLI `download`、Hub `/download` 完全相同；沒有任何條件且 `all` 不是 true 時不會選任何歌。
 其他插件接入：先讀 Hub `GET /capabilities`（見 `docs/CONVENTIONS.md` §6）。
+直接生成的參數、費用及逾時處理見 [DIRECT-GENERATION.md](DIRECT-GENERATION.md)。
 典型「做完歌自動拿檔」流程：使用者在面板開「新歌自動下載」→ `ace_wait_new_song { wait_download: true }`。
 
 範例 agent 對話流程：
