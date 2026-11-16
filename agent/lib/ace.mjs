@@ -551,8 +551,30 @@ export function matchSongFiles(song, files, { folder = '', includeViews = false,
  * 找歌曲的真實目錄。
  * @param {{songId?:string, query?:string, latest?:number, includeViews?:boolean, limitFiles?:number}} opts
  */
+/* locate 的輸入（4 MB 歌單快取＋檔案索引）依檔案 mtime 記憶，Hub 熱路徑不必每次重新解析 JSON。
+   只給 locate 用（唯讀、不改內容）；最多沿用 30 秒，避免跨過 listSongs 的新鮮度判斷。 */
+const locateMemo = { key: '', at: 0, songs: null, index: null };
+function fileSig(file) {
+    try {
+        const st = fs.statSync(file);
+        return st.mtimeMs + ':' + st.size;
+    } catch {
+        return '-';
+    }
+}
+async function locateInputs(cfg) {
+    const sig = () =>
+        [cfg.stateDir, cfg.downloadDir, fileSig(path.join(cfg.stateDir, 'cache', 'songs.json')), fileSig(path.join(cfg.stateDir, 'page-songs.json')), fileSig(path.join(cfg.stateDir, 'cache', 'fs-index.json'))].join('|');
+    const key = sig();
+    if (locateMemo.key === key && Date.now() - locateMemo.at < 30000) return locateMemo;
+    const [songs, index] = await Promise.all([listSongs(cfg), collectDownloadIndex(cfg)]);
+    // 載入時可能剛寫回快取：用載入後的簽名當 key
+    Object.assign(locateMemo, { key: sig(), at: Date.now(), songs, index });
+    return locateMemo;
+}
+
 export async function locateSongs(cfg = config(), { songId = '', query = '', latest = 0, includeViews = false, limitFiles = 200 } = {}) {
-    const [songs, index, state] = await Promise.all([listSongs(cfg), collectDownloadIndex(cfg), loadState(cfg)]);
+    const [{ songs, index }, state] = await Promise.all([locateInputs(cfg), loadState(cfg)]);
     let picked = [...songs].sort((a, b) => songTime(b) - songTime(a));
     if (songId) picked = picked.filter((song) => song.task_id === songId);
     if (query) {

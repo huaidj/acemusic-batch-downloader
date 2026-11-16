@@ -4,31 +4,22 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as ACE from './lib/ace.mjs';
 import { config, readJson, writeJson, exists } from './lib/config.mjs';
+import { hubJson, hubRequest } from './lib/hubclient.mjs';
 
-const HUB_URL = process.env.ACE_HUB_URL || 'http://127.0.0.1:8788';
 let hubSkipUntil = 0;
 
 /** 嘗試走 Agent Hub；不可用時 30 秒內直接回落本地（回傳 null） */
 async function hubTry(pathname, { method = 'GET', body, timeoutMs = 1200 } = {}) {
     if (Date.now() < hubSkipUntil) return null;
     try {
-        const response = await fetch(HUB_URL + pathname, {
-            method,
-            headers: body ? { 'Content-Type': 'application/json' } : undefined,
-            body: body ? JSON.stringify(body) : undefined,
-            signal: AbortSignal.timeout(timeoutMs),
-        });
-        const data = await response.json().catch(() => null);
-        if (!response.ok || !data || data.ok === false) throw new Error((data && data.error) || 'HTTP ' + response.status);
-        return data;
+        return await hubJson(pathname, { method, body, timeoutMs });
     } catch {
         hubSkipUntil = Date.now() + 30000;
         return null;
     }
 }
-
 function usage() {
-    console.log(`ACE Music 批量下載器 CLI  v1.6.5
+    console.log(`ACE Music 批量下載器 CLI  v1.7.0
 
 用法：
   node cli.mjs doctor                         檢查登入狀態與環境
@@ -366,8 +357,8 @@ async function main() {
         const hubScript = path.resolve(path.dirname(process.argv[1]), 'hub.mjs');
         if (args.flags.status) {
             try {
-                const health = await (await fetch(base + '/health', { signal: AbortSignal.timeout(2500) })).json();
-                const overview = await (await fetch(base + '/overview', { signal: AbortSignal.timeout(2500) })).json();
+                const health = (await hubRequest('/health', { base, timeoutMs: 2500 })).data;
+                const overview = (await hubRequest('/overview', { base, timeoutMs: 2500 })).data;
                 const counts = overview && overview.counts;
                 const payload = { ok: true, url: base, hub: health, counts: counts || null, overviewError: counts ? undefined : (overview && overview.error) || 'overview 無資料' };
                 if (args.flags.json) return printJson(payload);
@@ -383,7 +374,7 @@ async function main() {
         }
         if (args.flags.stop) {
             try {
-                await fetch(base + '/shutdown', { method: 'POST', signal: AbortSignal.timeout(2500) });
+                await hubRequest('/shutdown', { base, method: 'POST', timeoutMs: 2500 });
                 console.log('已要求 hub 關閉');
             } catch (err) {
                 console.log('Hub 沒有在執行或無法連線：' + String((err && err.message) || err));

@@ -3,28 +3,21 @@
 // 傳輸：stdio，一行一個 JSON-RPC 訊息（MCP stdio transport）。
 import * as ACE from './lib/ace.mjs';
 import { config, readJson, exists } from './lib/config.mjs';
+import { hubJson, HUB_URL } from './lib/hubclient.mjs';
 
-const SERVER = { name: 'ace-music-downloader', version: '1.6.5' };
+const SERVER = { name: 'ace-music-downloader', version: '1.7.0' };
 const jobs = new Map();
 let jobSeq = 0;
-const HUB_URL = process.env.ACE_HUB_URL || 'http://127.0.0.1:8788';
 const hubJobs = new Set();
 let hubDownUntil = 0;
 
 async function hubCall(pathname, { method = 'GET', body, timeoutMs = 2000 } = {}) {
     if (Date.now() < hubDownUntil) throw new Error('hub recently unavailable');
     try {
-        const response = await fetch(HUB_URL + pathname, {
-            method,
-            headers: body ? { 'Content-Type': 'application/json' } : undefined,
-            body: body ? JSON.stringify(body) : undefined,
-            signal: AbortSignal.timeout(timeoutMs),
-        });
-        const data = await response.json().catch(() => null);
-        if (!response.ok || !data || data.ok === false) throw new Error((data && data.error) || 'HTTP ' + response.status);
-        return data;
+        return await hubJson(pathname, { method, body, timeoutMs });
     } catch (err) {
-        hubDownUntil = Date.now() + 30000;
+        // 只有「連不上」才暫停 30 秒走本地；Hub 回的業務錯誤（例如登入過期）不算 Hub 掛掉
+        if (/ECONNREFUSED|ECONNRESET|hub timeout|EHOSTUNREACH/i.test(String((err && (err.code || err.message)) || ''))) hubDownUntil = Date.now() + 30000;
         throw err;
     }
 }
