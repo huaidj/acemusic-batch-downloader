@@ -6,7 +6,7 @@ import path from 'node:path';
 import { archiveDownloadLog } from '../../agent/lib/log-archive.mjs';
 
 test('download log archive keeps every event across ring rollovers without duplicates', async (t) => {
-  const stateDir = fs.mkdtempSync(path.join(process.platform === 'win32' && fs.existsSync('F:\DevData\Temp') ? 'F:\DevData\Temp' : os.tmpdir(), 'log-archive-'));
+  const stateDir = fs.mkdtempSync(path.join((process.env.ACE_TEST_TEMP || os.tmpdir()), 'log-archive-'));
   t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }));
   const cfg = { stateDir };
   const ev = (n, day = '2026-11-16') => ({ at: new Date(Date.parse(day + 'T10:00:00Z') + n * 1000).toISOString(), event: 'download_start', filename: `f${n}.mp3` });

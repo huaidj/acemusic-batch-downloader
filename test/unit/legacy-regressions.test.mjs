@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import os from 'node:os';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -13,7 +14,7 @@ import { request as mixRequest } from '../../mixdesk/mcp.mjs';
 import { benchMcp } from '../../scripts/bench.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const TEMP = process.env.ACE_TEST_TEMP || 'F:/DevData/Temp';
+const TEMP = (process.env.ACE_TEST_TEMP || os.tmpdir());
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 function sandbox() {
   fs.mkdirSync(TEMP, { recursive: true });

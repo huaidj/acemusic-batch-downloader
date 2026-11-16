@@ -6,7 +6,7 @@ import path from 'node:path';
 import { dedupeSongCopies } from '../../agent/lib/ace.mjs';
 
 test('dedupeSongCopies: commit:false previews without moving or locking; commit archives the song-folder copy', async (t) => {
-  const base = fs.mkdtempSync(path.join(process.platform === 'win32' && fs.existsSync('F:\DevData\Temp') ? 'F:\DevData\Temp' : os.tmpdir(), 'dedupe-songs-'));
+  const base = fs.mkdtempSync(path.join((process.env.ACE_TEST_TEMP || os.tmpdir()), 'dedupe-songs-'));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const cfg = { stateDir: path.join(base, 'state'), downloadDir: path.join(base, 'downloads'), stateFile: path.join(base, 'state', 'agent-state.json') };
   const root = path.join(cfg.downloadDir, 'ai音樂');

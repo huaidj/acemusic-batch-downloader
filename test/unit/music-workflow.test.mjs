@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import os from 'node:os';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,7 +10,7 @@ import { prepareCreateRequest } from '../../agent/lib/create-contract.mjs';
 import { hashObject } from '../../agent/music/core.mjs';
 import { createResearchService } from '../../agent/research/service.mjs';
 
-const ROOT = 'F:/DevData/Temp';
+const ROOT = process.env.ACE_TEST_TEMP || os.tmpdir();
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const direction = { natural_language: 'sub bass, micro swing, spatial depth, instrumental', model: 'acemusic-v1.1', mode: 'custom', seed: 31, locked_term_ids: [], hard_constraints: ['instrumental'] };
 function backend() {

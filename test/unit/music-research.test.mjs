@@ -1,11 +1,12 @@
 import { test } from 'node:test';
+import os from 'node:os';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createResearchService, getResearchCapabilities, validatePublicResearchUrl, sensitiveResearchRuleCodes } from '../../agent/research/service.mjs';
 
-const ROOT = 'F:/DevData/Temp/HuaiDJ-ACE-Agent-20261116-phase2-research';
+const ROOT = path.join(process.env.ACE_TEST_TEMP || os.tmpdir(), 'HuaiDJ-ACE-phase2-research');
 fs.mkdirSync(ROOT, { recursive: true });
 const KEY = 'fake-research-test-key-never-real-credentials';
 const grant = (extra = {}) => ({ api_key: KEY, base_url: ' https://api.deepseek.com/v1 ', budget_usd: 1, max_requests: 10, expires_at: new Date(Date.now() + 3600000).toISOString(), grant_id: 'research_test_grant', ...extra });

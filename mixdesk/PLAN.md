@@ -41,7 +41,7 @@
 ### Track（曲目）
 ```json
 {
-  "id": "t_0001", "file": "C:/Users/win/Downloads/ai音樂/成品MP3/xxx.mp3",
+  "id": "t_0001", "file": "%USERPROFILE%/Downloads/ai音樂/成品MP3/xxx.mp3",
   "title": "xxx", "duration": 213.4,
   "bpm": 104.2, "key": "G:minor", "camelot": "6A", "energy": 0.164,
   "tags": ["dark", "tribal"], "analyzedAt": "...",

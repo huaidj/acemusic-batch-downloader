@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import os from 'node:os';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -10,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { createWatchStatusWriter, runPipeline } from '../../agent/watch.mjs';
 import { appendLog, config } from '../../agent/lib/config.mjs';
 
-const TEMP = process.env.ACE_TEST_TEMP || 'F:/DevData/Temp';
+const TEMP = (process.env.ACE_TEST_TEMP || os.tmpdir());
 function sandbox() {
   fs.mkdirSync(TEMP, { recursive: true });
   const base = fs.mkdtempSync(path.join(TEMP, 'ace-watch-state-'));

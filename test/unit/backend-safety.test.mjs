@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import os from 'node:os';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -10,7 +11,7 @@ import { writeJson, replaceFileAtomic } from '../../agent/lib/config.mjs';
 import { hubRequest, hubJson, canFallbackHubWrite } from '../../agent/lib/hubclient.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const TEMP = process.env.ACE_TEST_TEMP || 'F:/DevData/Temp';
+const TEMP = (process.env.ACE_TEST_TEMP || os.tmpdir());
 
 test('atomic replacement retries a transient Windows lock without removing the old evidence', async () => {
   const sb = sandbox(); const file = path.join(sb.state,'atomic.json'), temporary = file+'.tmp';

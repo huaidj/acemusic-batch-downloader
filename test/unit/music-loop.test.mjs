@@ -1,11 +1,12 @@
 import { test } from 'node:test';
+import os from 'node:os';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createMusicLoop } from '../../agent/lib/music-loop.mjs';
 
-const ROOT = 'F:/DevData/Temp/HuaiDJ-ACE-Agent-20261116-phase2-loops';
+const ROOT = path.join(process.env.ACE_TEST_TEMP || os.tmpdir(), 'HuaiDJ-ACE-phase2-loops');
 fs.mkdirSync(ROOT, { recursive: true });
 const snapshot = { dictionary_snapshot_id: 'fixture_dict', dictionary_version: 'fixture-1', dictionary_hash: 'a'.repeat(64), taste_snapshot_id: 'fixture_taste', compiler_version: 'fixture-1', capability_snapshot_id: 'fixture_cap', capability_snapshot_hash: 'b'.repeat(64) };
 const asset = (id, depth, hash, accepted = true) => ({ id, generation_depth: depth, sha256: hash.repeat(64), real_or_mock: 'real', technical_review: { full_decode: true }, human_listen: { status: accepted ? 'accepted' : 'awaiting_listen', accepted }, actual_model: 'acemusic-v1.1', versions: structuredClone(snapshot) });

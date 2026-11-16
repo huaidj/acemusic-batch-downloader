@@ -2,12 +2,13 @@ param(
     [switch]$Stop,
     [switch]$ConnectAccount,
     [ValidateRange(1024,65535)][int]$Port=18792,
-    [string]$DataRoot='F:\DevData\Runtime\HuaiDJ-ACE-Portable',
+    [string]$DataRoot='',
     [string]$GrantFile='',
     [string]$ResearchConfig='',
     [string]$RuntimeConfig=''
 )
 $ErrorActionPreference='Stop'
+if(-not $DataRoot){ $DataRoot = if($env:HUAIDJ_DATA_ROOT){ $env:HUAIDJ_DATA_ROOT } elseif(Test-Path -LiteralPath 'F:\DevData'){ 'F:\DevData\Runtime\HuaiDJ-ACE-Portable' } else { Join-Path $env:LOCALAPPDATA 'HuaiDJ-ACE-Portable' } }
 $packageRoot=Split-Path -Parent $PSScriptRoot
 $packageItem=Get-Item -LiteralPath $packageRoot -Force
 if ($packageItem.LinkType -in @('Junction','SymbolicLink') -and @($packageItem.Target).Count -eq 1) { $packageRoot=[string]@($packageItem.Target)[0] }

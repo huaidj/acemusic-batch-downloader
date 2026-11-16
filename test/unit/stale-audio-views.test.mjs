@@ -6,7 +6,7 @@ import path from 'node:path';
 import { pruneStaleAudioViews } from '../../agent/lib/ace.mjs';
 
 function sandbox(t) {
-  const base = process.platform === 'win32' && fs.existsSync('F:\DevData\Temp') ? 'F:\DevData\Temp' : os.tmpdir();
+  const base = (process.env.ACE_TEST_TEMP || os.tmpdir());
   const dir = fs.mkdtempSync(path.join(base, 'stale-views-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const root = path.join(dir, 'downloads', 'ai音樂'), outDir = path.join(root, '音頻分類'), stateDir = path.join(dir, 'state'), archived = path.join(dir, 'archive');

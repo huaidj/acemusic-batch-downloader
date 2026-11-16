@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createMusicPerformance, planPerformanceBuffer } from '../../agent/lib/music-performance.mjs';
 
 const artifact = (id, duration = 300, extra = {}) => ({
-    id, title: id, path: `F:/DevData/Temp/music-performance-fixture/${id}.wav`, sha256: id.padEnd(64, '0'),
+    id, title: id, path: `/fixture/music-performance/${id}.wav`, sha256: id.padEnd(64, '0'),
     duration_seconds: duration, technical_verified: true, human_accepted: true, ...extra,
 });
 const a = artifact('a');

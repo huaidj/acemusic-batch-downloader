@@ -1,7 +1,7 @@
 param([switch]$Stop)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$validationRoot = 'F:\DevData\Runtime\HuaiDJ-ACE-Agent-20261116\phase2'
+$validationRoot = if ($env:HUAIDJ_DEV_ROOT) { Join-Path $env:HUAIDJ_DEV_ROOT 'phase2' } else { 'F:\DevData\Runtime\HuaiDJ-ACE-Agent-20261116\phase2' }
 $validationState = Join-Path $validationRoot 'state'
 $port = 18791
 $url = "http://127.0.0.1:$port"

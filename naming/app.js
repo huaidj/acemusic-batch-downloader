@@ -13,7 +13,7 @@
 
   const AUDIO_EXT = new Set(['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'aiff', 'aif', 'opus', 'wma', 'mp4']);
   const LS_KEY = 'nominator.v1';
-  const DEFAULT_ROOT = String.raw`C:\Users\win\Downloads\ai音樂`;
+  const DEFAULT_ROOT = String.raw`%USERPROFILE%\Downloads\ai音樂`;
   const MAX_ENTRIES = 4000;
 
   const el = {

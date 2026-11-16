@@ -4,10 +4,14 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Split-Path -Parent $here
 $installDir = if ($env:ACE_STATE_DIR) { [IO.Path]::GetFullPath($env:ACE_STATE_DIR) } else { Join-Path $env:LOCALAPPDATA 'AceMusicDL' }
 $version = (Get-Content -LiteralPath (Join-Path $projectRoot 'manifest.json') -Raw | ConvertFrom-Json).version
-if (-not $BackupDirectory) { $BackupDirectory = 'F:\DevData\Backups\ACE-Downloader-' + [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff') }
+if (-not $BackupDirectory) {
+    # 有 F:\DevData 的開發機沿用原備份位置；其他電腦放在本機應用資料夾，不再要求 F: 槽。
+    $backupBase = if ($env:ACE_BACKUP_DIR) { $env:ACE_BACKUP_DIR } elseif (Test-Path -LiteralPath 'F:\DevData') { 'F:\DevData\Backups' } else { Join-Path $env:LOCALAPPDATA 'AceMusicDL-backups' }
+    $BackupDirectory = Join-Path $backupBase ('ACE-Downloader-' + [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff'))
+}
 $backupRoot = [IO.Path]::GetFullPath($BackupDirectory)
 if ($DryRun) { [ordered]@{version=$version;installDirectory=$installDir;backupDirectory=$backupRoot;preserveRuntimeData=$true;stopActiveProcesses=$false} | ConvertTo-Json; return }
-if (-not (Test-Path -LiteralPath 'F:\')) { throw 'F: is required for a verified rollback backup.' }
+if (-not (Test-Path -LiteralPath ([IO.Path]::GetPathRoot($backupRoot)))) { throw 'Backup drive is not available; nothing was changed.' }
 if (Test-Path -LiteralPath $backupRoot) { throw 'Backup directory exists; it has been preserved.' }
 
 $hub = $null

@@ -1,11 +1,11 @@
 param([switch]$Stop)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$previewRoot = 'F:\DevData\Runtime\HuaiDJ-ACE-Agent-20261116'
+$previewRoot = if ($env:HUAIDJ_DEV_ROOT) { $env:HUAIDJ_DEV_ROOT } else { 'F:\DevData\Runtime\HuaiDJ-ACE-Agent-20261116' }
 $previewState = Join-Path $previewRoot 'preview-state'
 $previewPort = 18788
 $previewUrl = "http://127.0.0.1:$previewPort"
-if (-not (Test-Path -LiteralPath 'F:\DevData')) { throw 'F:\DevData is required; no fallback to C:.' }
+if (-not (Test-Path -LiteralPath (Split-Path -Parent $previewRoot))) { throw 'Set HUAIDJ_DEV_ROOT to an isolated folder for this developer preview; nothing was started.' }
 $lockPath = Join-Path $previewState 'hub.lock'
 $running = $false
 if (Test-Path -LiteralPath $lockPath) {

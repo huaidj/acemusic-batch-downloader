@@ -63,7 +63,7 @@ MCP 沿用 `node agent/mcp.mjs` stdio；設定 `ACE_HUB_URL` 即可。新增工�
 ## 測試與回退
 
 ```powershell
-# 大量測試請先把 TEMP/TMP 指向 F:\DevData\Temp 下的獨立目錄
+# 大量測試請先把 TEMP/TMP（及 ACE_TEST_TEMP）指向非系統磁碟上的獨立目錄
 npm run test:unit
 ```
 
