@@ -350,6 +350,17 @@ export async function locateSongs(cfg = config(), { songId = '', query = '', lat
     return { ok: true, root, total: results.length, songs: results };
 }
 
+/** 檔名索引快取（同一個 names Set 只建一次） */
+const nameIndexCache = new WeakMap();
+function nameIndexOf(names) {
+    let idx = nameIndexCache.get(names);
+    if (!idx) {
+        idx = P.buildNameIndex(names);
+        nameIndexCache.set(names, idx);
+    }
+    return idx;
+}
+
 /** 每首歌已下載進度（依檔名比對，含 CLI/擴充功能/站點下載的檔案） */
 export function songDownloadSummary(song, index, unavailable = {}) {
     const rawTitle = (song.meta && song.meta.title) || '';
@@ -368,16 +379,7 @@ export function songDownloadSummary(song, index, unavailable = {}) {
     let wav = false;
     let cover = false;
     if (index && index.names) {
-        const reges = titleCandidates.map((candidate) => new RegExp('^' + escRe(candidate) + '(?: \\(\\d+\\))?(?: - (.+))?\\.([a-z0-9]+)$', 'i'));
-        for (const name of index.names) {
-            let match = null;
-            for (const re of reges) {
-                match = re.exec(name);
-                if (match) break;
-            }
-            if (!match) continue;
-            const suffix = match[1] ? match[1].trim().toLowerCase() : '';
-            const ext = match[2].toLowerCase();
+        for (const { suffix, ext } of P.lookupNames(nameIndexOf(index.names), titleCandidates)) {
             if (suffix === 'cover') cover = true;
             else if (suffix === 'midi') midi = true;
             else if (suffix === 'musicxml') musicxml = true;

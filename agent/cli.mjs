@@ -387,10 +387,12 @@ async function main() {
             songs: await ACE.cacheRead('songs', { cfg: cfgNow }),
             fsIndex: await ACE.cacheRead('fs-index', { cfg: cfgNow }),
         };
-        const action = args._[1] || 'status';
+        const action = args._[0] || 'status';
         if (action === 'clear') {
-            ACE.cacheClear(null, cfgNow);
-            return console.log('已清除快取。');
+            // 預設只清可快速重建的快取；音頻分析（重算很久）要 --all 才清
+            const names = args.flags.all ? [null] : ['songs', 'fs-index', 'library-snapshot', 'session-status'];
+            for (const name of names) ACE.cacheClear(name, cfgNow);
+            return console.log(args.flags.all ? '已清除全部快取（含音頻分析）。' : '已清除歌單／檔案索引／曲庫快照／登入狀態快取（音頻分析保留，--all 才清）。');
         }
         const report = {
             cacheDir: status.cacheDir,
@@ -624,7 +626,10 @@ async function main() {
 
 main().catch((err) => {
     console.error('錯誤：' + ((err && err.message) || err));
-    process.exit(1);
+    // 不直接 process.exit：Node 24 on Windows 在 fetch socket 關閉中強制退出會 libuv assertion（0xC0000409）。
+    // 設 exitCode 讓事件迴圈自然結束；萬一有殘留 handle，1.5 秒後再強制退出。
+    process.exitCode = 1;
+    setTimeout(() => process.exit(1), 1500).unref();
 });
 
 

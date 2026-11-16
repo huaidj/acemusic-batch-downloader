@@ -1050,6 +1050,19 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     S.doneKinds = done;
   }
 
+  /** 檔名索引（S.fsNames 換新集合才重建；每首歌查詢 O(1)，不再逐檔跑 regex） */
+  let nameIndexFor = null;
+  let nameIndexSize = -1;
+  let nameIndex = new Map();
+  function fsNameIndex() {
+    if (nameIndexFor !== S.fsNames || nameIndexSize !== S.fsNames.size) {
+      nameIndex = P.buildNameIndex(S.fsNames);
+      nameIndexFor = S.fsNames;
+      nameIndexSize = S.fsNames.size;
+    }
+    return nameIndex;
+  }
+
   /** 每首歌目前的下載進度：{have,total,allDone,any,known,detail,mp3} */
   function songDownloadStatus(song) {
     const rawTitle = (song.meta && song.meta.title) || '';
@@ -1070,16 +1083,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     let wav = false;
     let cover = false;
     if (S.fsAt) {
-      const reges = titleCandidates.map((candidate) => new RegExp('^' + escRe(candidate) + '(?: \\(\\d+\\))?(?: - (.+))?\\.([a-z0-9]+)$', 'i'));
-      for (const name of S.fsNames) {
-        let match = null;
-        for (const re of reges) {
-          match = re.exec(name);
-          if (match) break;
-        }
-        if (!match) continue;
-        const suffix = match[1] ? match[1].trim().toLowerCase() : '';
-        const ext = match[2].toLowerCase();
+      for (const { name, suffix, ext } of P.lookupNames(fsNameIndex(), titleCandidates)) {
         if (suffix === 'cover') cover = true;
         else if (suffix === 'midi') midi = true;
         else if (suffix === 'musicxml') musicxml = true;

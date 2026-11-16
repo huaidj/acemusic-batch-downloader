@@ -221,6 +221,55 @@
     return h;
   }
 
+  /**
+   * 檔名索引：一次解析所有檔名，之後每首歌 O(1) 查詢。
+   * 語義等同舊的逐檔 regex：^<標題>(?: \(\d+\))?(?: - (.+))?\.([a-z0-9]+)$（不分大小寫）。
+   * 每個檔名在「每個 ' - ' 切點」都登記一次前綴（標題本身可能含 ' - '），並另外登記去掉 take 編號的前綴。
+   */
+  function buildNameIndex(names) {
+    const index = new Map();
+    const add = (key, entry) => {
+      const list = index.get(key);
+      if (list) list.push(entry);
+      else index.set(key, [entry]);
+    };
+    for (const name of names || []) {
+      const m = /^(.*)\.([a-z0-9]+)$/i.exec(String(name));
+      if (!m) continue;
+      const base = m[1];
+      const ext = m[2].toLowerCase();
+      const splits = [[base, '']];
+      for (let i = base.indexOf(' - '); i !== -1; i = base.indexOf(' - ', i + 1)) {
+        const suffix = base.slice(i + 3);
+        if (suffix.length) splits.push([base.slice(0, i), suffix]);
+      }
+      for (const [prefix, suffix] of splits) {
+        const entry = { name, suffix: suffix.trim().toLowerCase(), ext };
+        const key = prefix.toLowerCase();
+        add(key, entry);
+        const take = / \(\d+\)$/.exec(key);
+        if (take) add(key.slice(0, take.index), entry);
+      }
+    }
+    return index;
+  }
+
+  /** 查某個標題候選的所有檔案（去重；同一檔名只回一次） */
+  function lookupNames(index, candidates) {
+    const out = [];
+    const seen = new Set();
+    for (const candidate of candidates || []) {
+      const list = index.get(String(candidate).toLowerCase());
+      if (!list) continue;
+      for (const entry of list) {
+        if (seen.has(entry.name)) continue;
+        seen.add(entry.name);
+        out.push(entry);
+      }
+    }
+    return out;
+  }
+
   /** 站點不提供的檔案種類（no_download）：{ [taskId]: { [kind]: { code, at } } } */
   function isUnavailable(map, taskId, kind) {
     return !!(map && taskId && kind && map[taskId] && map[taskId][kind]);
@@ -262,6 +311,8 @@
 
   const api = {
     FILE_KINDS,
+    buildNameIndex,
+    lookupNames,
     isUnavailable,
     markUnavailable,
     mergeUnavailable,
