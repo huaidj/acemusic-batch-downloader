@@ -20,7 +20,7 @@ export function hubRequest(pathname, { method = 'GET', body, timeoutMs = 2000, b
                 path: url.pathname + url.search,
                 method,
                 agent,
-                headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {},
+                headers: { ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {}), ...(process.env.ACE_HUB_TOKEN ? { 'X-Hub-Token': process.env.ACE_HUB_TOKEN } : {}) },
             },
             (res) => {
                 const chunks = [];

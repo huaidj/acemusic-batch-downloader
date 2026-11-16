@@ -1,6 +1,6 @@
 import { CREATE_INPUT_SCHEMA } from './create-contract.mjs';
 function tool(action, name, method, path, description, inputSchema, readOnly = true) {
-  return { action, method, path, name, description, inputSchema, annotations: { readOnlyHint: readOnly, destructiveHint: false, idempotentHint: action !== 'submit', openWorldHint: ['preview', 'submit'].includes(action) } };
+  return { action, method, path, name, description, inputSchema, annotations: { readOnlyHint: readOnly, destructiveHint: false, idempotentHint: true, openWorldHint: ['preview', 'submit', 'tasks'].includes(action) } };
 }
 const empty = { type: 'object', properties: {}, additionalProperties: false };
 export const CREATE_CONTRACT = [

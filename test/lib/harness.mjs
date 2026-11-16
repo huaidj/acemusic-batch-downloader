@@ -66,6 +66,10 @@ export function buildTestExtension({ tmpRoot, port, extraOrigins = [] }) {
     }
   }
   const manifest = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'manifest.json'), 'utf8'));
+  // A fresh browser profile still discovers system native-host registration.
+  // Deny that permission in this test copy so alarms/auto-organize cannot write
+  // the user's real session, history or library while exercising mock downloads.
+  manifest.permissions = (manifest.permissions || []).filter(permission => permission !== 'nativeMessaging');
   // 測試隔離：content.js 看到 __ACEDL_TEST_MODE__ 就不採用真機 host 的 fs/agent-state 跳過邏輯
   fs.writeFileSync(path.join(extDir, 'src', 'testmode.js'), 'globalThis.__ACEDL_TEST_MODE__ = true;\n');
   for (const cs of manifest.content_scripts || []) {
@@ -123,6 +127,7 @@ export async function launchExtensionContext({ profileDir, extDir, downloadsDir 
     '--no-default-browser-check',
     '--disable-features=Translate',
     '--disable-search-engine-choice-screen',
+    '--mute-audio',
   ];
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: false,

@@ -28,7 +28,7 @@ const creditUnits = value => {
 
 function validateGrant(value) {
   if (!OBJECT(value) || Object.keys(value).length !== GRANT_FIELDS.length || GRANT_FIELDS.some(field => !(field in value))) return null;
-  if (!validId(value.grant_id) || value.provider !== 'ace' || value.allow_upload !== false || value.allow_auto_continue !== false) return null;
+  if (!validId(value.grant_id) || value.provider !== 'ace' || value.allow_upload !== false || typeof value.allow_auto_continue !== 'boolean') return null;
   if (!Array.isArray(value.models) || value.models.length < 1 || value.models.length > 3 || value.models.some(model => !MODEL_ALIASES.has(model))) return null;
   const models = value.models.map(model => MODEL_ALIASES.get(model)).sort();
   if (new Set(models).size !== models.length) return null;
@@ -40,7 +40,7 @@ function validateGrant(value) {
   return {
     grant_id: value.grant_id, provider: 'ace', models, modes: [...value.modes].sort(),
     max_credits_per_request: value.max_credits_per_request, max_credits_total: value.max_credits_total,
-    max_generations: value.max_generations, expires_at: new Date(expiry).toISOString(), allow_upload: false, allow_auto_continue: false,
+    max_generations: value.max_generations, expires_at: new Date(expiry).toISOString(), allow_upload: false, allow_auto_continue: value.allow_auto_continue,
   };
 }
 
@@ -79,10 +79,10 @@ export function createGenerationAuthority({ stateDir, grantFile } = {}) {
     let raw;
     try {
       if (fs.statSync(grantFile).size > 65536) return { ...fail('grant_invalid', '授權檔案格式無效。'), grant: null };
-      raw = JSON.parse(fs.readFileSync(grantFile, 'utf8'));
+      raw = JSON.parse(fs.readFileSync(grantFile, 'utf8').replace(/^\uFEFF/, ''));
     } catch { return { ...fail('authorization_required', '無法讀取有效的伺服器授權檔案。'), grant: null }; }
     const grant = validateGrant(raw);
-    if (!grant) return { ...fail('grant_invalid', '授權須明確限定模型、模式、有限預算、任務數及 UTC 到期時間，並關閉上傳與自動繼續。'), grant: null };
+    if (!grant) return { ...fail('grant_invalid', '授權須明確限定模型、模式、有限預算、任務數、UTC 到期時間及是否自動繼續；上傳保持關閉。'), grant: null };
     const grantHash = sha(JSON.stringify(grant));
     const stored = grantRow(grant.grant_id);
     if (stored && stored.grant_hash !== grantHash) return { ...fail('grant_changed', '同一授權識別碼的內容已改變；不建立新預留。'), grant, grantHash };

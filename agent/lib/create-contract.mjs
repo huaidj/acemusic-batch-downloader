@@ -53,7 +53,7 @@ const parameterProperties = {
   lyrics: str('Custom Lyrics; v1/v1.1 5000, Step XL 2000 Unicode code points'),
   lyricsMode: { type: 'string', enum: ['own', 'mashup'], description: 'mashup only for Custom Mashup; own preserves supplied lyrics' },
   title: str('Custom title; no hard maximum observed in Create handler'),
-  created_at: { type: 'integer', minimum: 0, description: 'Stable request timestamp in epoch milliseconds; browser always sends Date.now() and receives a pair' },
+  created_at: { type: 'integer', minimum: 0, description: 'Stable request timestamp in epoch milliseconds; browser supplies Date.now(); returned task count depends on model' },
   references: { type: 'array', maxItems: 3, items: wrapped(refSchema, 'Authorized existing audio/melody/score reference') },
   media: { type: 'array', maxItems: 3, items: wrapped(mediaSchema, 'Idea-only authorized existing visual/link') },
   covers: { type: 'array', maxItems: 2, items: wrapped(strictObject({ id: str('Existing uploaded JPEG cover id') }, ['id']), 'Idea cover for each generated song; either zero or two') },

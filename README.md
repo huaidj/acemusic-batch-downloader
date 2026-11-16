@@ -1,3 +1,5 @@
+> 此隔離分支新增 HuaiDJ 音樂中樞：受控生成與回收、公開文字研究、版本化詞典、人類回饋與人工演出準備。先看 [工作流程](agent/WORKFLOW.md) 與 [完整 API](agent/CREATE-API.md)；預設不啟用供應商費用或自動播放。
+
 # ACE Music 批量下載器
 
 在 [acemusic.ai](https://acemusic.ai/create/) 的 Create 歌曲庫頁面加入一個面板，把一首或全部歌曲的**分軌（stems）、MIDI、MusicXML、MP3、WAV、封面**一次下載完，自動改名、分類；另外提供 CLI／MCP／常駐 Hub 給 agent 使用。

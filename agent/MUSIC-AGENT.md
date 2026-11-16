@@ -1,6 +1,6 @@
 # HuaiDJ 創作工作台（離線準備版）
 
-這個分支將自然語言、詞典與任務準備加入既有 ACE Hub。它沒有啟用付費生成、DeepSeek、素材上傳或播放；不把提示詞或 mock 當成音樂產物。
+這個分支將自然語言、詞典、有限生成、回收、人類回饋、公開文字研究與演出準備加入既有 ACE Hub。預設隔離預覽，所有供應商費用與自動繼續由獨立伺服器授權控制；不把提示詞或 mock 當成真實音樂產物。完整操作見 [WORKFLOW.md](WORKFLOW.md)。
 
 ## 開啟隔離預覽
 
@@ -52,13 +52,13 @@ MCP 沿用 `node agent/mcp.mjs` stdio；設定 `ACE_HUB_URL` 即可。新增工�
 
 所有新寫操作只交給 Hub；Hub 失聯會報 `hub_required`，不另開本機寫入者。HTTP 能力契約在 `/capabilities`，新工作區在 `/music`。持久事件 `/music/events?since=…` 可跨重啟續讀；同時提供既有 SSE 的 `music` 事件。
 
-紀錄位於指定 `ACE_STATE_DIR/music-agent/music-agent.sqlite`，使用 SQLite 交易保存準備任務、幂等鍵、版本快照與停止狀態。此版本沒有供應商費用預留或已生成音訊。SQLite 的 WAL/SHM 仍在使用時不要搬移整個 state。
+紀錄位於指定 `ACE_STATE_DIR/music-agent/`，使用 SQLite 交易保存任務、產物、人評、研究、幂等鍵、版本、預留與停止狀態。SQLite 的 WAL/SHM 仍在使用時不要搬移整個 state。
 
 ## 真實生成與尚未驗收
 
-`music_generation_submit` 固定回 `unsupported`，尚未將方向、API 任務與實際產物串為閉環。另一分支的 v1.1 提交 adapter 已復用並修正邊界；新 [完整 Create API](CREATE-API.md) 已接三模型參數、獨立有限授權、額度預留與未知結果收據。真站尚未啟用：缺使用者預算與素材範圍批准，沒有獨立授權檔。
+`music_generation_submit` 已接入同一個 Create adapter、獨立有限授權及背景回收。沒有 `createApi` 的嵌入模式仍回 unsupported；正常 Hub 未配置有效 grant 時回待授權。另一分支的 v1.1 adapter 已復用並修正邊界。
 
-完整真實任務仍需：遠端 task ID → 對應音檔 → 下載大小/SHA-256/解碼 → 人類試聽 → 下一輪計畫。這些目前沒有 real pass。DeepSeek 研究、持續循環、REA 與演出另有後續 gate。
+真實驗收分開核對：遠端 task ID、實際模型、對應音檔、SHA-256/解碼、人類試聽與下一輪。程式、mock、真站提交、實際產物、聽感及現場設備各自記錄。當輪實測及尚未驗收項以本機 CONTROL 與交付報告為準。
 
 ## 測試與回退
 

@@ -13,7 +13,7 @@
 | `music_prompt_compile` | 可重現提示詞與版本快照 |
 | `music_session_create` | 有限本機準備批次 |
 | `music_generation_prepare` | 審閱後登記待授權任務 |
-| `music_generation_submit` | 產物閉環未串接，固定 unsupported |
+| `music_generation_submit` | 已存任務交給有限授權執行器並背景回收 |
 | `music_job_status` | 準備任務狀態 |
 | `music_events` | 持久事件與游標 |
 | `music_session_stop` | 停止本機批次 |
@@ -247,5 +247,62 @@ node agent\cli.mjs hub --stop         # 關閉
 MCP 工具會自動偵測 hub（`ACE_HUB_URL`），偵測不到就本地回落；`ace_hub_status` 可查是否連上。
 `ACE_HUB_PORT`、`ACE_HUB_TOKEN`（選用）、`ACE_HUB_SNAPSHOT_TTL_MS` 可調。
 
+<!-- music-tools:start -->
+## 音樂中樞工具（由共用契約產生）
 
+| Tool | 功能 |
+|---|---|
+| `music_capabilities` | 三模型與模式的文件能力、實測狀態及授權限制。 |
+| `music_dictionary_query` | 查詢版本化中英詞條、內部權重及來源。 |
+| `music_dictionary_activate` | 啟用使用者已批准且來源可驗證的研究詞典快照；保留歷史版本。 |
+| `music_reference_register` | 本機登記引用，不抓取音訊或網頁；Spotify 只作導覽並封鎖 AI 使用。 |
+| `music_intent_prepare` | 解析創作方向與來源門禁；不發送模型請求。 |
+| `music_prompt_compile` | 產生可重現、可審閱的模型提示詞並保存版本；不扣費。 |
+| `music_session_create` | 建立僅允許本機準備的有限批次；無法開啟供應商權限。 |
+| `music_generation_prepare` | 固定已審提示詞、原生參數、版本與父代；僅準備，不送出。 |
+| `music_generation_submit` | 將已存任務交給獨立伺服器授權；立即回本機任務，不自行批准費用。 |
+| `music_generation_poll` | 短呼叫喚醒背景對帳與回收；未知提交不重送。 |
+| `music_job_status` | 查詢持久化準備任務，不將預覽報為生成成功。 |
+| `music_events` | 以持久化游標讀取音樂準備事件。 |
+| `music_session_stop` | 停止本機後續準備並取消尚未送出的任務。 |
+| `music_assets_query` | 僅列出經本流程回收驗證的實際音訊產物。 |
+| `music_feedback_record` | 為已核驗產物追加可撤回的人類評語；機器測量不能自動接受音樂。 |
+| `music_next_iteration` | 從人工接受產物提出有限下一輪預覽；保留硬約束，不提交、不自動更新長期口味。 |
+| `music_loop_prepare` | 以人工接受的真實錨點準備有限循環；預設暫停，不能自批自動權限。 |
+| `music_loop_start` | 控制有限循環；每代仍需真實人類回饋與獨立伺服器自動繼續授權。 |
+| `music_loop_pause` | 控制有限循環；每代仍需真實人類回饋與獨立伺服器自動繼續授權。 |
+| `music_loop_resume` | 控制有限循環；每代仍需真實人類回饋與獨立伺服器自動繼續授權。 |
+| `music_loop_stop` | 控制有限循環；每代仍需真實人類回饋與獨立伺服器自動繼續授權。 |
+| `music_loop_state` | 讀取持久化有限循環狀態與停止條件。 |
+| `music_research_summary` | 研究授權、預留及來源快照；不取得或顯示憑據。 |
+| `music_research_library` | 重新載入有限研究任務、來源、候選及已審快照。 |
+| `music_research_prepare` | 準備公開文字 Search/Fetch，請求不能加入供應商憑據或預算。 |
+| `music_research_run` | 有限伺服器授權下排入研究，短回任務識別。 |
+| `music_research_job` | 讀取已持久化研究狀態。 |
+| `music_research_evidence` | 讀取有來源的證據卡。 |
+| `music_research_import_evidence` | 匯入獨立允許的公開文字證據。 |
+| `music_research_propose_terms` | 依證據提出待審詞條，不自動修改現行詞典。 |
+| `music_research_review_candidate` | 人類審閱研究詞條，保留版本。 |
+| `music_research_stop` | 停止後續研究並保留已送出請求的未知預留。 |
+| `music_performance_state` | 人工佇列、備用庫存及只讀引擎狀態。 |
+| `music_performance_probe` | 只讀核對已配置的本機 MixCore 健康端點。 |
+| `music_performance_plan` | 估計已接受主佇列與 P95 預留，未知值維持未知。 |
+| `music_performance_queue` | 手動加入已核驗且人工接受的產物；不播放。 |
+| `music_performance_dequeue` | 手動移除佇列中的產物。 |
+| `music_performance_pause` | 僅改變人工控制中繼資料，不觸發播放。 |
+| `music_performance_takeover` | 僅改變人工控制中繼資料，不觸發播放。 |
+| `music_performance_resume` | 僅改變人工控制中繼資料，不觸發播放。 |
+| `music_performance_stop` | 僅改變人工控制中繼資料，不觸發播放。 |
+| `music_performance_manifest` | 保存待人審 manifest；不寫外部混音庫或啟動引擎。 |
+| `music_state` | 本機批次、提示詞、任務及實際費用總覽。 |
+| `ace_create_capabilities` | Create 頁面已核對的完整 API 參數、模型條件及實測邊界。 |
+| `ace_create_prepare` | 依前端契約驗證所有 Create 參數，產生原生 HTTP JSON；純本機、不扣費、不讀登入。 |
+| `ace_create_preview` | 以既有本機登入唯讀核對即時模型、成本及上限，不提交生成。 |
+| `ace_create_submit` | 僅在獨立本機批次授權與累計預算允許時送出一次 API 請求；預設拒絕，unknown 不重送。 |
+| `ace_create_authority` | 讀取獨立批次授權及預留/支出狀態，不顯示憑據或本機路徑。 |
+| `ace_create_task_status` | 依精確任務 ID 唯讀核對三模型的實際狀態；遠端音訊可用不代表下載或試聽驗收。 |
+| `ace_create_receipt` | 以原幂等鍵查持久化收據；不因服務斷線或授權過期重送。 |
+| `ace_create_stop` | 停止授權批次的新提交；已送出或未知結果保留預留，不假裝遠端取消。 |
 
+長時間操作短回任務識別；後續查狀態或事件。供應商費用、素材上傳、自動繼續與播放分開授權。
+<!-- music-tools:end -->

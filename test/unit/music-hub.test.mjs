@@ -152,7 +152,7 @@ test('music HTTP, MCP and CLI share the isolated Hub writer and refuse fallback 
     assert.equal(first.job.id, second.job.id);
     const submitResponse = await post('/music/generations/submit', { job_id: first.job.id });
     assert.equal(submitResponse.status, 422);
-    assert.equal((await submitResponse.json()).status, 'unsupported');
+    assert.equal((await submitResponse.json()).status, 'awaiting_authorization');
     assert.equal((await post('/music/prompts/compile', direction, { Origin: 'https://untrusted.example' })).status, 403);
     assert.equal((await req('/music/capabilities', { headers: { Origin: 'https://untrusted.example' } })).status, 403);
     for (const input of [{ ...direction, natural_language: 42 }, { ...direction, authorized: true }]) {
@@ -181,7 +181,9 @@ test('music HTTP, MCP and CLI share the isolated Hub writer and refuse fallback 
     const shared = await (await req('/music/state')).json();
     assert.ok(shared.plans.some((plan) => plan.id === mcpPlan.plan.id), 'MCP persisted through the Hub');
     assert.equal(shared.jobs.length, 1);
-    assert.equal(shared.provider_calls, 0);
+    assert.equal(shared.provider_calls, null, 'a connected workflow does not invent an authoritative provider-call count');
+    assert.equal(shared.generation_authority.grant, null);
+    assert.deepEqual(shared.generation_authority.ledger, []);
     const cli = await boundedExit(spawnNode([path.join(PROJECT, 'agent', 'cli.mjs'), 'music', 'capabilities'], clientEnv));
     assert.equal(cli.code, 0, cli.stderr);
     assert.deepEqual(JSON.parse(cli.stdout), capabilities);

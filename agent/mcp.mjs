@@ -650,7 +650,7 @@ async function handleMessage(message) {
             protocolVersion: (params && params.protocolVersion) || '2024-11-05',
             capabilities: { tools: {} },
             serverInfo: SERVER,
-            instructions: 'ACE Music 本機 MCP。開場用 ace_overview；檔案路徑用 ace_locate。ace_generate 預設只預覽；實際生成須明確 Credits 授權與上限、固定 idempotency_key，且走支援生成的 Hub。POST 逾時或回應未明時不可自動換 key 重送。生成結果以 task_ids 交給 ace_generation_status；下載前確認登入。',
+            instructions: 'HuaiDJ／ACE 本機中樞。創作先讀 music_capabilities；以 music_prompt_compile、music_generation_prepare 審閱後交給 music_generation_submit，長工作短回 job ID，再查 music_job_status／music_events。實際費用依獨立有限伺服器授權；不能由請求旗標擴大。結果未知保留原 key／job，不重送。試聽接受、評分與詞典審閱只能記錄使用者明確回饋。有限 loop 另需 auto_continue 授權；不自動播放。ace_create_* 提供完整原生參數；ace_* 保留下載接入，路徑用 ace_locate。受控設定會阻擋未批准的舊轉譜寫入。',
         });
     }
     if (method === 'notifications/initialized' || method === 'initialized') return;

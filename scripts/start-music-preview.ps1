@@ -36,6 +36,10 @@ $env:ACE_HUB_TOKEN = ''
 $env:ACE_HUB_URL = $previewUrl
 $env:ACE_DIRECT_GENERATION_ENABLED = 'false'
 $env:ACE_GENERATION_GRANT_FILE = ''
+$env:ACE_RESEARCH_CONFIG_FILE = ''
+$env:ACE_SESSION_FILE = ''
+$env:ACE_MUSIC_RUNTIME_CONFIG = ''
+$env:ACE_MUSIC_ARTIFACTS_DIR = Join-Path $previewRoot 'preview-artifacts'
 # This is an isolated development preview using the same Hub, not a deployment.
 $nodePath = (Get-Command node).Source
 Start-Process -FilePath $nodePath -ArgumentList @((Join-Path $repoRoot 'agent\hub.mjs')) -WorkingDirectory $repoRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $previewRoot 'logs\hub.log') -RedirectStandardError (Join-Path $previewRoot 'logs\hub-error.log') | Out-Null

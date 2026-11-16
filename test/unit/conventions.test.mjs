@@ -8,6 +8,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 const ACE = await import('../../agent/lib/ace.mjs');
+const { MUSIC_TOOLS } = await import('../../agent/lib/music-contract.mjs');
+const { CREATE_TOOLS } = await import('../../agent/lib/create-tools.mjs');
 const PROJECT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..');
 const read = (rel) => fs.readFileSync(path.join(PROJECT, rel), 'utf8');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -23,7 +25,7 @@ test('🔒 FILE_TYPES：面板與 agent 同一份清單', () => {
 });
 
 test('🔒 每個 MCP 工具都寫在 agent/README-AGENT.md', () => {
-  const tools = [...read('agent/mcp.mjs').matchAll(/^\s+name: '(ace_\w+)'/gm)].map((m) => m[1]);
+  const tools = [...new Set([...read('agent/mcp.mjs').matchAll(/^\s+name: '(ace_\w+)'/gm)].map((m) => m[1]).concat(MUSIC_TOOLS.map(tool => tool.name), CREATE_TOOLS.map(tool => tool.name)))];
   assert.ok(tools.length >= 16);
   const doc = read('agent/README-AGENT.md');
   const missing = tools.filter((t) => !doc.includes('`' + t + '`'));

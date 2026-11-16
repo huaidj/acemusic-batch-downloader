@@ -68,6 +68,9 @@ export function absolutize(cfg, url) {
 }
 
 async function aceFetch(cfg, session, url, options = {}) {
+    if (cfg.controlledRun && !['GET', 'HEAD'].includes(String(options.method || 'GET').toUpperCase())) {
+        throw Object.assign(new Error('受控中樞未批准舊轉譜或其他可能扣額度的站點寫入；保留下載預覽，請另行核對費用與授權。'), { code: 'LEGACY_PAID_OPERATION_NOT_AUTHORIZED' });
+    }
     const target = absolutize(cfg, url);
     const headers = Object.assign(
         {

@@ -3,6 +3,7 @@
 // 所有歌單抓取、命名、排程與進度計算都在 content script（content.js）完成，
 // 這樣即使 service worker 被 Chrome 回收，也不會中斷整個批次工作。
 'use strict';
+importScripts('music-hub.js');
 
 const DOWNLOAD_TIMEOUT_MS = 180000;
 const pending = new Map(); // downloadId -> { done, filename }
@@ -270,6 +271,9 @@ function setBadge(text, color) {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (['ACE_MUSIC_HUB_GET_CONFIG', 'ACE_MUSIC_HUB_CONFIG', 'ACE_MUSIC_HUB_STATUS', 'ACE_MUSIC_HUB_OPEN', 'ACE_MUSIC_HUB_PROMPT'].includes(msg && msg.type)) {
+    return respondLater(async () => await AceMusicHub.create({ chromeApi: chrome, fetchImpl: fetch }).dispatch(msg), sendResponse);
+  }
   if (!msg || typeof msg.type !== 'string') return false;
   switch (msg.type) {
     case 'ACE_DOWNLOAD_FILE':

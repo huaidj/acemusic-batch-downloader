@@ -111,7 +111,9 @@ test('real submit is unavailable, provider calls stay zero, and preview cannot f
     assert.equal(service.call('job_status', { job_id: prepared.job.id }).status, 'awaiting_authorization');
     const state = service.call('state');
     assert.equal(state.provider_calls, 0);
-    assert.deepEqual(state.costs, { ace_credits: 0, deepseek_usd: 0 });
+    assert.equal(state.costs.ace_credits, 0);
+    assert.equal(state.costs.deepseek_usd, 0);
+    assert.equal(state.costs.actual_unknown_until_settled, false);
     assert.deepEqual(state.sessions[0].permission_scope, ['local_prepare']);
     assert.equal(fetches, 0);
   } finally { globalThis.fetch = savedFetch; }

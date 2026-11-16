@@ -238,8 +238,8 @@ test('server grant admits one standard task, persists its receipt, rejects chang
   assert.equal(fix.requests.length, reads, 'stopped grant blocks even provider preview');
   assert.equal((await (await fix.request('/create-api/authority')).json()).budget.reserved, 2);
   const core = await fix.post('/music/generations/submit', { job_id: 'no-core-permission' });
-  assert.equal(core.status, 422);
-  assert.equal((await core.json()).status, 'unsupported', 'API grant does not open another workflow');
+  assert.equal(core.status, 404);
+  assert.equal((await core.json()).status, 'not_found', 'API grant cannot submit an unknown workflow job');
   await fix.restartWithoutGrant();
   const restored = await fix.receipt('accepted-once');
   assert.deepEqual(restored.reservation, receipt.reservation);

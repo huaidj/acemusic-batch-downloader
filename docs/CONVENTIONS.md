@@ -63,7 +63,7 @@ src/content.js（面板）  src/background.js（SW）   瀏覽器端
 - **來源限制**：Hub 只綁 `127.0.0.1`。請求若帶 `Origin`，只接受 `chrome-extension://`（及 moz/edge）與本機頁面；一般網站一律 403（防 CSRF）。`ACE_HUB_EXTENSIONS=<id1>,<id2>` 可只允許指定擴充功能；`ACE_HUB_TOKEN` 可要求 `X-Hub-Token`。
 - **其他擴充功能呼叫方式**：在它的 manifest 加 `host_permissions: ["http://127.0.0.1:8788/*"]`，由 service worker `fetch`（content script 不行：https 頁面不能打 http localhost）。
 - **事件**：`{ type, at(ms), seq, source, task_id? | task_ids?, ... }`；新事件型別要加到 `EVENT_TYPES` 與本文件；消費方必須忽略不認得的型別與欄位。
-- **寫入動作**一律走 Hub job（單一寫入者）；整合方不要直接改 `%LOCALAPPDATA%\AceMusicDL\*.json`。
+- **業務寫入**由同一 Hub 管理：耗時生成、研究與回收進有限背景工作；短預覽、回饋與控制狀態使用交易寫入。整合方不要直接改 `%LOCALAPPDATA%\AceMusicDL\*.json` 或 SQLite。
 
 ## 7. 安全與成本
 

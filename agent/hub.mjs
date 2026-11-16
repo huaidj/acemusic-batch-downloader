@@ -11,7 +11,7 @@ import * as ACE from './lib/ace.mjs';
 import { musicHttp } from './lib/music-http.mjs';
 import { MUSIC_CONTRACT } from './lib/music-contract.mjs';
 import { directGenerationPermission } from './lib/provider-policy.mjs';
-import { createHttp } from './lib/create-http.mjs';
+import { createHttp, createApiController } from './lib/create-http.mjs';
 import { CREATE_CONTRACT } from './lib/create-tools.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -473,7 +473,8 @@ function capabilities() {
     apiVersion: API_VERSION,
     version: VERSION,
     endpoints: [...ENDPOINTS, ...MUSIC_CONTRACT, ...CREATE_CONTRACT].map(({ method, path, description, ...entry }) => ({ ...entry, method, path, ...(description ? { desc: description } : {}) })),
-    musicAgent: { mode: 'local_prepare_only', ui: '/music', externalCalls: false, realGeneration: false },
+    musicAgent: { mode: 'controlled_workflow', ui: '/music', externalCalls: 'server_authorized_only', realGeneration: 'requires_finite_server_grant', automaticPlayback: false },
+    legacyExecutionPolicy: { controlled: cfg.controlledRun, writes: cfg.controlledRun ? 'blocked_outside_granted_adapters' : 'existing_downloader_policy' },
     directGeneration: { adapter: 'site_internal_http', model: 'acemusic-v1.1', enabled: directGenerationPermission(cfg), public_api_contract: false, real_verified: false },
     events: { types: EVENT_TYPES, shape: '{ type, at(ms), seq, source:"page"|"hub", task_id?, task_ids?, title?, ... }' },
     sse: ['job', 'progress', 'snapshot', 'page', 'event', 'music'],
@@ -512,8 +513,9 @@ function filterSongs(rows, url) {
 /* ------------------------------------------------------------------ *
  * Router
  * ------------------------------------------------------------------ */
-const handleMusic = musicHttp({ stateDir: path.join(cfg.stateDir, 'music-agent'), onEvent: e => broadcast('music', e) });
-const handleCreate = createHttp({ cfg, addJob, enqueue });
+const createApi = createApiController({ cfg, addJob, enqueue });
+const handleMusic = musicHttp({ stateDir: path.join(cfg.stateDir, 'music-agent'), cfg, createApi, onEvent: e => broadcast('music', e) });
+const handleCreate = createHttp({ controller: createApi });
 const server = http.createServer(async (req, res) => {
   const origin = req.headers.origin ? String(req.headers.origin) : '';
   if (!originAllowed(origin)) return json(res, 403, { ok: false, error: 'origin not allowed: ' + origin });

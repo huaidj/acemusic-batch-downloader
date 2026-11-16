@@ -68,7 +68,7 @@ test('missing, invalid and expired server grants deny reservations without accep
     { ...baseGrant(), max_credits_per_request: 1e30 },
     { ...baseGrant(), max_generations: 1.5 },
     { ...baseGrant(), allow_upload: true },
-    { ...baseGrant(), allow_auto_continue: true },
+    { ...baseGrant(), allow_auto_continue: 'true' },
     { ...baseGrant(), models: ['arbitrary-provider-model'] },
     { ...baseGrant(), modes: ['mashup'] },
     { ...baseGrant(), expires_at: '2099-02-30T00:00:00Z' },
@@ -243,4 +243,14 @@ test('ACE-Step provider model ID and its compiler alias share one normalized aut
   assert.equal(first.reservation.model, 'ace-step-1.5-xl', 'receipt matches the actual provider payload model');
   assert.equal(fix.authority.reserve({ ...input, model: 'ace-step-v1.5-xl' }).reused, true);
   assert.equal(fix.authority.canSubmit(input.idempotency_key), true);
+});
+
+test('only a finite server grant can permit auto continuation; caller flags cannot expand it', (t) => {
+  const fix = fixture(t, { ...baseGrant(), allow_auto_continue: true, max_generations: 1 });
+  assert.equal(fix.authority.summary().grant.allow_auto_continue, true);
+  assert.equal(fix.authority.reserve({ ...request('caller-auto'), allow_auto_continue: true }).status, 'invalid');
+  assert.equal(fix.authority.reserve(request('one-auto')).ok, true);
+  assert.equal(fix.authority.reserve(request('second-auto')).status, 'generation_limit');
+  assert.equal(fix.authority.stop('fixture-grant').ok, true);
+  assert.equal(fix.authority.canSubmit('one-auto'), false);
 });
