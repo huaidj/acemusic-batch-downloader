@@ -31,7 +31,8 @@ agent / CLI / MCP ──HTTP──► agent/hub.mjs (127.0.0.1:8788)
 
 | Method | Path | 說明 |
 | --- | --- | --- |
-| GET | `/health` | 版本、pid、uptime、counts、jobs 統計 |
+| GET | `/health` | 版本、`apiVersion`、pid、uptime、counts、jobs 統計 |
+| GET | `/capabilities` | 整合契約（機器可讀）：apiVersion、endpoints、events、sse、fileTypes、selector、pageFiles、auth（v1.7.1） |
 | GET | `/overview` | 快照摘要（歌曲數／已下載／未下載／MIDI 可用） |
 | GET | `/songs?undownloaded=1&q=&limit=50&compact=1` | 歌單（讀快照；`compact=0` 回完整） |
 | POST | `/download` | `{song_ids?, all?, query?, types?, root?, type_folders?, force?, concurrency?, dry_run?, idempotency_key?}` → `202 {jobId}` |

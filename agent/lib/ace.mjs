@@ -506,10 +506,6 @@ export async function collectDownloadIndex(cfg = config(), { refresh = false } =
  * ------------------------------------------------------------------ */
 const VIEW_DIR_RE = /[\\/]音頻分類[\\/]/;
 
-function songTime(song) {
-    const value = Number(song && (song.created_at || song.finished_at)) || Date.parse(song && song.created_at) || 0;
-    return value;
-}
 
 function classifyLocatedFile(base) {
     const m = /^(.*?)(?: - (.+))?\.([a-z0-9]+)$/i.exec(base);
@@ -551,6 +547,57 @@ export function matchSongFiles(song, files, { folder = '', includeViews = false,
  * 找歌曲的真實目錄。
  * @param {{songId?:string, query?:string, latest?:number, includeViews?:boolean, limitFiles?:number}} opts
  */
+/* ------------------------------------------------------------------ *
+ * 選歌器（Selector）— CLI／MCP／Hub 共用的唯一實作（見 docs/CONVENTIONS.md §3）
+ *   { song_ids?: string[], query?: string, latest?: number, all?: boolean }
+ *   - 條件可疊加：先 song_ids、再 query，最後依建立時間取最新 latest 首
+ *   - 沒有任何條件且 all !== true → 空（避免誤下載全部）
+ * 新增選歌條件只改這裡＋normalizeSelector，三個入口自動支援。
+ * ------------------------------------------------------------------ */
+export function songCreatedMs(song) {
+    const n = Number(song && (song.created_at || song.finished_at));
+    if (Number.isFinite(n) && n > 0) return n;
+    const parsed = Date.parse(song && (song.created_at || song.finished_at));
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/** 把各入口的參數（snake_case／camelCase／CLI 字串）正規化成 Selector */
+export function normalizeSelector(input = {}) {
+    const ids = input.song_ids || input.songIds || input.song || input.songId || [];
+    const songIds = (Array.isArray(ids) ? ids : [ids]).map(String).filter(Boolean);
+    const latest = Number(input.latest === true ? 1 : input.latest) || 0;
+    const query = input.query != null && input.query !== true ? String(input.query).trim() : input.q ? String(input.q).trim() : '';
+    return { songIds, query, latest: latest > 0 ? Math.floor(latest) : 0, all: input.all === true || input.all === 'true' || input.all === '1' };
+}
+
+export function selectSongs(songs, input = {}) {
+    const sel = normalizeSelector(input);
+    const hasCriteria = sel.songIds.length || sel.query || sel.latest;
+    if (!hasCriteria && !sel.all) return [];
+    let picked = [...(songs || [])];
+    if (sel.songIds.length) {
+        const want = new Set(sel.songIds);
+        picked = picked.filter((song) => want.has(song.task_id));
+    }
+    if (sel.query) {
+        const q = sel.query.toLowerCase();
+        picked = picked.filter((song) => String((song.meta && song.meta.title) || '').toLowerCase().includes(q) || String(song.task_id).includes(q));
+    }
+    if (sel.latest) picked = picked.sort((a, b) => songCreatedMs(b) - songCreatedMs(a)).slice(0, sel.latest);
+    return picked;
+}
+
+/** 檔案類型：'all' 展開成全部（FILE_TYPES 為唯一清單）；未知類型丟錯，避免靜默忽略 */
+export const DEFAULT_DOWNLOAD_TYPES = Object.freeze(['stems', 'midi', 'cover']);
+export function normalizeTypes(types, fallback = DEFAULT_DOWNLOAD_TYPES) {
+    const list = (Array.isArray(types) ? types : types ? String(types).split(',') : []).map((t) => String(t).trim()).filter(Boolean);
+    if (!list.length) return [...fallback];
+    if (list.includes('all')) return [...FILE_TYPES];
+    const unknown = list.filter((t) => !FILE_TYPES.includes(t));
+    if (unknown.length) throw new Error('未知的檔案類型：' + unknown.join(',') + '（可用：' + FILE_TYPES.join(',') + ',all）');
+    return [...new Set(list)];
+}
+
 /* locate 的輸入（4 MB 歌單快取＋檔案索引）依檔案 mtime 記憶，Hub 熱路徑不必每次重新解析 JSON。
    只給 locate 用（唯讀、不改內容）；最多沿用 30 秒，避免跨過 listSongs 的新鮮度判斷。 */
 const locateMemo = { key: '', at: 0, songs: null, index: null };
@@ -575,14 +622,9 @@ async function locateInputs(cfg) {
 
 export async function locateSongs(cfg = config(), { songId = '', query = '', latest = 0, includeViews = false, limitFiles = 200 } = {}) {
     const [{ songs, index }, state] = await Promise.all([locateInputs(cfg), loadState(cfg)]);
-    let picked = [...songs].sort((a, b) => songTime(b) - songTime(a));
-    if (songId) picked = picked.filter((song) => song.task_id === songId);
-    if (query) {
-        const q = String(query).toLowerCase();
-        picked = picked.filter((song) => String((song.meta && song.meta.title) || '').toLowerCase().includes(q));
-    }
-    const n = Number(latest) > 0 ? Number(latest) : songId ? picked.length : query ? Math.min(picked.length, 20) : 1;
-    picked = picked.slice(0, n);
+    // 共用選歌器；locate 的預設：沒條件 → 最新 1 首；只有 query → 最新 20 首內的符合者
+    const defLatest = Number(latest) > 0 ? Number(latest) : songId ? 0 : query ? 20 : 1;
+    const picked = selectSongs(songs, { song_ids: songId ? [songId] : [], query, latest: defLatest }).sort((a, b) => songCreatedMs(b) - songCreatedMs(a));
     const root = path.join(cfg.downloadDir, 'ai音樂');
     const files = index.files || [];
     const results = picked.map((song) => {
@@ -612,7 +654,7 @@ export async function locateSongs(cfg = config(), { songId = '', query = '', lat
         }
         const folderName = folder || inferred || N.songFolderLabel((song.meta && song.meta.title) || '');
         const songDir = path.join(root, folderName);
-        const time = songTime(song);
+        const time = songCreatedMs(song);
         return {
             task_id: song.task_id,
             title: (song.meta && song.meta.title) || 'Untitled',

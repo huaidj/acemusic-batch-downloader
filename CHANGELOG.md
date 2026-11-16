@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.7.1 — 2026-11-16
+
+### 新增
+- **整合契約** `GET /capabilities`：apiVersion、端點、事件、檔案類型、選歌器、頁面檔、驗證方式；`/health` 加 `apiVersion`。供其他擴充功能／agent 接入時檢查相容性。
+- **來源限制（CORS）**：Hub 只接受無 Origin（CLI／MCP）、擴充功能（`chrome-extension://`…）與本機頁面；一般網站 403（防跨站 POST 觸發下載）。`ACE_HUB_EXTENSIONS` 可只允許指定擴充功能 ID；支援 preflight 與 Private Network Access。
+- `ace_download`／CLI `download`／Hub `/download` 支援 `latest: N` 與 `types: ["all"]`（例：「把剛做好的歌全部抓下來」＝`latest:1, types:["all"]`）。
+- MCP `ace_tidy`（一鍵整理，可等完成）。
+- 登入 Cookie 輪換時自動重新匯出給 agent（`chrome.cookies.onChanged`，2 秒 debounce），agent 不再因 Cookie 輪換而過期。
+- `docs/CONVENTIONS.md` 開發規範；`test/unit/conventions.test.mjs` 把關（清單一致、文件涵蓋每個 MCP 工具與 Hub 端點、頁面檔白名單都被 Hub 監看、來源限制）。
+
+### 改善
+- 選歌與類型展開統一由 `ACE.selectSongs`／`normalizeTypes` 實作，Hub／CLI／MCP／locate 共用；未知類型會報錯而不是靜默忽略。
+
+### 修正
+- Hub `/download` 沒給任何條件時原本會選「全部歌曲」；現在需明確 `all: true`。
+
 ## 1.7.0 — 2026-11-16
 
 ### 新增

@@ -5,7 +5,7 @@ import * as ACE from './lib/ace.mjs';
 import { config, readJson, exists } from './lib/config.mjs';
 import { hubJson, HUB_URL } from './lib/hubclient.mjs';
 
-const SERVER = { name: 'ace-music-downloader', version: '1.7.0' };
+const SERVER = { name: 'ace-music-downloader', version: '1.7.1' };
 const jobs = new Map();
 let jobSeq = 0;
 const hubJobs = new Set();
@@ -94,6 +94,18 @@ const TOOLS = [
         },
     },
     {
+        name: 'ace_tidy',
+        description: '一鍵整理：成品MP3／成品WAV／採樣包（各樂器）／檔案分類／內容去重／空殼清理／音頻屬性分類（hardlink）。走 Hub job；wait=true 時等完成（最多 timeout_sec）。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                wait: { type: 'boolean', description: '等整理完成再回（預設 false，回 jobId）' },
+                timeout_sec: { type: 'number', description: 'wait=true 時最長等待秒數（預設 120）' },
+            },
+            additionalProperties: false,
+        },
+    },
+    {
         name: 'ace_backups',
         description: '整理備份（organize-backups）清單與「依規則可刪」預覽（唯讀；實際刪除請使用者用 CLI：backups --prune --commit）。',
         inputSchema: {
@@ -153,10 +165,11 @@ const TOOLS = [
                 song_ids: { type: 'array', items: { type: 'string' }, description: '指定 task_id；省略且 all=true 表示全部歌曲' },
                 all: { type: 'boolean', description: '下載所有已完成歌曲' },
                 query: { type: 'string', description: '用歌名關鍵字挑歌（與 all 類似但先過濾）' },
+                latest: { type: 'number', description: '最新的 N 首（可與 query 疊加）；例如 latest=1 表示剛做好的那首' },
                 types: {
                     type: 'array',
-                    items: { type: 'string', enum: ['stems', 'midi', 'musicxml', 'mp3', 'wav', 'cover'] },
-                    description: '要下載的類型（預設 ["stems","midi","cover"]；WAV 僅部分模型支援，如 amusic-v1.1，不支援會自動跳過）',
+                    items: { type: 'string', enum: ['all', 'stems', 'midi', 'musicxml', 'mp3', 'wav', 'cover'] },
+                    description: '要下載的類型（預設 ["stems","midi","cover"]；"all" = 全部可下載資源；WAV 僅部分模型支援，不支援自動跳過；MIDI/MusicXML 由站點生成，可能扣 credit）',
                 },
                 root: { type: 'string', description: '最上層資料夾名稱（預設 ai音樂）' },
                 force: { type: 'boolean', description: '已下載過的也重新下載' },
@@ -322,6 +335,22 @@ async function callTool(name, args) {
                 return await ACE.libraryOverview(undefined, { withSizes: !!args.sizes });
             }
         }
+        case 'ace_tidy': {
+            let started;
+            try {
+                started = await hubCall('/tidy', { method: 'POST', body: {}, timeoutMs: 2500 });
+            } catch {
+                started = null;
+            }
+            if (!started) {
+                // 沒有 Hub：本地直接跑（會花 10–30 秒）
+                const result = await ACE.tidyAll({ cfg: config() });
+                return { hub: false, ...result };
+            }
+            if (!args.wait) return { hub: true, jobId: started.jobId, status: 'queued', hint: '用 ace_job_status 查進度' };
+            const job = await hubWaitJob(started.jobId, Math.min(1800, Number(args.timeout_sec) || 120) * 1000);
+            return { hub: true, jobId: started.jobId, status: job.status, result: job.result, error: job.error };
+        }
         case 'ace_backups': {
             return await ACE.pruneBackups(undefined, {
                 keepDays: args.keep_days != null ? Number(args.keep_days) : 7,
@@ -372,6 +401,7 @@ async function callTool(name, args) {
                     song_ids: args.song_ids,
                     all: !!args.all,
                     query: args.query,
+                    latest: args.latest,
                     types: args.types,
                     root: args.root,
                     type_folders: !!args.type_folders,
@@ -393,20 +423,11 @@ async function callTool(name, args) {
                 hubJobs.add(hubStarted.jobId);
                 return { jobId: hubStarted.jobId, status: 'queued', hub: true, hint: '用 ace_job_status 查進度（hub job）' };
             }
-            const songs = await ACE.listSongs();
-            let picked = songs;
-            if (Array.isArray(args.song_ids) && args.song_ids.length) {
-                const want = new Set(args.song_ids);
-                picked = songs.filter((s) => want.has(s.task_id));
-                if (!picked.length) throw new Error('找不到指定的 song_ids');
-            } else if (args.query) {
-                const q = String(args.query).toLowerCase();
-                picked = songs.filter((s) => ((s.meta && s.meta.title) || '').toLowerCase().includes(q));
-            } else if (!args.all) {
-                throw new Error('請指定 song_ids、query 或 all=true');
-            }
+            // 與 Hub、CLI 共用選歌／類型規則
+            const picked = ACE.selectSongs(await ACE.listSongs(), args);
+            if (!picked.length) throw new Error('沒有選到歌：請給 song_ids、query、latest 或 all=true');
             const options = {
-                types: Array.isArray(args.types) && args.types.length ? args.types : ['stems', 'midi', 'cover'],
+                types: ACE.normalizeTypes(args.types),
                 root: args.root || 'ai音樂',
                 force: !!args.force,
                 typeFolders: !!args.type_folders,

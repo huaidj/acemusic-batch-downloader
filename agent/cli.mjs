@@ -19,7 +19,7 @@ async function hubTry(pathname, { method = 'GET', body, timeoutMs = 1200 } = {})
     }
 }
 function usage() {
-    console.log(`ACE Music 批量下載器 CLI  v1.7.0
+    console.log(`ACE Music 批量下載器 CLI  v1.7.1
 
 用法：
   node cli.mjs doctor                         檢查登入狀態與環境
@@ -33,6 +33,7 @@ function usage() {
   node cli.mjs list [--query 關鍵字] [--undownloaded] [--json] 列出可下載歌曲
   node cli.mjs download --all [選項]           下載全部歌曲
   node cli.mjs download --song <task_id> ...   下載指定歌曲（可重複）
+  node cli.mjs download --latest N [--types all] 下載最新 N 首（types 可用 all）
   node cli.mjs organize [--commit]             整理 Downloads 內已下載的檔案（預設 dry-run）
   node cli.mjs extract-mp3 [選項]              把所有歌曲的成品 MP3 集中到 ai音樂\\成品MP3\\（會自動補齊漏掉的）
   node cli.mjs extract-samples                 把分軌/採樣集中到 ai音樂\\採樣包\\（按樂器類型分資料夾）
@@ -624,18 +625,15 @@ async function main() {
     }
 
     if (cmd === 'download') {
-        let songs = await ACE.listSongs(cfg);
-        if (args.multi.song && args.multi.song.length) {
-            const want = new Set(args.multi.song);
-            songs = songs.filter((song) => want.has(song.task_id));
-            if (!songs.length) throw new Error('找不到指定的 task_id：' + [...want].join(', '));
-        } else if (!args.flags.all && args.flags.query) {
-            const q = String(args.flags.query).toLowerCase();
-            songs = songs.filter((s) => ((s.meta && s.meta.title) || '').toLowerCase().includes(q));
-        } else if (!args.flags.all) {
-            throw new Error('請指定 --all 或 --song <task_id>（可先用 list 查詢）');
-        }
-        const types = args.flags.types ? String(args.flags.types).split(',').map((s) => s.trim()).filter(Boolean) : ['stems', 'midi', 'cover'];
+        // 選歌／類型規則與 Hub、MCP 共用（ACE.selectSongs／normalizeTypes）
+        const songs = ACE.selectSongs(await ACE.listSongs(cfg), {
+            song_ids: args.multi.song || [],
+            query: args.flags.query,
+            latest: args.flags.latest,
+            all: !!args.flags.all,
+        });
+        if (!songs.length) throw new Error('沒有選到歌：請指定 --song <task_id>、--query 字、--latest N 或 --all');
+        const types = ACE.normalizeTypes(args.flags.types);
         const options = {
             types,
             root: args.flags.root || 'ai音樂',

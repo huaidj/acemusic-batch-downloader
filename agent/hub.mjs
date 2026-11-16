@@ -268,29 +268,17 @@ function makeProgressReporter(job, intervalMs = 500) {
 /* ------------------------------------------------------------------ *
  * Job runners
  * ------------------------------------------------------------------ */
+// 選歌與類型一律交給 ACE.selectSongs／normalizeTypes（CLI／MCP 共用同一規則，見 docs/CONVENTIONS.md）
 async function selectSongs(body) {
-  let songs = await ACE.listSongs(cfg);
-  if (Array.isArray(body.song_ids) && body.song_ids.length) {
-    const wanted = new Set(body.song_ids);
-    songs = songs.filter((song) => wanted.has(song.task_id));
-  }
-  if (body.query) {
-    const q = String(body.query).toLowerCase();
-    songs = songs.filter((song) => {
-      const title = String((song.meta && song.meta.title) || '').toLowerCase();
-      return title.includes(q) || String(song.task_id).includes(q);
-    });
-  }
-  return songs;
+  return ACE.selectSongs(await ACE.listSongs(cfg), body);
 }
 
 function downloadOptions(body) {
-  const types = Array.isArray(body.types) && body.types.length ? body.types : ['stems', 'midi', 'cover'];
-  return { types, root: body.root || 'ai音樂', typeFolders: !!body.type_folders, force: !!body.force };
+  return { types: ACE.normalizeTypes(body.types), root: body.root || 'ai音樂', typeFolders: !!body.type_folders, force: !!body.force };
 }
-
 async function runDownloadJob(job, body) {
   const songs = await selectSongs(body);
+  if (!songs.length) throw new Error('沒有選到歌：請給 song_ids／query／latest，或 all=true');
   const options = downloadOptions(body);
   if (body.dry_run) {
     const { plan, state } = await ACE.buildPlanForSongs(cfg, songs, options);
@@ -346,6 +334,60 @@ function authorized(req) {
   return String(req.headers['x-hub-token'] || '') === TOKEN;
 }
 
+/* ------------------------------------------------------------------ *
+ * 對外整合契約（給其他擴充功能／agent，見 docs/CONVENTIONS.md §6）
+ * ------------------------------------------------------------------ */
+export const API_VERSION = 1; // 破壞性變更才 +1；新增欄位／端點不算
+const EXT_ALLOW = new Set(String(process.env.ACE_HUB_EXTENSIONS || '').split(',').map((s) => s.trim()).filter(Boolean));
+/**
+ * 來源檢查：沒有 Origin（CLI／MCP／native host）放行；擴充功能（chrome-extension:// 等）放行
+ * （設了 ACE_HUB_EXTENSIONS 則只放行清單內 ID）；本機頁面（127.0.0.1／localhost）放行；
+ * 其他網頁一律拒絕——避免任意網站對 127.0.0.1 發 text/plain POST 觸發下載（CSRF）。
+ */
+function originAllowed(origin) {
+  if (!origin) return true;
+  const ext = /^(?:chrome|moz|edge)-extension:\/\/([a-z0-9-]+)$/i.exec(origin);
+  if (ext) return EXT_ALLOW.size ? EXT_ALLOW.has(ext[1]) : true;
+  return /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i.test(origin);
+}
+const ENDPOINTS = [
+  { method: 'GET', path: '/health', desc: '版本、pid、apiVersion、counts、jobs' },
+  { method: 'GET', path: '/capabilities', desc: '本契約（機器可讀）' },
+  { method: 'GET', path: '/overview', desc: '登入＋曲庫統計' },
+  { method: 'GET', path: '/songs', query: 'q, undownloaded=1, limit, compact=0', desc: '歌單（記憶體快照）' },
+  { method: 'GET', path: '/locate', query: 'latest, q, song, views=1, limit_files', desc: '歌曲 → 本機真實目錄與檔案' },
+  { method: 'GET', path: '/library', query: 'sizes=1', desc: '曲庫分類總覽' },
+  { method: 'GET', path: '/page', desc: '頁面通道健康度' },
+  { method: 'GET', path: '/page/events', query: 'since, type, limit', desc: '事件環' },
+  { method: 'GET', path: '/wait', query: 'type, task_id, since, timeout', desc: '長輪詢等事件' },
+  { method: 'GET', path: '/events', desc: 'SSE：job / progress / snapshot / page / event' },
+  { method: 'GET', path: '/jobs', desc: '最近 job' },
+  { method: 'GET', path: '/jobs/:id', desc: 'job 詳情' },
+  { method: 'POST', path: '/download', body: 'Selector＋types, root, type_folders, force, concurrency, dry_run, idempotency_key', desc: '下載 job' },
+  { method: 'POST', path: '/tidy', body: 'root', desc: '一鍵整理 job' },
+  { method: 'POST', path: '/dedupe', body: 'kind, commit, include_custom', desc: '去重 job' },
+  { method: 'POST', path: '/organize', body: 'commit, root, type_folders', desc: '整理舊檔 job' },
+  { method: 'POST', path: '/warm', body: 'refresh, refresh_session', desc: '預熱 job' },
+  { method: 'POST', path: '/jobs/:id/cancel', desc: '取消 job' },
+  { method: 'POST', path: '/shutdown', desc: '關閉 Hub（僅 loopback）' },
+];
+const EVENT_TYPES = ['song_new', 'auto_download', 'download_done'];
+function capabilities() {
+  return {
+    ok: true,
+    name: 'ace-agent-hub',
+    apiVersion: API_VERSION,
+    version: VERSION,
+    endpoints: ENDPOINTS,
+    events: { types: EVENT_TYPES, shape: '{ type, at(ms), seq, source:"page"|"hub", task_id?, task_ids?, title?, ... }' },
+    sse: ['job', 'progress', 'snapshot', 'page', 'event'],
+    fileTypes: [...ACE.FILE_TYPES, 'all'],
+    selector: '{ song_ids?: string[], query?: string, latest?: number, all?: boolean }（無條件且 all≠true → 不選任何歌）',
+    pageFiles: ['page-songs.json', 'page-unavailable.json', 'page-events.json'],
+    auth: { token: !!TOKEN, header: 'X-Hub-Token', extensionAllowlist: EXT_ALLOW.size ? [...EXT_ALLOW] : null },
+  };
+}
+
 function compactRows(rows) {
   return rows.map((row) => ({
     id: row.task_id,
@@ -374,10 +416,27 @@ function filterSongs(rows, url) {
  * Router
  * ------------------------------------------------------------------ */
 const server = http.createServer(async (req, res) => {
+  const origin = req.headers.origin ? String(req.headers.origin) : '';
+  if (!originAllowed(origin)) return json(res, 403, { ok: false, error: 'origin not allowed: ' + origin });
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, X-Hub-Token',
+      'Access-Control-Allow-Private-Network': 'true',
+      'Access-Control-Max-Age': '600',
+    });
+    return res.end();
+  }
   if (!authorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
   try {
     const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
     const pathname = url.pathname;
+
+    if (pathname === '/capabilities' && req.method === 'GET') return json(res, 200, capabilities());
 
     if (pathname === '/health' && req.method === 'GET') {
       const running = [...jobs.values()].filter((job) => job.status === 'running').length;
@@ -385,6 +444,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         ok: true,
         version: VERSION,
+        apiVersion: API_VERSION,
         pid: process.pid,
         port: PORT,
         startedAt: STARTED_AT,

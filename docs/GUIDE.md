@@ -138,13 +138,16 @@
 | 等我做完下一首、下載好給我路徑 | `ace_wait_new_song { wait_download: true }` |
 | 最近發生什麼 | `ace_events` |
 | 曲庫每類有多少 | `ace_library` |
-| 下載／整理 | `ace_download` → `ace_job_status`；`ace_organize` |
+| 把剛做好的歌全部抓下來 | `ace_download { latest: 1, types: ["all"] }` → `ace_job_status` → `ace_tidy { wait: true }` |
+| 下載／整理 | `ace_download`（`song_ids`／`query`／`latest`／`all`）→ `ace_job_status`；`ace_tidy`；`ace_organize` |
 | 維運 | `ace_backups`（只預覽）、`ace_masters`、`ace_probe`、`ace_hub_status` |
 
 Hub 在跑時自動走 Hub（p50：overview 1.2 ms、locate 2.7 ms、list 0.5 ms）；不在時回落本地。
 
 ### 6.4 Hub API（`127.0.0.1:8788`）
-`GET /health /overview /songs /locate /library /page /page/events /wait /jobs/:id /events(SSE)`；`POST /download /tidy /dedupe /organize /warm /jobs/:id/cancel /shutdown`。詳見 `agent/HUB.md`。
+`GET /health /capabilities /overview /songs /locate /library /page /page/events /wait /jobs/:id /events(SSE)`；`POST /download /tidy /dedupe /organize /warm /jobs/:id/cancel /shutdown`。詳見 `agent/HUB.md`。
+
+**其他擴充功能／agent 接入**：先讀 `GET /capabilities`（`apiVersion` 判斷相容）；擴充功能要在自己的 manifest 加 `host_permissions: ["http://127.0.0.1:8788/*"]`，由 service worker 呼叫。一般網站的請求會被拒（403）。規範見 [CONVENTIONS.md](CONVENTIONS.md)。
 
 ## 7. 網頁 ↔ agent 怎麼「高速搬運」
 

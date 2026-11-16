@@ -375,3 +375,24 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm && alarm.name === 'ace-agent-export') exportAgentQuiet();
 });
+
+// 站點輪換登入 Cookie 時立刻重新匯出給 agent（否則 agent 手上的 Cookie 會過期，要等 30 分鐘的 alarm）。
+// 只匯出 session（不重掃下載紀錄）；2 秒 debounce，同一批 Cookie 變動只寫一次。
+let cookieExportTimer = 0;
+try {
+    chrome.cookies.onChanged.addListener((info) => {
+        const domain = String((info && info.cookie && info.cookie.domain) || '').replace(/^\./, '');
+        if (domain !== 'acemusic.ai' && !domain.endsWith('.acemusic.ai')) return;
+        if (info.removed && info.cause === 'overwrite') return; // 覆寫會再觸發一次「新增」，等那次
+        clearTimeout(cookieExportTimer);
+        cookieExportTimer = setTimeout(() => {
+            exportSessionToHost()
+                .then(() => chrome.storage.local.set({ aceAgentExportAt: Date.now() }))
+                .catch(() => {
+                    /* 本機工具未安裝或已登出：安靜略過 */
+                });
+        }, 2000);
+    });
+} catch (_) {
+    /* 沒有 cookies 權限的環境（測試） */
+}
