@@ -259,3 +259,22 @@ test('site-like auto sync is off unless explicitly enabled', async (t) => {
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(syncs, 1);
 });
+
+test('hub probe tolerates one slow or failed health check before reporting offline', async (t) => {
+  const { createHubProbe } = await import('../../player/server.mjs');
+  let mode = 'ok';
+  const hub = http.createServer((req, res) => {
+    if (mode === 'slow') return; // never answers → probe timeout
+    res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise((resolve) => hub.listen(0, '127.0.0.1', resolve));
+  t.after(() => { hub.closeAllConnections(); hub.close(); });
+  const probe = createHubProbe({ port: hub.address().port, timeoutMs: 100, cacheMs: 0 });
+  t.after(() => probe.close());
+  assert.equal(await probe.probe(), true);
+  mode = 'slow';
+  assert.equal(await probe.probe(), true, 'one missed probe keeps the last known online state');
+  assert.equal(await probe.probe(), false, 'two consecutive misses report offline');
+  mode = 'ok';
+  assert.equal(await probe.probe(), true);
+});

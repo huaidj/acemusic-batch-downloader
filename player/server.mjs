@@ -111,18 +111,19 @@ function inside(root, target) {
   return relative !== '' && !relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative);
 }
 
-function createHubProbe() {
+export function createHubProbe({ port = Number(process.env.ACE_HUB_PORT || 8788), timeoutMs = 2000, cacheMs = 5000 } = {}) {
   const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
   agent.on('free', (socket) => socket.unref());
   let cachedAt = 0;
   let cached = false;
+  let failures = 0;
   let pending;
   const probe = async () => {
-    if (Date.now() - cachedAt < 5000) return cached;
+    if (Date.now() - cachedAt < cacheMs) return cached;
     if (!pending) pending = new Promise((resolve) => {
-      const port = Number(process.env.ACE_HUB_PORT || 8788);
       if (!Number.isInteger(port) || port < 1 || port > 65535) return resolve(false);
-      const request = http.get({ host: '127.0.0.1', port, path: '/health', agent, timeout: 600 }, (response) => {
+      // Hub 忙於快照或整理時事件迴圈可能短暫卡住；放寬逾時，並且連續兩次失敗才顯示離線。
+      const request = http.get({ host: '127.0.0.1', port, path: '/health', agent, timeout: timeoutMs }, (response) => {
         let size = 0;
         const chunks = [];
         response.on('data', (chunk) => {
@@ -137,7 +138,13 @@ function createHubProbe() {
       });
       request.on('timeout', () => request.destroy());
       request.on('error', () => resolve(false));
-    }).then((online) => { cached = online; cachedAt = Date.now(); pending = null; return online; });
+    }).then((online) => {
+      failures = online ? 0 : failures + 1;
+      cached = online || (cached && failures < 2);
+      cachedAt = Date.now();
+      pending = null;
+      return cached;
+    });
     return pending;
   };
   return { probe, close: () => agent.destroy() };
