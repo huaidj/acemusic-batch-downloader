@@ -56,6 +56,7 @@ function usage() {
   node cli.mjs extract-mp3 [選項]              把所有歌曲的成品 MP3 集中到 ai音樂\\成品MP3\\（會自動補齊漏掉的）
   node cli.mjs extract-samples                 把分軌/採樣集中到 ai音樂\\採樣包\\（按樂器類型分資料夾）
   node cli.mjs classify-files [--copy]         依檔案屬性分類 MIDI/MusicXML/封面/壓縮檔/其他（預設搬移，--copy 保留原檔）
+  node cli.mjs dedupe-songs [--commit]         歌名資料夾內與分類庫相同的副本（預設預覽）
   node cli.mjs dedupe-content [--commit]       內容去重：全庫相同內容只留一份（預設預覽，--commit 才搬移）
   node cli.mjs dedupe-folders [--commit]       清空資料夾＋移除分類庫已有相同內容的副本（預設預覽）
   node cli.mjs status                          快速摘要（本地快照＋登入狀態，通常 <100ms）
@@ -546,6 +547,17 @@ async function main() {
         if (result.commit) console.log(`  已搬移 ${result.moved} 個到 ${path.join(cfg.stateDir, 'organize-backups')}，回收 ${Math.round(result.bytesReclaimed / 1048576)} MB，alias ${Object.keys(result.aliases || {}).length} 筆`);
         for (const group of result.groups.slice(0, 10)) console.log(`  - ${group.count} 份 ${Math.round(group.size / 1048576)}MB：保留 ${group.keeper}`);
         for (const err of result.errors.slice(0, 10)) console.log(`  ✗ ${err.file}：${err.error}`);
+        return;
+    }
+
+    if (cmd === 'dedupe-songs') {
+        const root = args.flags.root ? String(args.flags.root) : 'ai音樂';
+        const result = await ACE.dedupeSongCopies({ root, commit: !!args.flags.commit, cfg });
+        if (args.flags.json) return printJson({ ...result, candidates: result.candidates.slice(0, 200) });
+        console.log(`歌名資料夾副本去重：${result.commit ? '實際執行' : '預覽（加 --commit 才真的歸檔）'}`);
+        console.log(`  掃描 ${result.scanned} 檔；${result.commit ? '已歸檔 ' + result.archived : '可歸檔 ' + result.candidateCount} 個與分類庫內容相同的副本`);
+        for (const item of result.candidates.slice(0, 10)) console.log(`  - ${item.file} → 保留 ${item.keep}`);
+        for (const err of result.failed.slice(0, 10)) console.log(`  ✗ ${err.file}：${err.error}`);
         return;
     }
 

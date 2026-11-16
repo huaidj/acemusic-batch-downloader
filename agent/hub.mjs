@@ -13,6 +13,7 @@ import { MUSIC_CONTRACT } from './lib/music-contract.mjs';
 import { directGenerationPermission } from './lib/provider-policy.mjs';
 import { createHttp, createApiController } from './lib/create-http.mjs';
 import { CREATE_CONTRACT } from './lib/create-tools.mjs';
+import { archiveDownloadLog } from './lib/log-archive.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT = path.resolve(HERE, '..');
@@ -149,9 +150,16 @@ const pageTimers = new Map();
 let pageWatcher = null;
 let lastPageEvent = null;
 function startPageWatch() {
+  archiveDownloadLog(cfg).catch(() => {});
   try {
     pageWatcher = fs.watch(cfg.stateDir, (_event, filename) => {
       const name = String(filename || '');
+      if (name === 'download-log.json') {
+        // 面板診斷只留最近 200 筆；變動時把新事件累積到 logs/download-log-日期.jsonl，舊工作明細不再遺失。
+        clearTimeout(pageTimers.get(name));
+        pageTimers.set(name, setTimeout(() => { archiveDownloadLog(cfg).catch(() => {}); }, 500));
+        return;
+      }
       if (!PAGE_FILES.has(name)) return;
       // 每個檔案各自 debounce（事件檔與歌單檔同時寫入時互不吃掉）
       clearTimeout(pageTimers.get(name));

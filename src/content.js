@@ -242,14 +242,16 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     renderProgressSoon();
   }
 
-  function withConnectionTimeout(promise, timeoutMs, job) {
+  function withConnectionTimeout(promise, timeoutMs, job, { settleOnCancelMs = 0 } = {}) {
     return new Promise((resolve, reject) => {
       let settled = false;
+      let grace = 0;
       const finish = (fn, value) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         clearInterval(watch);
+        clearTimeout(grace);
         fn(value);
       };
       const timer = setTimeout(() => finish(reject, new Error('擴充功能連線逾時，請刷新 ACE 頁面再試')), timeoutMs);
@@ -258,6 +260,13 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
           if (job) assertJobActive(job);
           else assertRuntimeUsable();
         } catch (err) {
+          // 已送出的下載在按下停止時可能剛好完成：等背景回報真正結果（背景會立即中斷進行中的下載），
+          // 否則落地的檔案既不計入完成數，也不寫入下載紀錄。
+          if (settleOnCancelMs > 0 && err && err.code === 'JOB_CANCELLED' && !grace) {
+            clearInterval(watch);
+            grace = setTimeout(() => finish(reject, err), settleOnCancelMs);
+            return;
+          }
           finish(reject, err);
         }
       }, 100);
@@ -3228,6 +3237,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
           }),
           timeoutMs,
           job,
+          { settleOnCancelMs: 10000 },
         );
         if (response && typeof response.ok === 'boolean') return response;
         return { ok: false, error: 'service worker 無回應' };

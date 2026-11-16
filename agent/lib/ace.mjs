@@ -1890,7 +1890,9 @@ export async function classifyByAttributes({ root = 'ai音樂', move = true, cfg
  * 移到 organize-backups（同磁碟改名，可復原，不刪資料）；沒有相同來源的唯一音訊只回報、不動。
  */
 export async function pruneStaleAudioViews({ cfg = config(), outDir, liveFiles, commit = false } = {}) {
-    const report = { checked: 0, stale: 0, moved: 0, keptUnique: 0, kept: [], movedItems: [], failed: [], archive: null };
+    const report = { checked: 0, stale: 0, moved: 0, keptUnique: 0, rescued: 0, kept: [], rescuedItems: [], movedItems: [], failed: [], archive: null };
+    // 沒有相同來源的孤兒是這份音訊唯一可見的位置：以 hardlink 補回曲庫（不佔空間），讓它成為正常來源並被分析。
+    const rescueDir = path.join(path.dirname(outDir), '_未對應', '音頻分類找回');
     if (!outDir || !exists(outDir)) return report;
     const { physicalFileKey } = await import('./file-id.mjs');
     const liveByKey = new Map(), liveBySize = new Map();
@@ -1905,6 +1907,7 @@ export async function pruneStaleAudioViews({ cfg = config(), outDir, liveFiles, 
     const views = walkFiles(outDir, 8, [], 200000).filter((file) => /\.(mp3|wav|flac)$/i.test(file));
     const hashes = new Map();
     const hashOf = async (file) => { if (!hashes.has(file)) hashes.set(file, await streamFileHash(file)); return hashes.get(file); };
+    const rescuedByHash = new Set();
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const archiveRoot = path.join(cfg.stateDir, 'organize-backups', 'stale-audio-views-' + stamp);
     for (const view of views) {
@@ -1920,7 +1923,25 @@ export async function pruneStaleAudioViews({ cfg = config(), outDir, liveFiles, 
             const digest = await hashOf(view);
             for (const candidate of liveBySize.get(Number(stat.size)) || []) if (await hashOf(candidate) === digest) { keeper = candidate; break; }
         } catch (error) { report.failed.push({ file: path.relative(outDir, view), error: String(error.message || error) }); continue; }
-        if (!keeper) { report.keptUnique++; if (report.kept.length < 200) report.kept.push(path.relative(outDir, view)); continue; }
+        if (!keeper) {
+            report.keptUnique++;
+            if (report.kept.length < 200) report.kept.push(path.relative(outDir, view));
+            const digest = hashes.get(view);
+            if (rescuedByHash.has(digest)) continue;
+            if (!commit) { report.rescuedItems.push({ view: path.relative(outDir, view), preview: true }); rescuedByHash.add(digest); continue; }
+            try {
+                await fsp.mkdir(rescueDir, { recursive: true });
+                const ext = path.extname(view), stem = path.basename(view, ext);
+                let target = path.join(rescueDir, stem + ext);
+                for (let n = 2; exists(target); n++) {
+                    if (await streamFileHash(target) === digest) { target = null; break; }
+                    target = path.join(rescueDir, stem + ' (' + n + ')' + ext);
+                }
+                if (target) { await fsp.link(view, target); report.rescued++; report.rescuedItems.push({ view: path.relative(outDir, view), to: path.relative(path.dirname(outDir), target) }); }
+                rescuedByHash.add(digest);
+            } catch (error) { report.failed.push({ file: path.relative(outDir, view), error: String(error.message || error) }); }
+            continue;
+        }
         if (!commit) { report.movedItems.push({ view: path.relative(outDir, view), keeper: path.relative(path.dirname(outDir), keeper), preview: true }); continue; }
         const target = path.join(archiveRoot, path.relative(outDir, view));
         try {
@@ -2173,8 +2194,9 @@ function PROJECT_ROOT_FOR_AI() {
  * 把歌曲資料夾裡「已有分類副本」的檔案刪掉，完成真正的單一分類庫（省空間）。
  * 同名/同格式/同大小只是候選；內容 hash 相同才歸檔，保留可回滾副本。
  */
-export async function dedupeSongCopies({ root = 'ai音樂', cfg = config() } = {}) {
-    if (!hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => dedupeSongCopies(...arguments));
+/** 歌名資料夾內與分類庫內容相同的副本歸檔。commit:false 只預覽（不取寫入鎖、不搬移）；整理流程預設照舊執行。 */
+export async function dedupeSongCopies({ root = 'ai音樂', commit = true, cfg = config() } = {}) {
+    if (commit && !hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => dedupeSongCopies(...arguments));
     const rootDir = path.join(cfg.downloadDir, toWin(root));
     const CATEGORY_DIRS = ['成品MP3', '成品WAV', '採樣包', '採樣包WAV', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他'];
     const normalize = (name) => name.replace(/\.[^.]+$/, '').replace(/\s*\(\d+\)\s*$/, '').toLowerCase();
@@ -2191,7 +2213,7 @@ export async function dedupeSongCopies({ root = 'ai音樂', cfg = config() } = {
             } catch { /* ignore */ }
         }
     }
-    const report = { ok: true, removed: 0, archived: 0, savedBytes: 0, failed: [], scanned: 0 };
+    const report = { ok: true, commit, removed: 0, archived: 0, savedBytes: 0, failed: [], scanned: 0, candidates: [] };
     const relocations = [];
     const skipTop = new Set([...CATEGORY_DIRS, '音頻分類', '_未對應', 'sample', 'WAI', '俱樂部版', '舊版對照']);
     for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
@@ -2205,6 +2227,7 @@ export async function dedupeSongCopies({ root = 'ai音樂', cfg = config() } = {
                 if (!index.has(key)) continue;
                 const keeper = await (async () => { for (const candidate of index.get(key)) if (await sameFileContent(file, candidate)) return candidate; return null; })();
                 if (!keeper) continue;
+                if (!commit) { report.candidates.push({ file: path.relative(rootDir, file), keep: path.relative(rootDir, keeper), bytes: stat.size }); continue; }
                 const moved = await moveFileSafely(cfg, file, keeper, { reason: 'song-copy-dedupe' });
                 relocations.push(moved);
                 if (moved.deduped) { report.removed += 1; report.archived += 1; }
@@ -2214,6 +2237,8 @@ export async function dedupeSongCopies({ root = 'ai音樂', cfg = config() } = {
         }
     }
     report.ok = report.failed.length === 0;
+    report.candidateCount = report.candidates.length;
+    if (!commit) return report;
     await recordRelocations(cfg, relocations);
     clearFsCaches(cfg);
     return report;

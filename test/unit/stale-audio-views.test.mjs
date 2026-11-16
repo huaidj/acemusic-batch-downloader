@@ -28,7 +28,7 @@ test('stale classification links: identical live source → moved to backup; liv
   const uniqueView = s.link(uniqueArchived, path.join(s.outDir, '其他音檔', 'Key', '4B', '0d577ebc5b7443f28d4e7565db0101c0.mp3'));
 
   const preview = await pruneStaleAudioViews({ cfg: s.cfg, outDir: s.outDir, liveFiles: [live], commit: false });
-  assert.equal(preview.stale, 2); assert.equal(preview.moved, 0); assert.equal(preview.keptUnique, 1);
+  assert.equal(preview.stale, 2); assert.equal(preview.moved, 0); assert.equal(preview.keptUnique, 1); assert.equal(preview.rescuedItems.length, 1); assert.equal(preview.rescued, 0);
   assert.ok(fs.existsSync(staleView), 'preview never moves');
 
   const result = await pruneStaleAudioViews({ cfg: s.cfg, outDir: s.outDir, liveFiles: [live], commit: true });
@@ -41,8 +41,14 @@ test('stale classification links: identical live source → moved to backup; liv
   assert.equal(fs.readFileSync(moved, 'utf8'), 'guitar-audio-bytes', 'moved link keeps its data');
   assert.ok(result.archive.startsWith(path.join(s.cfg.stateDir, 'organize-backups')));
   assert.equal(JSON.parse(fs.readFileSync(path.join(result.archive, '_stale-views.json'), 'utf8')).items.length, 1);
-  const again = await pruneStaleAudioViews({ cfg: s.cfg, outDir: s.outDir, liveFiles: [live], commit: true });
+  // 唯一的孤兒被 hardlink 補回曲庫，檢視連結本身不動
+  assert.equal(result.rescued, 1);
+  const rescued = path.join(s.root, '_未對應', '音頻分類找回', '0d577ebc5b7443f28d4e7565db0101c0.mp3');
+  assert.equal(fs.readFileSync(rescued, 'utf8'), 'only-copy-of-this-audio');
+  assert.equal(fs.statSync(rescued, { bigint: true }).ino, fs.statSync(uniqueView, { bigint: true }).ino, 'rescue is a hardlink, no extra space');
+  const again = await pruneStaleAudioViews({ cfg: s.cfg, outDir: s.outDir, liveFiles: [live, rescued], commit: true });
   assert.equal(again.moved, 0, 'idempotent');
+  assert.equal(again.rescued, 0, 'a rescued file is now a live source');
 });
 
 test('stale classification links: standalone copies (link count 1) are never moved', async (t) => {

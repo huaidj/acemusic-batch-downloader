@@ -53,19 +53,41 @@ function stage(items) {
   }
 }
 
+/** 讀 ZIP 中央目錄的檔名；任何反斜線、絕對路徑或 .. 都讓打包失敗，不交出壞包。 */
+function zipEntryNames(file) {
+  const buffer = fs.readFileSync(file);
+  let end = -1;
+  for (let i = buffer.length - 22; i >= Math.max(0, buffer.length - 65557); i--) if (buffer.readUInt32LE(i) === 0x06054b50) { end = i; break; }
+  if (end < 0) throw new Error('ZIP 結尾目錄不存在：' + file);
+  const count = buffer.readUInt16LE(end + 10);
+  let offset = buffer.readUInt32LE(end + 16);
+  const names = [];
+  for (let n = 0; n < count; n++) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) throw new Error('ZIP 中央目錄損壞：' + file);
+    const nameLength = buffer.readUInt16LE(offset + 28), extraLength = buffer.readUInt16LE(offset + 30), commentLength = buffer.readUInt16LE(offset + 32);
+    names.push(buffer.toString('utf8', offset + 46, offset + 46 + nameLength));
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  return names;
+}
+
+function assertPortableZip(file) {
+  const bad = zipEntryNames(file).filter((name) => name.includes('\\') || name.startsWith('/') || /^[A-Za-z]:/.test(name) || name.split('/').includes('..'));
+  if (bad.length) throw new Error(`ZIP 含不可攜路徑（${bad.length}）：${bad.slice(0, 3).join(', ')}`);
+}
+
 function zip(fromDir, outFile) {
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
   rimraf(outFile);
   if (isWin) {
-    const psQuote = (value) => "'" + value.replace(/'/g, "''") + "'";
-    execFileSync('powershell', [
-      '-NoProfile',
-      '-Command',
-      `Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::CreateFromDirectory(${psQuote(fromDir)}, ${psQuote(outFile)})`,
-    ], { stdio: 'inherit' });
+    // Windows PowerShell 5 的 ZipFile 會寫出反斜線路徑（naming\app.js），Chrome Web Store 與非 Windows 解壓會出錯；
+    // 系統內建 bsdtar 依 ZIP 規格寫正斜線。
+    const tar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+    execFileSync(tar, ['-a', '-c', '-f', outFile, ...fs.readdirSync(fromDir)], { cwd: fromDir, stdio: 'inherit' });
   } else {
     execFileSync('zip', ['-qr', outFile, '.'], { cwd: fromDir, stdio: 'inherit' });
   }
+  assertPortableZip(outFile);
   return fs.statSync(outFile).size;
 }
 
