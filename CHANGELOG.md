@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.8.1 — 2026-11-17（WAV 指紋清洗）
+
+- 新增 `stripWavMetadata`：下載 WAV 時預設移除 RIFF `LIST/INFO`（`IART`／`ICMT`／`ISFT` 等 ACE 生成器與帳號指紋）與 `id3 `／`bext`／`iXML`／`XMP ` 等 metadata chunk；音頻樣本 bytes 不變，RIFF 長度重算。
+- 部分 ACE 匯出會在 `data` chunk 尾端夾帶 ID3v2（`TSSE`／`COMM`，含 `Made with ACE Music; created=...; id=...`）；偵測到標籤結束於檔尾時直接截除，並同步修正 `data` 長度。
+- `downloadToFile` 在寫檔前套用；下載回報的 `bytes` 改為清洗後大小。原始下載流程不變。
+- 新增 `test/unit/wav-metadata.test.mjs`：涵蓋 LIST/INFO、尾端 ID3v2、乾淨 WAV 與損壞輸入。
+
 ## 1.8.0 — 2026-11-17（整合版：1.7.5 修復 ＋ HuaiDJ 創作中樞 ＋ 命名爐）
 
 - 合併 `feat/huaidj-music-agent`（9b29ecf）到 1.7.5：Hub 同時提供下載索引／播放器與 `/music/*`、`/create-api/*`；MCP 共 74 個工具。`feat/v11-direct-generation-z` 是同一 v1.1 直接生成的較早版本，已由此分支涵蓋，不另行合併。

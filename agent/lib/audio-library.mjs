@@ -236,6 +236,71 @@ export async function inspectAudioFile(absolutePath) {
     }
 }
 
+const WAV_METADATA_CHUNKS = new Set(['id3 ', 'bext', 'iXML', 'XMP ', 'JUNK']);
+
+/** ACE exports sometimes append an ID3v2 tag after the samples but still inside the data chunk. */
+function trimTrailingId3(payload) {
+    const marker = payload.lastIndexOf(Buffer.from('ID3'));
+    if (marker < 0 || marker + 10 > payload.length) return payload;
+    const version = payload[marker + 3];
+    if (version !== 3 && version !== 4) return payload;
+    const flags = payload[marker + 5];
+    const size = ((payload[marker + 6] & 0x7f) << 21) | ((payload[marker + 7] & 0x7f) << 14) | ((payload[marker + 8] & 0x7f) << 7) | (payload[marker + 9] & 0x7f);
+    if (!size) return payload;
+    const footer = version === 4 && (flags & 0x10) ? 10 : 0;
+    const tagEnd = marker + 10 + size + footer;
+    if (tagEnd !== payload.length && tagEnd !== payload.length - 1) return payload;
+    return payload.subarray(0, marker);
+}
+
+/**
+ * Remove RIFF metadata chunks that can carry generator fingerprints.
+ * ACE Music writes LIST/INFO (INAM/IART/ICMT/ICRD/ISFT); some exports also append
+ * an ID3v2 tag after the samples (inside the data chunk). Audio samples are copied
+ * byte-for-byte; only trailing metadata is cut and the RIFF size is recomputed.
+ * Returns the original buffer unchanged when there is nothing to strip.
+ */
+export function stripWavMetadata(buffer) {
+    const data = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+    if (data.length < 12 || data.toString('ascii', 0, 4) !== 'RIFF' || data.toString('ascii', 8, 12) !== 'WAVE') return data;
+    const kept = [];
+    let removed = 0;
+    for (let offset = 12; offset + 8 <= data.length;) {
+        const id = data.toString('ascii', offset, offset + 4);
+        const size = data.readUInt32LE(offset + 4);
+        const end = offset + 8 + size;
+        if (end > data.length) return data;
+        const paddedEnd = Math.min(end + (size & 1), data.length);
+        if (WAV_METADATA_CHUNKS.has(id) || (id === 'LIST' && size >= 4 && data.toString('ascii', offset + 8, offset + 12) === 'INFO')) {
+            removed += 1;
+            offset = paddedEnd;
+            continue;
+        }
+        if (id === 'data' && size > 0) {
+            const payload = data.subarray(offset + 8, offset + 8 + size);
+            const trimmed = trimTrailingId3(payload);
+            if (trimmed.length !== payload.length) {
+                removed += 1;
+                const header = Buffer.alloc(8);
+                header.write('data', 0, 'ascii');
+                header.writeUInt32LE(trimmed.length, 4);
+                kept.push(header, Buffer.from(trimmed));
+                if (trimmed.length & 1) kept.push(Buffer.alloc(1));
+                offset = paddedEnd;
+                continue;
+            }
+        }
+        kept.push(Buffer.from(data.subarray(offset, paddedEnd)));
+        offset = paddedEnd;
+    }
+    const body = Buffer.concat(kept);
+    const header = Buffer.alloc(12);
+    header.write('RIFF', 0, 'ascii');
+    header.writeUInt32LE(body.length + 4, 4);
+    header.write('WAVE', 8, 'ascii');
+    return removed ? Buffer.concat([header, body]) : data;
+}
+
 /** Validate a completed HTTP audio body before replacing any existing local file. */
 export function validateAudioBuffer(buffer, kind) {
     const data = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);

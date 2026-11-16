@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { config, readJson, writeJson, exists, toWin, sleep, appendLog, cacheRead, cacheWrite, cacheClear, cachePeek } from './config.mjs';
 import { loadShared } from './shared.mjs';
-import { inspectAudioFile, validateAudioBuffer } from './audio-library.mjs';
+import { inspectAudioFile, stripWavMetadata, validateAudioBuffer } from './audio-library.mjs';
 import { hasLibraryWriteLease, withLibraryWriteLease } from './library-lease.mjs';
 import { invalidateLocalIndex } from './local-index-service.mjs';
 import { sameFileContent, moveFileSafely, recordRelocations } from './file-ops.mjs';
@@ -1115,12 +1115,15 @@ async function downloadToFile(cfg, session, url, relPath) {
     if (!buffer.length) throw new Error('檔案為空');
     const extension = path.extname(relPath).slice(1).toLowerCase();
     if (extension === 'wav' || extension === 'mp3') validateAudioBuffer(buffer, extension);
+    // WAV downloads from ACE can carry LIST/INFO (IART/ICMT/ISFT) with the generator
+    // name, creation time and account id. Strip it before the file ever lands in the library.
+    const payload = extension === 'wav' ? stripWavMetadata(buffer) : buffer;
     const tmp = target + '.' + process.pid + '.' + crypto.randomUUID() + '.part';
-    await fsp.writeFile(tmp, buffer, { flag: 'wx' });
+    await fsp.writeFile(tmp, payload, { flag: 'wx' });
     // A fresh source/version must not overwrite an older take or a user edit.
     // The verified file operation chooses a distinct final name on collision.
     const moved = await moveFileSafely(cfg, tmp, target, { conflict: 'unique', reason: 'download-file' });
-    return { target: moved.to, bytes: buffer.length };
+    return { target: moved.to, bytes: payload.length };
 }
 
 export async function loadState(cfg = config()) {
