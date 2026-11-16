@@ -21,7 +21,8 @@ const song = (id, title) => ({
   local_audio: `/data/${id}.mp3`,
   local_cover: `/data/${id}.jpg`,
   meta: { title },
-  // midiAvailable 依 capability／result 判斷；用 music_generate 即可
+  // 站點 capability 與產品資格分開：此 fixture 有主動分軌 job。
+  stems: { '2': { status: 'done', tracks: [] } },
 });
 
 test('markUnavailable／isUnavailable：不改傳入物件', () => {
@@ -72,16 +73,16 @@ test('buildDownloadPlan：不可用的 MIDI 跳過（file.unavailable），force
 
 test('songDownloadSummary：MIDI 不可用 → 已下載（不再是「部分 2/3」）', () => {
   const s = song('s1', 'Sine Phase Ritual');
-  const index = { rel: new Set(), names: new Set(['sine phase ritual - musicxml.musicxml', 'sine phase ritual - cover.jpg']) };
+  const index = { rel: new Set(), names: new Set(['sine phase ritual - musicxml.musicxml', 'sine phase ritual - cover.jpg', 'sine phase ritual.wav']) };
   const before = ACE.songDownloadSummary(s, index, {});
   assert.equal(before.allDone, false);
-  assert.equal(before.have, 2);
-  assert.equal(before.total, 3);
+  assert.equal(before.have, 3);
+  assert.equal(before.total, 4);
 
   const after = ACE.songDownloadSummary(s, index, P.markUnavailable({}, 's1', 'midi'));
   assert.equal(after.allDone, true);
-  assert.equal(after.have, 2);
-  assert.equal(after.total, 2);
+  assert.equal(after.have, 3);
+  assert.equal(after.total, 3);
   assert.deepEqual(after.unavailable, ['midi']);
   assert.equal(after.detail.find((d) => d.type === 'midi').na, true);
 });

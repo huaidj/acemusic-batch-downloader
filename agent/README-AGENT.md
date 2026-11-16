@@ -55,7 +55,7 @@ node $cli organize --commit           # 實際整理
 
 | 參數 | 說明 |
 | --- | --- |
-| `--types stems,midi,musicxml,mp3,cover` | 要下載的類型（預設 `stems,midi,cover`）；WAV 站點大多沒有，不提供 |
+| `--types stems,midi,musicxml,mp3,wav,cover` | 要下載的類型（預設 `stems,midi,cover,wav`）；MIDI/MusicXML 只排已要求分軌的歌；可用 WAV 獨立補齊 |
 | `--root ai音樂` | 最上層資料夾 |
 | `--force` | 已下載過也重下 |
 | `--concurrency 1-6` | 並行數（預設 4，MIDI 生成會與分軌下載重疊） |

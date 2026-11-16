@@ -80,7 +80,11 @@ async function boundedBody(response, limit, exact = false) {
   return Buffer.concat(chunks, size);
 }
 
-async function resolveWav(songId, context) {
+async function resolveWav(song, context) {
+  if (song.capability !== 'music_generate' && /\.wav(?:[?#]|$)/i.test(String(song.local_audio || ''))) {
+    return targetUrl(song.local_audio, context.cfg.baseUrl).href;
+  }
+  const songId = song.task_id;
   const direct = `${context.cfg.baseUrl}/api/songs/${encodeURIComponent(songId)}/file?kind=wav`;
   const { response } = await retry(() => safeGet(direct + '&as=parts', context));
   if (!/json/i.test(response.headers.get('content-type') || '')) {
@@ -248,7 +252,7 @@ export async function repairWavs({ cfg = config(), workDir, concurrency = 2, onP
         const title = song.meta?.title || 'Untitled';
         const item = { task_id: song.task_id, title };
         try {
-          const source = await resolveWav(song.task_id, context);
+          const source = await resolveWav(song, context);
           const first = await remoteRange(source, 0, RANGE_BYTES - 1, context);
           const tailStart = Math.max(0, first.total - RANGE_BYTES);
           const last = tailStart === 0 ? first : await remoteRange(source, tailStart, first.total - 1, context);

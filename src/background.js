@@ -105,6 +105,22 @@ function startDownload(msg) {
   });
 }
 
+let localFilesChangedTimer = 0;
+function notifyLocalFilesChanged() {
+  clearTimeout(localFilesChangedTimer);
+  localFilesChangedTimer = setTimeout(() => {
+    localFilesChangedTimer = 0;
+    chrome.tabs.query({ url: ['https://acemusic.ai/*', 'https://www.acemusic.ai/*'] }, (tabs) => {
+      if (chrome.runtime.lastError) return;
+      const message = { type: 'ACE_LOCAL_FILES_CHANGED', at: Date.now() };
+      for (const tab of tabs || []) {
+        if (tab.id == null) continue;
+        chrome.tabs.sendMessage(tab.id, message, () => { void chrome.runtime.lastError; });
+      }
+    });
+  }, 200);
+}
+
 chrome.downloads.onChanged.addListener((delta) => {
   const item = pending.get(delta.id);
   if (!item) return;
@@ -124,6 +140,7 @@ chrome.downloads.onChanged.addListener((delta) => {
         actualPath: actual,
         desiredPath: item.filename,
       });
+      notifyLocalFilesChanged();
     });
   } else if (state === 'interrupted') {
     item.done({ ok: false, error: (delta.error && delta.error.current) || '下載中斷' });

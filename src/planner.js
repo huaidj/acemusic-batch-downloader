@@ -15,7 +15,7 @@
     let types;
     if (Array.isArray(o.types)) types = o.types.filter((t) => FILE_KINDS.includes(t));
     else if (o.types && typeof o.types === 'object') types = FILE_KINDS.filter((t) => !!o.types[t]);
-    else types = ['stems', 'midi'];
+    else types = ['stems', 'midi', 'wav'];
     return {
       types: new Set(types),
       root: (typeof o.root === 'string' && o.root.trim()) || 'ai音樂',
@@ -39,6 +39,8 @@
    */
   const LOSSY_FALLBACK = /^ace-step/i;
   function supportsWav(song, lossyModels) {
+    const originalAudio = String((song && song.local_audio) || '').split(/[?#]/)[0];
+    if (/\.wav$/i.test(originalAudio)) return true; // 上傳／轉錄的原檔本身就是 WAV。
     const model = String((song && song.model) || '');
     if (!model) return false; // 上傳的歌（沒有模型）只有原檔
     if (song.capability && song.capability !== 'music_generate') return false;
@@ -49,6 +51,22 @@
   /** 站點判定 MIDI / MusicXML 可用的條件（見 public/app.js dlOptions） */
   function midiAvailable(song) {
     return isDone(song) && (song.capability === 'music_generate' || song.capability === 'music_transcribe');
+  }
+
+  /** 產品範圍：只有使用者已請求站點分軌的這個 task，才補 MIDI / MusicXML。 */
+  function notationRequested(song) {
+    if (!midiAvailable(song) || !song.stems || typeof song.stems !== 'object') return false;
+    const requestedJob = (job) => {
+      if (!job || typeof job !== 'object' || Array.isArray(job)) return false;
+      const status = String(job.status || '').toLowerCase();
+      return /^(queued|pending|starting|running|processing|done|succeeded|completed|failed|error|cancelled|canceled)$/.test(status)
+        || Number(job.started_at) > 0 || Number(job.finished_at) > 0
+        || (Array.isArray(job.tracks) && job.tracks.some((track) => track && (track.id || track.local_audio)));
+    };
+    if (['0', '2'].some((mode) => requestedJob(song.stems[mode]))) return true;
+    const jobs = Array.isArray(song.stems) ? song.stems : song.stems.jobs;
+    if (Array.isArray(jobs)) return jobs.some(requestedJob);
+    return !!jobs && typeof jobs === 'object' && Object.values(jobs).some(requestedJob);
   }
 
   /** 選分軌群組：優先 mode "2"（全部分軌），否則 mode "0"（人聲+伴奏） */
@@ -127,7 +145,7 @@
         const hist = history[song.task_id] && history[song.task_id].files && history[song.task_id].files[file.key];
         file.skip = !opts.force && !!hist && hist.path === file.path;
         // 站點已回 no_download 的檔案（例如這首歌沒有 MIDI）：不再請求；force 可重試
-        if (!file.skip && !opts.force && isUnavailable(unavailable, song.task_id, file.kind)) {
+        if (!file.skip && !opts.force && file.kind !== 'wav' && isUnavailable(unavailable, song.task_id, file.kind)) {
           file.skip = true;
           file.unavailable = true;
         }
@@ -153,15 +171,15 @@
         }
       }
 
-      if (opts.types.has('midi') && midiAvailable(song)) {
+      if (opts.types.has('midi') && notationRequested(song)) {
         push({ key: 'midi', kind: 'midi', source: 'api', apiKind: 'full', label: 'MIDI', filename: names.midi() });
       }
 
-      if (opts.types.has('musicxml') && midiAvailable(song)) {
+      if (opts.types.has('musicxml') && notationRequested(song)) {
         push({ key: 'musicxml', kind: 'musicxml', source: 'api', apiKind: 'musicxml', label: 'MusicXML', filename: names.musicxml() });
       }
 
-      if (opts.types.has('mp3') && isDone(song)) {
+      if (opts.types.has('mp3') && isDone(song) && !(song.capability !== 'music_generate' && /\.wav$/i.test(String(song.local_audio || '').split(/[?#]/)[0]))) {
         // 上傳類歌曲的 /file?kind=mp3 會 404，直接抓 local_audio（生成歌曲兩者相同）
         const mp3Url = song.local_audio
           ? `${opts.origin}${song.local_audio}`
@@ -183,7 +201,9 @@
           source: 'file',
           label: 'WAV',
           filename: names.wav(),
-          sourceUrl: `${opts.origin}/api/songs/${encodeURIComponent(song.task_id)}/file?kind=wav`,
+          sourceUrl: (song.capability !== 'music_generate' && /\.wav$/i.test(String(song.local_audio || '').split(/[?#]/)[0]))
+            ? absolutize(song.local_audio, opts.origin)
+            : `${opts.origin}/api/songs/${encodeURIComponent(song.task_id)}/file?kind=wav`,
         });
       }
 
@@ -329,9 +349,13 @@
       detail.push({ type: 'stems', label: KIND_LABELS.stems, have, total, done: have >= total });
     }
     for (const kind of ['midi', 'musicxml']) {
-      if (requested.has(kind) && midiAvailable(song)) add(kind, downloaded[kind], isUnavailable(unavailable, song.task_id, kind));
+      if (requested.has(kind) && notationRequested(song)) add(kind, downloaded[kind], isUnavailable(unavailable, song.task_id, kind));
     }
-    if (requested.has('mp3') && isDone(song)) add('mp3', downloaded.mp3);
+    if (requested.has('mp3') && isDone(song)) {
+      const originalWav = song.capability !== 'music_generate' && /\.wav$/i.test(String(song.local_audio || '').split(/[?#]/)[0]);
+      add('mp3', downloaded.mp3, originalWav);
+      if (originalWav && !downloaded.mp3) detail[detail.length - 1].reason = '原始檔為 WAV';
+    }
     if (requested.has('wav') && isDone(song)) {
       add('wav', downloaded.wav, !supportsWav(song, lossyModels));
       if (!supportsWav(song, lossyModels) && !downloaded.wav) detail[detail.length - 1].reason = '此模型不提供 WAV';
@@ -366,6 +390,7 @@
     normalizeOptions,
     isDone,
     midiAvailable,
+    notationRequested,
     supportsWav,
     pickStemGroup,
     absolutize,

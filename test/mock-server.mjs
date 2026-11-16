@@ -11,7 +11,7 @@
 // 假資料（5 種類、6 筆）：
 //   A  song-a  "Neon Drive"     succeeded / music_generate / stems mode 2（3 有效軌 + 1 empty）+ MIDI
 //   B  song-b  "Paper Sky"      succeeded / music_transcribe / 只有 stems mode 0（2 軌）+ MIDI + MusicXML
-//   C  song-c  "Rain: Loop? v2" succeeded / music_generate / 無分軌、只有 MIDI（title 含非法字元，測清理）
+//   C  song-c  "Rain: Loop? v2" succeeded / music_generate / 已請求分軌但仍 processing，可補 MIDI（title 含非法字元）
 //   D  song-d  "Still Cooking"  processing（未完成，面板須忽略）
 //   E1 song-e1 "Where Am I"     succeeded / stem_split / stems mode 2（2 軌，無 MIDI）
 //   E2 song-e2 "Where Am I"     同上（同名，驗證資料夾 (2) 後綴）
@@ -93,7 +93,7 @@ export const SONGS = [
     local_cover: null,
     meta: { title: 'Rain: Loop? v2', stem: 'rain-loop' },
     result: { duration_sec: 30 },
-    stems: {},
+    stems: { '2': { status: 'processing', tracks: [] } },
   },
   {
     task_id: 'song-d',

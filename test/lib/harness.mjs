@@ -72,6 +72,8 @@ globalThis.__ACEDL_TEST_MODE__ = true;
 // 只在隔離測試副本注入失效的 content runtime；不影響真實擴充功能或使用者 profile。
 (() => {
   const realSend = chrome.runtime.sendMessage.bind(chrome.runtime);
+  const nativeFixture = new URLSearchParams(location.search).has('native-fixture');
+  if (nativeFixture) document.documentElement.dataset.acedlTestNative = JSON.stringify({ root: ${JSON.stringify(path.join(tmpRoot, 'downloads'))}, files: [], verified: { savedAt: 'initial', files: [] }, agentState: { history: {} } });
   chrome.runtime.sendMessage = (msg, ...args) => {
     const flags = document.documentElement.dataset;
     if (msg && msg.type === 'ACE_DOWNLOAD_FILE') {
@@ -81,6 +83,21 @@ globalThis.__ACEDL_TEST_MODE__ = true;
       if (flags.acedlTestInvalidateAfter !== undefined && sent >= Number(flags.acedlTestInvalidateAfter)) flags.acedlTestInvalidated = '1';
     }
     if (flags.acedlTestInvalidated === '1') throw new Error('Extension context invalidated.');
+    if (nativeFixture && (msg.type === 'ACE_AGENT_STATUS' || msg.type.startsWith('ACE_HOST_'))) {
+      const fixture = JSON.parse(flags.acedlTestNative || '{}');
+      let reply = { ok: !fixture.offline };
+      if (msg.type === 'ACE_AGENT_STATUS') reply = { ok: true, host: { ok: !fixture.offline, downloadsRoot: fixture.root || '' } };
+      else if (msg.type === 'ACE_HOST_LIST') {
+        flags.acedlTestNativeLists = String(Number(flags.acedlTestNativeLists || 0) + 1);
+        reply = { ok: !fixture.offline, root: fixture.root, files: fixture.files || [] };
+      } else if (msg.type === 'ACE_HOST_READ') {
+        flags.acedlTestNativeReads = String(Number(flags.acedlTestNativeReads || 0) + 1);
+        reply = { ok: !fixture.offline, data: msg.name === 'verified-audio' ? fixture.verified || {} : msg.name === 'agent-state' ? fixture.agentState || {} : { items: [] } };
+      }
+      const callback = args.find((value) => typeof value === 'function');
+      queueMicrotask(() => callback && callback(reply));
+      return;
+    }
     return realSend(msg, ...args);
   };
   const realFetch = globalThis.fetch.bind(globalThis);
@@ -282,9 +299,17 @@ export async function shadowText(page, selector) {
   }, selector);
 }
 
+async function openDownloadSettings(page) {
+  const settings = page.locator('[data-download-settings]');
+  if (await settings.count() && !(await settings.evaluate((node) => node.open))) {
+    await settings.locator('summary').first().click();
+  }
+}
+
 export async function setOption(page, key, checked) {
   const loc = page.locator(`[data-opt="${key}"]`);
   await loc.waitFor({ state: 'attached', timeout: 10000 });
+  await openDownloadSettings(page);
   if ((await loc.isChecked()) !== checked) await loc.click();
   const now = await loc.isChecked();
   if (now !== checked) throw new Error(`無法設定選項 ${key}=${checked}`);
@@ -293,6 +318,7 @@ export async function setOption(page, key, checked) {
 export async function setRootFolder(page, value) {
   const loc = page.locator('[data-root-folder]');
   await loc.waitFor({ state: 'attached', timeout: 10000 });
+  await openDownloadSettings(page);
   await loc.fill(value);
   // trigger input/change so content 的 change listener 更新 S.rootFolder
   await loc.dispatchEvent('input');

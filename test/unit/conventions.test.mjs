@@ -49,7 +49,7 @@ test('選歌器：條件疊加、latest 取最新、無條件不選、all 才全
 test('normalizeTypes：all 展開、字串逗號、預設值、未知類型丟錯', () => {
   assert.deepEqual(ACE.normalizeTypes(['all']), [...ACE.FILE_TYPES]);
   assert.deepEqual(ACE.normalizeTypes('mp3, wav'), ['mp3', 'wav']);
-  assert.deepEqual(ACE.normalizeTypes(undefined), ['stems', 'midi', 'cover']);
+  assert.deepEqual(ACE.normalizeTypes(undefined), ['stems', 'midi', 'cover', 'wav']);
   assert.throws(() => ACE.normalizeTypes(['flac']), /未知的檔案類型/);
 });
 

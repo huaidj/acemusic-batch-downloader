@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const HEADER_BYTES = 65536;
+const MAX_WAV_CHUNKS = 4096;
 const AUDIO_FORMATS = new Set(['mp3', 'wav', 'flac', 'm4a', 'ogg', 'aac', 'aiff']);
 const normalizeFormat = (value) => {
     const name = String(value || '').toLowerCase().replace(/^\./, '');
@@ -37,7 +38,7 @@ function inspectHeader(buffer, bytes, requestedFormat = '') {
         let byteRate = 0;
         let dataBytes = null;
         let dataOffset = 0;
-        for (let offset = 12; offset + 8 <= buffer.length;) {
+        for (let offset = 12, chunks = 0; offset + 8 <= buffer.length && chunks < MAX_WAV_CHUNKS; chunks++) {
             const chunk = buffer.toString('ascii', offset, offset + 4);
             const length = buffer.readUInt32LE(offset + 4);
             const end = offset + 8 + length;
@@ -118,6 +119,58 @@ function inspectHeader(buffer, bytes, requestedFormat = '') {
     return { ...result, reason: 'Audio format could not be confirmed from its header' };
 }
 
+/** Seek past large RIFF metadata without loading it or the audio payload into memory. */
+async function inspectRiffFile(handle, bytes, prefix) {
+    const result = { validity: 'unknown', format: 'wav', bytes };
+    const damaged = (reason, expectedBytes) => ({ ...result, validity: 'damaged', reason, ...(expectedBytes ? { expectedBytes } : {}) });
+    const riffBytes = prefix.readUInt32LE(4) + 8;
+    if (riffBytes > bytes) return damaged('WAV RIFF length exceeds the downloaded file', riffBytes);
+    const readAt = async (length, position) => {
+        const buffer = Buffer.alloc(length);
+        let filled = 0;
+        while (filled < length) {
+            const { bytesRead } = await handle.read(buffer, filled, length - filled, position + filled);
+            if (!bytesRead) break;
+            filled += bytesRead;
+        }
+        return buffer.subarray(0, filled);
+    };
+    let offset = 12;
+    let byteRate = 0;
+    let dataBytes = null;
+    let dataEnd = 0;
+    for (let chunks = 0; chunks < MAX_WAV_CHUNKS && offset < riffBytes; chunks++) {
+        if (!Number.isSafeInteger(offset) || offset < 12 || offset + 8 > bytes) return damaged('Incomplete WAV chunk header', offset + 8);
+        if (offset + 8 > riffBytes) return damaged('WAV chunk header exceeds its RIFF container');
+        const header = await readAt(8, offset);
+        if (header.length !== 8) return damaged('Incomplete WAV chunk header', offset + 8);
+        const chunk = header.toString('ascii', 0, 4);
+        const length = header.readUInt32LE(4);
+        const end = offset + 8 + length;
+        const next = end + (length & 1);
+        if (!Number.isSafeInteger(next) || next <= offset) return damaged('Invalid WAV chunk offset');
+        if (end > bytes) return damaged(`WAV ${chunk} chunk exceeds the downloaded file`, end);
+        if (end > riffBytes || next > riffBytes) return damaged(`WAV ${chunk} chunk exceeds its RIFF container`, next);
+        if (chunk === 'fmt ') {
+            if (length < 16) return damaged('WAV fmt chunk is too short');
+            const fmt = await readAt(16, offset + 8);
+            if (fmt.length !== 16) return damaged('Incomplete WAV fmt chunk', offset + 24);
+            const channels = fmt.readUInt16LE(2);
+            const sampleRate = fmt.readUInt32LE(4);
+            byteRate = fmt.readUInt32LE(8);
+            if (!channels || !sampleRate || !byteRate) return damaged('WAV fmt chunk has invalid channel/rate values');
+        }
+        if (chunk === 'data') {
+            if (!length) return damaged('WAV contains no audio samples');
+            dataBytes = length;
+            dataEnd = end;
+        }
+        if (dataBytes !== null && byteRate) return { ...result, validity: 'valid', duration: dataBytes / byteRate, expectedBytes: Math.max(riffBytes, dataEnd) };
+        offset = next;
+    }
+    return { ...result, reason: offset < riffBytes ? 'WAV chunk inspection limit reached' : 'WAV fmt/data chunks were not both found' };
+}
+
 /** Inspect a local file without reading an account session or decoding the audio payload. */
 export async function inspectAudioFile(absolutePath) {
     const requested = normalizeFormat(path.extname(absolutePath));
@@ -128,8 +181,12 @@ export async function inspectAudioFile(absolutePath) {
         handle = await fs.open(absolutePath, 'r');
         const buffer = Buffer.alloc(Math.min(HEADER_BYTES, before.size));
         const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        const prefix = buffer.subarray(0, bytesRead);
+        let inspected = inspectHeader(prefix, before.size, requested);
+        if (inspected.validity === 'unknown' && inspected.format === 'wav' && prefix.toString('ascii', 0, 4) === 'RIFF' && prefix.toString('ascii', 8, 12) === 'WAVE') {
+            inspected = await inspectRiffFile(handle, before.size, prefix);
+        }
         const after = await handle.stat();
-        const inspected = inspectHeader(buffer.subarray(0, bytesRead), after.size, requested);
         if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || bytesRead !== buffer.length) return { ...inspected, validity: 'unknown', reason: 'Audio file changed while its header was being inspected' };
         return inspected;
     } catch (error) {

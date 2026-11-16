@@ -52,7 +52,7 @@ test('站點不提供 MIDI 的紀錄不能掩蓋可用 WAV 的缺失；不改輸
     unavailable: { a: { midi: { code: 'no_download', at: 1 } } },
   };
   const before = JSON.stringify(options);
-  const status = P.downloadStatusForTypes(song('a'), options);
+  const status = P.downloadStatusForTypes({ ...song('a'), stems: { '2': { status: 'done', tracks: [] } } }, options);
   assert.equal(status.allDone, false);
   assert.equal(status.total, 1);
   assert.equal(status.detail[0].na, true);

@@ -464,7 +464,8 @@ export function summarizeSong(song, index, unavailable = {}) {
         capability: song.capability || '',
         duration_sec: (song.result && (song.result.duration_sec || song.result.duration)) || null,
         stems: group ? { mode: group.mode, count: group.tracks.length, types: group.tracks.map((t) => t.type) } : null,
-        midi_available: P.midiAvailable(song),
+        midi_available: P.notationRequested(song),
+        wav_available: P.supportsWav(song),
         cover: !!song.local_cover,
         local_audio: !!song.local_audio,
     };
@@ -596,7 +597,7 @@ export function selectSongs(songs, input = {}) {
 }
 
 /** 檔案類型：'all' 展開成全部（FILE_TYPES 為唯一清單）；未知類型丟錯，避免靜默忽略 */
-export const DEFAULT_DOWNLOAD_TYPES = Object.freeze(['stems', 'midi', 'cover']);
+export const DEFAULT_DOWNLOAD_TYPES = Object.freeze(['stems', 'midi', 'cover', 'wav']);
 export function normalizeTypes(types, fallback = DEFAULT_DOWNLOAD_TYPES) {
     const list = (Array.isArray(types) ? types : types ? String(types).split(',') : []).map((t) => String(t).trim()).filter(Boolean);
     if (!list.length) return [...fallback];
@@ -725,13 +726,14 @@ export function songDownloadSummary(song, index, unavailable = {}) {
     const detail = [];
     if (stemsTotal) detail.push({ type: 'stems', label: '分軌', have: stemsHave, total: stemsTotal, done: stemsHave >= stemsTotal });
     const na = (kind) => P.isUnavailable(unavailable, song.task_id, kind);
-    if (P.midiAvailable(song)) detail.push(P.statusItem('midi', 'MIDI', midi, na('midi')));
-    if (P.midiAvailable(song)) detail.push(P.statusItem('musicxml', 'MusicXML', musicxml, na('musicxml')));
+    if (P.notationRequested(song)) detail.push(P.statusItem('midi', 'MIDI', midi, na('midi')));
+    if (P.notationRequested(song)) detail.push(P.statusItem('musicxml', 'MusicXML', musicxml, na('musicxml')));
+    if (P.supportsWav(song)) detail.push(P.statusItem('wav', 'WAV', wav, false));
     if (song.local_cover) detail.push({ type: 'cover', label: '封面', have: cover ? 1 : 0, total: 1, done: cover });
     const have = detail.reduce((sum, item) => sum + item.have, 0);
     const total = detail.reduce((sum, item) => sum + item.total, 0);
     const unavailableKinds = detail.filter((item) => item.na).map((item) => item.type);
-    const allDone = have >= total && (total > 0 || unavailableKinds.length > 0);
+    const allDone = detail.every((item) => item.done);
     return { have, total, allDone, any: have > 0, mp3, wav, detail, unavailable: unavailableKinds };
 }
 
@@ -902,7 +904,7 @@ export async function buildPlanForSongs(cfg = config(), songs, options = {}) {
         }
         existingHistory[taskId] = { ...entry, files };
     }
-    const types = options.types || ['stems', 'midi'];
+    const types = options.types || ['stems', 'midi', 'wav'];
     const lossyModels = (Array.isArray(types) ? types : [...types]).includes('wav') ? await getLossyModels(cfg) : null;
     const plan = P.buildDownloadPlan({
         songs,
@@ -999,7 +1001,9 @@ export async function runDownload({ songs, options = {}, concurrency = 4, onProg
                 entry.url =
                     entry.file.source === 'api'
                         ? await createApiFile(cfg, session, entry.task.task_id, entry.file.apiKind)
-                        : await resolveFileUrl(cfg, session, entry.task.task_id, entry.file.kind);
+                        : entry.file.sourceUrl && !/\/api\/songs\/[^/]+\/file\?kind=(mp3|wav)\b/i.test(entry.file.sourceUrl)
+                            ? entry.file.sourceUrl
+                            : await resolveFileUrl(cfg, session, entry.task.task_id, entry.file.kind);
             } catch (err) {
                 entry.prepError = err;
             } finally {
@@ -1939,7 +1943,7 @@ function compareRank(a, b) {
     return 0;
 }
 
-/** 把 alias（被去重的 task → 保留 task）套用到歌曲列表的「已下載」狀態 */
+/** 保留歷史 alias 線索，不把其他歌曲的檔案狀態當成本曲的證據。 */
 export function applyAliases(rows, state) {
     const aliases = (state && state.aliases) || {};
     const byId = new Map(rows.map((row) => [row.task_id, row]));
@@ -1949,7 +1953,6 @@ export function applyAliases(rows, state) {
         const keeper = byId.get(keeperId);
         if (!keeper) continue;
         row.aliasOf = keeperId;
-        if (keeper.downloaded) row.downloaded = { ...keeper.downloaded };
     }
     return rows;
 }
@@ -1964,6 +1967,23 @@ export async function buildLibrarySnapshot(cfg = config(), { refresh = false } =
         loadState(cfg),
     ]);
     const rows = applyAliases(songs.map((song) => summarizeSong(song, index, state.unavailable)), state);
+    const proof = await readJson(path.join(cfg.stateDir, 'verified-audio.json'), {});
+    const verifiedWavs = new Set();
+    for (const file of Array.isArray(proof.files) ? proof.files : []) {
+        if (file.kind !== 'wav' || !file.task_id || !file.absolute || !exists(file.absolute)) continue;
+        const actual = await inspectAudioFile(file.absolute);
+        if (actual.validity === 'valid' && actual.bytes === Number(file.bytes) && file.sha256 && file.verifiedAt) verifiedWavs.add(file.task_id);
+    }
+    for (const row of rows) {
+        if (!verifiedWavs.has(row.task_id) || !row.downloaded) continue;
+        row.downloaded.wav = true;
+        row.downloaded.wavVerified = true;
+        const wav = row.downloaded.detail.find((item) => item.type === 'wav');
+        if (wav) { wav.have = 1; wav.done = true; }
+        row.downloaded.have = row.downloaded.detail.reduce((total, item) => total + item.have, 0);
+        row.downloaded.any = row.downloaded.have > 0;
+        row.downloaded.allDone = row.downloaded.total > 0 && row.downloaded.have >= row.downloaded.total;
+    }
     const counts = { songs: rows.length, downloaded: 0, partial: 0, undownloaded: 0, midiAvailable: 0 };
     for (const row of rows) {
         const downloaded = row.downloaded;

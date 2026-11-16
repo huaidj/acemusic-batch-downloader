@@ -20,12 +20,12 @@
   const DEFAULT_OPTIONS = Object.freeze({
     stems: true,
     midi: true,
-    musicxml: false,
-    mp3: false,
-    wav: false,
+    musicxml: true,
+    mp3: true,
+    wav: true,
     cover: true,
     force: false,
-    typeFolders: false,
+    typeFolders: true,
     autoRefresh: true,
     autoFix: true,
     autoOrganize: true,
@@ -188,6 +188,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     if (S.runtimeInvalidated) return;
     DL.record('context_invalidated', diagnosticProgress({ errorCode: 'EXTENSION_CONTEXT_INVALIDATED', error: CONTEXT_INVALIDATED_MESSAGE }));
     S.runtimeInvalidated = true;
+    stopLocalStateSync();
     S.cancelled = true;
     S.stopReason = CONTEXT_INVALIDATED_MESSAGE;
     S.progress.phase = S.running ? 'cancelling' : 'cancelled';
@@ -228,6 +229,15 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       if (remaining <= 0) return;
       await sleep(Math.min(100, remaining));
     } while (true);
+  }
+
+  function setJobWaitReason(job, key, value) {
+    if (job !== S.activeJob) return;
+    if (!job.waitReasons) job.waitReasons = new Map();
+    if (value) job.waitReasons.set(key, value);
+    else job.waitReasons.delete(key);
+    S.progress.waitReason = [...job.waitReasons.values()][0] || '';
+    renderProgressSoon();
   }
 
   function withConnectionTimeout(promise, timeoutMs, job) {
@@ -337,6 +347,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
 .fab {
   position: fixed; right: 18px; bottom: 18px; z-index: 2147483647;
   display: inline-flex; align-items: center; gap: 8px;
+  max-width: min(280px, calc(100vw - 36px));
   padding: 9px 15px 9px 13px; border-radius: 999px;
   border: 1px solid var(--line-strong);
   background: rgba(var(--bg-rgb), .94); color: var(--text); cursor: pointer;
@@ -348,6 +359,8 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
 .fab:hover { border-color: rgba(210, 162, 76, .5); }
 .fab.dragging { cursor: grabbing; box-shadow: 0 10px 26px rgba(0, 0, 0, .45); }
 .fab .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.fab .dot { flex: none; }
+.fab-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fab.running .dot { background: var(--ok); animation: acedl-pulse 1.2s ease-in-out infinite; }
 @keyframes acedl-pulse { 50% { opacity: .3; } }
 
@@ -364,6 +377,8 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
   overflow: hidden;
 }
 .panel[hidden] { display: none; }
+.panel:has(.download-settings[open]), .panel:has(.more-tools[open]) { overflow-y: auto; }
+.panel > header, .panel > .player, .panel > .rand, .panel > .footer { flex-shrink: 0; }
 .panel header {
   display: flex; align-items: center; gap: 8px; padding: 11px 12px 10px 14px;
   border-bottom: 1px solid var(--line); cursor: grab; user-select: none; touch-action: none;
@@ -379,7 +394,20 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
 }
 .iconbtn:hover { background: var(--surface-hover); color: var(--text); }
 
-.opts { display: flex; flex-wrap: wrap; gap: 6px 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); align-items: center; }
+.download-settings { border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.download-settings > summary { display: flex; align-items: center; gap: 8px; padding: 9px 14px; color: var(--muted); cursor: pointer; list-style: none; user-select: none; }
+.download-settings > summary::-webkit-details-marker, .more-tools > summary::-webkit-details-marker { display: none; }
+.download-settings > summary::before, .more-tools > summary::before { content: "▸"; display: inline-block; color: var(--faint); font-size: 11px; }
+.download-settings[open] > summary::before, .more-tools[open] > summary::before { content: "▾"; }
+.download-settings > summary:hover { color: var(--text); background: var(--surface); }
+.settings-copy { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 10px; flex: 1; min-width: 0; }
+.settings-label { font-size: 12px; font-weight: 600; color: var(--text); }
+.settings-summary { color: var(--faint); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.settings-cost { display: block; flex-basis: 100%; font-size: 10.5px; color: var(--warn); }
+.settings-cost[hidden] { display: none; }
+.opts { display: flex; flex-direction: column; gap: 10px; padding: 10px 14px 12px; border-top: 1px solid var(--line); max-height: 250px; overflow-y: auto; }
+.option-group { display: flex; flex-wrap: wrap; gap: 7px 12px; align-items: center; }
+.option-label { flex-basis: 100%; color: var(--faint); font-size: 10.5px; }
 .chk { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); cursor: pointer; font-size: 12px; }
 .chk:hover { color: var(--text); }
 .chk input { accent-color: var(--accent); }
@@ -388,14 +416,14 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
   color: var(--text); font-size: 11.5px; outline: none;
 }
 .sep { width: 1px; height: 16px; background: var(--line-strong); margin: 0 2px; }
-.root { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-left: auto; }
+.root { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-left: auto; max-width: 100%; }
 .root input {
   width: 128px; padding: 4px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--field);
   color: var(--text); font-size: 12px; outline: none;
 }
 .root input:focus { border-color: var(--accent); }
 
-.toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 8px 14px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .toolbar button, .footer button, .rowbtn {
   border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 8px;
   padding: 5px 10px; font-size: 12px; cursor: pointer; white-space: nowrap;
@@ -410,7 +438,16 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
 .organize[hidden] { display: none; }
 .organize .grow { flex: 1; min-width: 180px; }
 .organize .hint { padding: 0; text-align: left; font-size: 10.5px; color: var(--faint); }
-.toolbar .count { color: var(--muted); font-size: 12px; margin-left: auto; }
+.selection-toolbar .count { color: var(--faint); font-size: 10.5px; flex-basis: 100%; line-height: 1.5; }
+.toolbar-label { color: var(--faint); font-size: 10.5px; margin-right: 2px; }
+.library-tools { background: var(--field); }
+.more-tools { margin-left: auto; max-width: 100%; }
+.more-tools > summary { display: inline-flex; gap: 5px; align-items: center; padding: 5px 8px; cursor: pointer; list-style: none; border-radius: 6px; color: var(--muted); font-size: 11.5px; user-select: none; }
+.more-tools > summary:hover { color: var(--text); background: var(--surface-hover); }
+.more-tools[open] { flex-basis: 100%; margin-left: 0; }
+.maintenance-menu { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 8px 0 2px; max-height: 170px; overflow-y: auto; }
+.maintenance-menu button { text-align: left; padding: 6px 9px; }
+@media (max-width: 420px) { .toolbar { gap: 6px; padding-left: 10px; padding-right: 10px; } .selection-toolbar button { padding-left: 7px; padding-right: 7px; font-size: 11px; } .option-group .root { margin-left: 0; } }
 
 .songs { flex: 1; overflow-y: auto; min-height: 120px; padding: 6px 8px; }
 .songs::-webkit-scrollbar { width: 8px; }
@@ -552,7 +589,20 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     const alphaBox = el('label', { class: 'alpha', title: '面板不透明度（拖曳標題列可移動面板，雙擊標題列回到預設位置）' }, ['透明', alphaInput]);
     const header = el('header', { title: '拖曳移動；雙擊回到預設位置' }, [titleBox, subBox, alphaBox, refreshBtn, closeBtn]);
 
+    const settingsSummary = el('span', { class: 'settings-summary', 'data-settings-summary': '' });
+    const settingsCost = el('span', { class: 'settings-cost', text: '含 MIDI／MusicXML：站點生成可能扣點數', hidden: true });
+    const settings = el('details', { class: 'download-settings', 'data-download-settings': '' }, [
+      el('summary', { 'data-settings-toggle': '' }, [el('span', { class: 'settings-copy' }, [
+        el('span', { class: 'settings-label', text: '下載設定' }), settingsSummary, settingsCost,
+      ])]),
+    ]);
     const optRows = el('div', { class: 'opts' });
+    const typeRows = el('div', { class: 'option-group' }, [el('span', { class: 'option-label', text: '檔案類型' })]);
+    const behaviorRows = el('div', { class: 'option-group' }, [el('span', { class: 'option-label', text: '檔名與整理' })]);
+    const automaticRows = el('div', { class: 'option-group' }, [el('span', { class: 'option-label', text: '背景行為' })]);
+    const destinationRows = el('div', { class: 'option-group' }, [el('span', { class: 'option-label', text: '下載位置與並行數' })]);
+    optRows.append(typeRows, behaviorRows, automaticRows, destinationRows);
+    settings.append(optRows);
     const typeLabels = { stems: '分軌', midi: 'MIDI', musicxml: 'MusicXML', mp3: 'MP3', wav: 'WAV', cover: '封面' };
     for (const type of FILE_TYPES) {
       const cb = el('input', { type: 'checkbox', 'data-opt': type, checked: S.options[type] });
@@ -561,16 +611,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
         saveSettings();
         renderSongs();
       });
-      optRows.append(el('label', { class: 'chk' }, [cb, typeLabels[type]]));
+      typeRows.append(el('label', { class: 'chk' }, [cb, typeLabels[type]]));
     }
-    optRows.append(el('span', { class: 'sep' }));
     for (const [key, label] of [['force', '強制重下'], ['typeFolders', '依類型分層']]) {
       const cb = el('input', { type: 'checkbox', 'data-opt': key, checked: S.options[key] });
       cb.addEventListener('change', () => {
         S.options[key] = cb.checked;
         saveSettings();
       });
-    optRows.append(el('label', { class: 'chk' }, [cb, label]));
+      behaviorRows.append(el('label', { class: 'chk' }, [cb, label]));
     }
     const autoCb = el('input', { type: 'checkbox', 'data-opt': 'autoRefresh', checked: S.options.autoRefresh });
     autoCb.addEventListener('change', () => {
@@ -578,32 +627,32 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       saveSettings();
       startAutoRefresh();
     });
-    optRows.append(el('label', { class: 'chk' }, [autoCb, '自動更新']));
+    automaticRows.append(el('label', { class: 'chk' }, [autoCb, '自動更新']));
     const autoFixCb = el('input', { type: 'checkbox', 'data-opt': 'autoFix', checked: S.options.autoFix });
     autoFixCb.addEventListener('change', () => {
       S.options.autoFix = autoFixCb.checked;
       saveSettings();
     });
-    optRows.append(el('label', { class: 'chk', title: '下載後若檔名/資料夾不符（伺服器指定檔名），用本機整理工具自動改名移動' }, [autoFixCb, '自動修正檔名']));
+    behaviorRows.append(el('label', { class: 'chk', title: '下載後若檔名/資料夾不符（伺服器指定檔名），用本機整理工具自動改名移動' }, [autoFixCb, '自動修正檔名']));
     const autoOrganizeCb = el('input', { type: 'checkbox', 'data-opt': 'autoOrganize', checked: S.options.autoOrganize });
     autoOrganizeCb.addEventListener('change', () => {
       S.options.autoOrganize = autoOrganizeCb.checked;
       saveSettings();
     });
-    optRows.append(el('label', { class: 'chk', title: '下載後自動整理：成品MP3／採樣包／MIDI分類' }, [autoOrganizeCb, '下載完自動整理']));
+    behaviorRows.append(el('label', { class: 'chk', title: '下載後自動整理：成品MP3／採樣包／MIDI分類' }, [autoOrganizeCb, '下載完自動整理']));
     const autoNewCb = el('input', { type: 'checkbox', 'data-opt': 'autoNew', checked: S.options.autoNew });
     autoNewCb.addEventListener('change', () => {
       S.options.autoNew = autoNewCb.checked;
       saveSettings();
       if (S.options.autoNew) enableAutoNew();
     });
-    optRows.append(el('label', { class: 'chk', title: '開啟之後新完成的歌，自動下載上方勾選的類型（分軌會等分離完成）；需開著這個分頁' }, [autoNewCb, '新歌自動下載']));
+    automaticRows.append(el('label', { class: 'chk', title: '開啟之後新完成的歌，自動下載上方勾選的類型（分軌會等分離完成）；需開著這個分頁' }, [autoNewCb, '新歌自動下載']));
     const autoScoresCb = el('input', { type: 'checkbox', 'data-opt': 'autoNewScores', checked: S.options.autoNewScores });
     autoScoresCb.addEventListener('change', () => {
       S.options.autoNewScores = autoScoresCb.checked;
       saveSettings();
     });
-    optRows.append(el('label', { class: 'chk', title: 'MIDI／MusicXML 由站點即時生成，可能扣 credit；預設自動下載不含' }, [autoScoresCb, '自動含 MIDI／MusicXML']));
+    automaticRows.append(el('label', { class: 'chk', title: 'MIDI／MusicXML 由站點即時生成，可能扣 credit；預設自動下載不含' }, [autoScoresCb, '自動含 MIDI／MusicXML']));
     const concSel = el('select', { class: 'mini', 'data-opt': 'concurrency' });
     for (const n of [1, 2, 3, 4, 5, 6]) concSel.append(el('option', { value: String(n), text: String(n) }));
     concSel.value = String(S.options.concurrency);
@@ -611,14 +660,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       S.options.concurrency = clamp(Number(concSel.value) || 4, 1, 6);
       saveSettings();
     });
-    optRows.append(el('label', { class: 'chk' }, ['並行', concSel]));
+    destinationRows.append(el('label', { class: 'chk' }, ['並行', concSel]));
     const rootInput = el('input', { type: 'text', 'data-root-folder': '', value: S.rootFolder, spellcheck: 'false' });
     rootInput.addEventListener('change', () => {
       S.rootFolder = N.sanitizeComponent(rootInput.value, 40) || DEFAULT_ROOT;
       rootInput.value = S.rootFolder;
       saveSettings();
     });
-    optRows.append(el('label', { class: 'root' }, ['根資料夾', rootInput]));
+    destinationRows.append(el('label', { class: 'root' }, ['根資料夾', rootInput]));
 
     const countLabel = el('span', { class: 'count', 'data-count': '', text: '' });
     const selectAll = el('button', { type: 'button', 'data-act': 'select-all', text: '全選' });
@@ -632,13 +681,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       favFilterBtn.classList.toggle('on', S.onlyFavorites);
       renderSongs();
     });
-    const toolbar = el('div', { class: 'toolbar' }, [selectAll, selectNone, filterBtn, favFilterBtn, organizeBtn, exportAgentBtn, countLabel]);
+    const toolbar = el('div', { class: 'toolbar selection-toolbar', role: 'toolbar', 'aria-label': '選擇與篩選' }, [selectAll, selectNone, filterBtn, favFilterBtn, countLabel]);
     const tidyBtn = el('button', { type: 'button', 'data-act': 'tidy', text: '一鍵整理' });
     const extractMp3Btn = el('button', { type: 'button', 'data-act': 'extract-mp3', text: '成品MP3' });
     const watchBtn = el('button', { type: 'button', 'data-act': 'watch', text: '背景自動整理' });
     const openClassifyBtn = el('button', { type: 'button', 'data-act': 'open-classify', text: '開啟分類資料夾' });
     const dedupeCustomBtn = el('button', { type: 'button', 'data-act': 'dedupe-custom', text: '清自訂重複' });
-    const toolbar2 = el('div', { class: 'toolbar' }, [tidyBtn, extractMp3Btn, watchBtn, dedupeCustomBtn, openClassifyBtn]);
+    const maintenanceTools = el('details', { class: 'more-tools', 'data-maintenance-tools': '' }, [
+      el('summary', { text: '更多維護' }),
+      el('div', { class: 'maintenance-menu', role: 'group', 'aria-label': '進階維護工具' }, [organizeBtn, extractMp3Btn, watchBtn, dedupeCustomBtn, exportAgentBtn]),
+    ]);
+    const toolbar2 = el('div', { class: 'toolbar library-tools', role: 'toolbar', 'aria-label': '曲庫工具' }, [el('span', { class: 'toolbar-label', text: '曲庫' }), tidyBtn, openClassifyBtn, maintenanceTools]);
 
     const songsBox = el('div', { class: 'songs', 'data-songs': '' });
     const organizeBox = el('div', { class: 'organize', 'data-organize': '', hidden: true });
@@ -691,7 +744,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
     const playerBar = buildPlayer();
     const randomBox = buildRandom();
-    panel.append(header, playerBar, randomBox, optRows, toolbar, toolbar2, organizeBox, songsBox, progress, footer);
+    panel.append(header, playerBar, randomBox, settings, toolbar, toolbar2, organizeBox, songsBox, progress, footer);
     shadow.append(fab, panel);
 
     Object.assign(S.els, {
@@ -700,6 +753,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       fab,
       fabText: fab.querySelector('.fab-text'),
       panel,
+      settingsSummary,
+      settingsCost,
       songsBox,
       organizeBox,
       tidyBtn,
@@ -1925,9 +1980,19 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
    * ------------------------------------------------------------------ */
   const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+  let downloadIndexPromise = null;
   async function refreshDownloadIndex(force) {
     if (!S.host.ok) return false;
     if (!force && Date.now() - S.fsAt < 20000) return true;
+    if (downloadIndexPromise) {
+      const current = await downloadIndexPromise;
+      return force ? refreshDownloadIndex(true) : current;
+    }
+    downloadIndexPromise = readDownloadIndex();
+    try { return await downloadIndexPromise; } finally { downloadIndexPromise = null; }
+  }
+
+  async function readDownloadIndex() {
     let res = null;
     try {
       res = await sendMessage({
@@ -1973,6 +2038,107 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
             (song.local_cover && (song.local_cover === url || url.endsWith(String(song.local_cover).split('?')[0])))),
       ) || null
     );
+  }
+
+  const LOCAL_SYNC = { timer: 0, debounce: 0, busy: false, pending: false, revision: null, lastHostCheck: 0, renderPending: false };
+
+  function localRevision(verified, agentState) {
+    let latestAt = 0;
+    let count = 0;
+    for (const entry of Object.values(agentState && agentState.history || {})) {
+      for (const info of Object.values(entry && entry.files || {})) {
+        count += 1;
+        latestAt = Math.max(latestAt, Number(info && info.at) || 0);
+      }
+    }
+    const files = verified && Array.isArray(verified.files) ? verified.files : [];
+    return [String(verified && verified.savedAt || ''), files.length, count, latestAt].join('|');
+  }
+
+  function localStatusSignature() {
+    return S.songs.map((song) => {
+      const status = songDownloadStatus(song);
+      return [song.task_id, status.known, status.have, status.total, status.mp3, status.wav, status.detail.map((item) => [item.type || item.label, item.have, item.total, item.na])];
+    }).map((value) => JSON.stringify(value)).join('\n');
+  }
+
+  function renderLocalStatusChanges() {
+    const focused = document.getElementById(HOST_ID)?.shadowRoot?.activeElement;
+    // 只更新歌曲清單；保留播放器、提示詞、選項和正在操作的歌曲控制項。
+    if (focused && S.els.songsBox && S.els.songsBox.contains(focused)) {
+      if (!LOCAL_SYNC.renderPending) {
+        LOCAL_SYNC.renderPending = true;
+        focused.addEventListener('blur', () => {
+          LOCAL_SYNC.renderPending = false;
+          if (!S.runtimeInvalidated) renderSongs();
+        }, { once: true });
+      }
+      return;
+    }
+    renderSongs();
+  }
+
+  async function syncLocalState(force = false) {
+    if (S.runtimeInvalidated) { stopLocalStateSync(); return; }
+    if (LOCAL_SYNC.busy) { LOCAL_SYNC.pending = LOCAL_SYNC.pending || force; return; }
+    LOCAL_SYNC.busy = true;
+    try {
+      if (!S.host.ok) {
+        if (Date.now() - LOCAL_SYNC.lastHostCheck < 10000) return;
+        LOCAL_SYNC.lastHostCheck = Date.now();
+        await refreshHostStatus();
+        if (!S.host.ok) return;
+      }
+      const [verified, agent] = await Promise.all([
+        sendMessage({ type: 'ACE_HOST_READ', name: 'verified-audio' }),
+        sendMessage({ type: 'ACE_HOST_READ', name: 'agent-state' }),
+      ]);
+      if (S.runtimeInvalidated) return;
+      if ((!verified || !verified.ok) && (!agent || !agent.ok)) {
+        await refreshHostStatus();
+        if (!S.host.ok) {
+          S.localSyncUnavailable = true;
+          renderLocalStatusChanges();
+          return;
+        }
+      }
+      const revision = localRevision(verified && verified.ok ? verified.data : {}, agent && agent.ok ? agent.data : {});
+      if (!force && revision === LOCAL_SYNC.revision) return;
+      if (!force && LOCAL_SYNC.revision === null && S.fsAt) { LOCAL_SYNC.revision = revision; return; }
+      const before = localStatusSignature();
+      if (!await refreshDownloadIndex(true)) return;
+      S.localSyncUnavailable = false;
+      LOCAL_SYNC.revision = revision;
+      if (before !== localStatusSignature()) renderLocalStatusChanges();
+    } catch (err) {
+      if (isContextInvalidated(err)) stopLocalStateSync();
+      // 本機工具暫時離線不進站點刷新，也不妨礙原本的 API 直接下載。
+    } finally {
+      LOCAL_SYNC.busy = false;
+      if (LOCAL_SYNC.pending && !S.runtimeInvalidated) {
+        LOCAL_SYNC.pending = false;
+        scheduleLocalStateSync();
+      }
+    }
+  }
+
+  function scheduleLocalStateSync() {
+    if (S.runtimeInvalidated) return;
+    clearTimeout(LOCAL_SYNC.debounce);
+    LOCAL_SYNC.debounce = setTimeout(() => { LOCAL_SYNC.debounce = 0; syncLocalState(true); }, 250);
+  }
+
+  function stopLocalStateSync() {
+    clearInterval(LOCAL_SYNC.timer);
+    clearTimeout(LOCAL_SYNC.debounce);
+    LOCAL_SYNC.timer = LOCAL_SYNC.debounce = 0;
+    LOCAL_SYNC.pending = false;
+  }
+
+  function startLocalStateSync() {
+    if (LOCAL_SYNC.timer || S.runtimeInvalidated) return;
+    LOCAL_SYNC.timer = setInterval(() => syncLocalState(false), 2000);
+    syncLocalState(false);
   }
 
   async function refreshDoneKinds() {
@@ -2170,7 +2336,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       ...status,
       mp3,
       wav,
-      known: !!S.fsAt || S.doneKinds.size > 0,
+      known: !S.localSyncUnavailable && (!!S.fsAt || S.doneKinds.size > 0),
     };
   }
 
@@ -2195,7 +2361,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     const fab = S.els.fab;
     if (!fab) return;
     fab.classList.toggle('running', S.running);
-    S.els.fabText.textContent = S.running ? '下載中 ' + progressPercent() + '%' : '批量下載';
+    const p = S.progress;
+    const remaining = Math.max(0, Number(p.total || 0) - Number(p.done || 0) - Number(p.failed || 0) - Number(p.skipped || 0));
+    const labels = { stems: '分軌', midi: 'MIDI', musicxml: 'MusicXML', mp3: 'MP3', wav: 'WAV', cover: '封面' };
+    const kind = labels[p.currentKind] || (/\.wav$/i.test(p.current || '') ? 'WAV' : /\.mp3$/i.test(p.current || '') ? 'MP3' : /\.midi?$/i.test(p.current || '') ? 'MIDI' : '下載');
+    const title = String(p.currentTitle || String(p.current || '').split('／')[0] || '準備檔案');
+    const short = title.length > 13 ? title.slice(0, 12) + '…' : title;
+    if (S.running) S.els.fabText.textContent = `${p.waitReason ? 'MIDI/XML 限流' : kind} · ${short} ${p.done}/${p.total}${p.failed ? ` · 失敗 ${p.failed}` : ''}`;
+    else if (S.runtimeInvalidated) S.els.fabText.textContent = '請刷新 ACE 頁面';
+    else if (p.phase === 'done' && p.failed) S.els.fabText.textContent = `完成 ${p.done} · 失敗 ${p.failed}`;
+    else S.els.fabText.textContent = '批量下載';
+    fab.title = [S.stopReason || p.waitReason || (S.running ? `${kind} · ${p.current || '準備檔案'}` : 'ACE 批量下載'), `完成 ${p.done || 0}／${p.total || 0} · 失敗 ${p.failed || 0} · 略過 ${p.skipped || 0} · 剩餘 ${remaining} · 準備中 ${p.activePrep || 0}`].join('\n');
   }
 
   function progressPercent() {
@@ -2215,7 +2391,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     for (let page = 0; page < MAX_PAGES; page += 1) {
       const params = new URLSearchParams({ limit: String(PAGE_LIMIT), sort: 'new' });
       if (after) params.set('after', after);
-      const response = await fetch('/api/songs?' + params.toString(), {
+      const response = await apiFetch('/api/songs?' + params.toString(), {
         credentials: 'same-origin',
         headers: { Accept: 'application/json' },
         cache: 'no-store',
@@ -2295,7 +2471,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   }
   async function pullChangesOnce() {
     if (!S.libVer || !S.loaded) return refreshSongsQuiet();
-    const res = await fetch('/api/songs/changes?since=' + encodeURIComponent(S.libVer), {
+    const res = await apiFetch('/api/songs/changes?since=' + encodeURIComponent(S.libVer), {
       credentials: 'same-origin',
       cache: 'no-store',
       headers: { Accept: 'application/json' },
@@ -2566,7 +2742,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     } else {
       nodes.push(el('span', { class: 'badge dim', text: '未分軌' }));
     }
-    if (P.midiAvailable(song)) nodes.push(el('span', { class: 'badge', text: 'MIDI 可用' }));
+    if (P.notationRequested(song)) nodes.push(el('span', { class: 'badge', text: 'MIDI 可用' }));
     if (song.result && song.result.duration_sec) {
       const sec = Math.round(song.result.duration_sec);
       nodes.push(el('span', { class: 'badge dim', text: `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}` }));
@@ -2758,7 +2934,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
    * 儲存設定 / 歷史 / 資料夾指派
    * ------------------------------------------------------------------ */
   function saveSettings() {
+    updateSettingsSummary();
     storageSet({ [KEY_SETTINGS]: { options: { ...S.options }, rootFolder: S.rootFolder } });
+  }
+
+  function updateSettingsSummary() {
+    const types = FILE_TYPES.filter((type) => S.options[type]);
+    if (S.els.settingsSummary) {
+      S.els.settingsSummary.textContent = `${types.length} 種類型 · 並行 ${S.options.concurrency} · ${S.rootFolder}`;
+      S.els.settingsSummary.title = types.length ? types.map((type) => P.KIND_LABELS[type]).join('、') : '尚未選擇檔案類型';
+    }
+    if (S.els.settingsCost) S.els.settingsCost.hidden = !(S.options.midi || S.options.musicxml);
   }
 
   async function loadSettings() {
@@ -2795,6 +2981,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     }
     const rootInput = panel.querySelector('[data-root-folder]');
     if (rootInput) rootInput.value = S.rootFolder;
+    updateSettingsSummary();
   }
 
   async function loadDownloadState() {
@@ -2842,6 +3029,31 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     await storageSet({ [KEY_HISTORY]: S.history });
   }
 
+  /** 站點/API 與檔案 GET 共用入口；不從網頁逐首點擊，也不自動重送寫入請求。 */
+  async function apiFetch(input, options = {}) {
+    const target = new URL(input, location.origin);
+    if (!['http:', 'https:'].includes(target.protocol)) throw new Error('API 檔案來源格式不支援');
+    const method = String(options.method || 'GET').toUpperCase();
+    if (method !== 'GET' && method !== 'HEAD') assertRuntimeUsable();
+    const route = target.origin === location.origin ? target.pathname.replace(/\/api\/songs\/[^/]+\//, '/api/songs/:id/') : 'audio-file';
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    const timeoutMs = Number(options.apiTimeoutMs) || 45000;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
+    const { apiTimeoutMs: _timeout, ...requestOptions } = options;
+    try {
+      const response = await fetch(target.href, { credentials: 'same-origin', ...requestOptions, signal });
+      DL.record('api_response', { kind: method + ' ' + route, phase: 'api', elapsedMs: Date.now() - startedAt, ...(response.ok ? {} : { errorCode: 'HTTP_' + response.status }) });
+      return response;
+    } catch (err) {
+      DL.record('api_error', { kind: method + ' ' + route, phase: 'api', elapsedMs: Date.now() - startedAt, errorCode: controller.signal.aborted ? 'API_TIMEOUT' : 'API_NETWORK_ERROR', error: (err && err.message) || err });
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function fetchDownloadApi(url, options = {}, job = S.activeJob) {
     const controller = new AbortController();
     let timedOut = false;
@@ -2850,7 +3062,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       if (job && (S.cancelled || !S.running || S.activeJob !== job || S.runtimeInvalidated)) controller.abort();
     }, 200);
     try {
-      return await fetch(url, { ...options, signal: controller.signal });
+      return await apiFetch(url, { ...options, signal: controller.signal });
     } catch (err) {
       assertJobActive(job);
       if (timedOut) {
@@ -2917,7 +3129,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
         // 限流：這條「站點生成」佇列等 60 秒再試（最多 2 次）；其他檔案不受影響。仍限流才放棄剩下的生成
         if (attempt < 2) {
           flash(`站點限流，等待 60 秒後重試（${kind}）`);
-          await waitForJob(TEST_MODE ? 200 : 60000, job);
+          const waitKey = songId + '|' + kind;
+          setJobWaitReason(job, waitKey, `${kind === 'full' || kind === 'midi' ? 'MIDI' : 'MusicXML'} 站點限流，等待 60 秒後重試`);
+          try { await waitForJob(TEST_MODE ? 200 : 60000, job); }
+          finally { setJobWaitReason(job, waitKey, ''); }
           continue;
         }
         const err = new Error('站點限流（429）：' + detail);
@@ -2994,7 +3209,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
   /** 備援：由頁面（帶 Cookie）把檔案抓成 blob URL，再交給 service worker 下載 */
   async function fetchAsBlobUrl(url) {
-    const response = await fetch(url, { credentials: 'include', cache: 'no-store' });
+    const response = await apiFetch(url, { credentials: 'include', cache: 'no-store', apiTimeoutMs: 180000 });
     if (!response.ok) throw new Error('備援抓檔失敗 HTTP ' + response.status);
     const blob = await response.blob();
     if (!blob.size) throw new Error('備援抓檔為空');
@@ -3005,7 +3220,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   let siteModelsPromise = null;
   function ensureSiteModels() {
     if (!siteModelsPromise) {
-      siteModelsPromise = fetch('/api/status', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } })
+      siteModelsPromise = apiFetch('/api/status', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } })
         .then((r) => (r.ok ? r.json() : null))
         .then((data) => {
           const models = data && Array.isArray(data.models) ? data.models : [];
@@ -3252,6 +3467,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
         activeNames.add(file.filename);
         S.progress.activeDl = activeNames.size;
         S.progress.current = `${task.folder}／${file.filename}`;
+        S.progress.currentKind = file.kind;
+        S.progress.currentTitle = task.folder;
         renderProgressSoon();
         try {
           let url = file.sourceUrl || '';
@@ -3422,7 +3639,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     .then(() => {
       if (S.songs.length) renderSongs();
     })
-    .catch(() => {});
+    .catch(() => {})
+    .finally(startLocalStateSync);
+  chrome.runtime.onMessage.addListener((message, sender) => {
+    if (message?.type !== 'ACE_LOCAL_FILES_CHANGED' || !Number.isFinite(message.at)) return;
+    if (sender?.id && sender.id !== chrome.runtime.id) return;
+    scheduleLocalStateSync();
+  });
+  window.addEventListener('pagehide', stopLocalStateSync, { once: true });
   // 切回分頁時立刻更新一次歌單（分軌完成後不必手動重整頁面）
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && S.els.panel && !S.els.panel.hidden && S.loaded) {

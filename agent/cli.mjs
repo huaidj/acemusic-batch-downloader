@@ -51,7 +51,7 @@ function usage() {
   node cli.mjs extract-mp3 --status            查看背景補齊進度
 
 download 選項：
-  --types stems,midi,musicxml,mp3,wav,cover 要下載的類型（預設 stems,midi,cover；WAV 需模型支援，不支援會自動跳過）
+  --types stems,midi,musicxml,mp3,wav,cover 要下載的類型（預設 stems,midi,cover,wav；樂譜只排已要求分軌的歌；WAV 獨立補齊）
   --root <資料夾>                        最上層資料夾（預設 ai音樂）
   --force                                已下載過的也重新下載
   --concurrency <1-6>                    並行下載數（預設 4）

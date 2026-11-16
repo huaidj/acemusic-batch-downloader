@@ -129,14 +129,15 @@ test('dedupeContent：跨分類相同內容只留一份，keeper 優先 成品MP
   }
 });
 
-test('applyAliases：被去重的歌曲沿用保留歌曲的下載狀態', async () => {
+test('applyAliases：歷史 alias 不得把別的歌曲狀態當成已下載', async () => {
   const rows = [
     { task_id: 'a', downloaded: { have: 3, total: 3, allDone: true } },
     { task_id: 'b', downloaded: { have: 0, total: 1, allDone: false } },
   ];
   ACE.applyAliases(rows, { aliases: { b: 'a' } });
   assert.equal(rows[1].aliasOf, 'a');
-  assert.equal(rows[1].downloaded.allDone, true);
+  assert.equal(rows[1].downloaded.allDone, false);
+  assert.equal(rows[1].downloaded.have, 0);
 });
 
 test('getLibrarySnapshot：命中本地快照快取，不重建', async () => {

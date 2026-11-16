@@ -237,6 +237,7 @@ scenario('S0_manifest_hooks_and_songlist', async () => {
     return {
       host: !!host,
       fab: present('#acedl-fab'),
+      settingsClosed: !shadow.querySelector('[data-download-settings]')?.open,
       options: optionKeys.map((k) => ({ key: k, present: present(`[data-opt="${k}"]`), checked: shadow.querySelector(`[data-opt="${k}"]`)?.checked })),
       root: shadow.querySelector('[data-root-folder]')?.value,
       acts: ['select-all', 'select-none', 'refresh', 'download', 'cancel', 'show-folder'].map((a) => ({ a, present: present(`[data-act="${a}"]`) })),
@@ -260,9 +261,10 @@ scenario('S0_manifest_hooks_and_songlist', async () => {
   const optMap = Object.fromEntries(hooks.options.map((o) => [o.key, o.checked]));
   assertEqual(
     optMap,
-    { stems: true, midi: true, musicxml: false, mp3: false, wav: false, cover: true, force: false, typeFolders: false },
+    { stems: true, midi: true, musicxml: true, mp3: true, wav: true, cover: true, force: false, typeFolders: true },
     '選項預設勾選狀態',
   );
+  assert(hooks.settingsClosed, '下載選項預設收合，不占用歌曲與播放器空間');
   await screenshot(page, 's0-panel-ready');
 
   // 語言前綴路徑也要注入（/zh/create/）
@@ -286,6 +288,13 @@ scenario('S1_download_3_songs_stems_midi', async () => {
   });
   assert(String(before.count || '').startsWith('已選 3 / 顯示 5 / 共 5 首'), `已選計數文字（實際：${before.count}）`);
   await clickDownload(page);
+  await page.waitForFunction(() => {
+    const fab = document.getElementById('acedl-host')?.shadowRoot?.querySelector('#acedl-fab');
+    return fab && /(?:分軌|MIDI|MusicXML|MP3|WAV|封面) · .+ \d+\/\d+/.test(fab.textContent) && /剩餘/.test(fab.title);
+  }, null, { timeout: 5000 });
+  const fabProgress = await page.locator('#acedl-fab').textContent();
+  const fabDetail = await page.locator('#acedl-fab').getAttribute('title');
+  assert(!/%/.test(fabProgress) && /完成.*失敗.*略過.*剩餘.*準備中/.test(fabDetail), `浮鈕應顯示檔案類型／曲名與真實計數：${fabProgress} ${fabDetail}`);
   const progress = await waitJobDone(page);
   assertEqual(progress.counts, { done: 9, failed: 0, skipped: 0, total: 9 }, 'S1 進度統計');
   assert(progress.statsText.includes('完成') && progress.statsText.includes('跳過') && progress.statsText.includes('失敗'), '進度文字需含完成/失敗/跳過');
@@ -816,6 +825,75 @@ scenario('S21_missing_wav_filter_excludes_hidden_selection', async () => {
   } finally {
     await swEval(context, async (saved) => chrome.storage.local.set({ aceHistory: saved.aceHistory || {}, aceSettings: saved.aceSettings || {} }), before);
   }
+});
+
+scenario('S22_local_verified_wav_updates_without_reload_or_site_refresh', async () => {
+  const before = await readStorage(context);
+  try {
+    await swEval(context, async () => chrome.storage.local.set({ aceHistory: {} }));
+    await page.goto(mock.base + '/create/?native-fixture', { waitUntil: 'domcontentloaded' });
+    await openPanel(page);
+    await waitSongsLoaded(page, 5);
+    await applyOptions(page, { wav: true });
+    await setOption(page, 'autoRefresh', false);
+    await setOption(page, 'autoNew', false);
+    await page.locator('[data-radio="repeat"]').click(); // all -> one，1 秒 mock 音檔不自動換曲。
+    await page.locator('[data-song-id="song-a"] [data-play]').click();
+    await page.waitForFunction(() => document.getElementById('acedl-host')?.shadowRoot?.querySelector('[data-radio-player]')?.classList.contains('playing'));
+    await page.locator('[data-act="filter-undownloaded"]').click();
+    assertEqual(await page.locator('[data-song-id]').count(), 1, 'S22 起初只有 v1.1 song-a 缺 WAV');
+    await page.locator('#prompt').fill('Keep this unfinished input');
+    await page.evaluate(() => {
+      document.documentElement.dataset.acedlLocalPageSentinel = 'same-page';
+      document.getElementById('acedl-host').shadowRoot.querySelector('[data-song-id="song-a"]').dataset.acedlRowSentinel = 'unchanged';
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2400));
+    const unchanged = await page.locator('[data-song-id="song-a"]').getAttribute('data-acedl-row-sentinel');
+    assertEqual(unchanged, 'unchanged', 'S22 未變更的本機版本不可反覆重建歌曲列');
+    const nativeListsBefore = await page.evaluate(() => Number(document.documentElement.dataset.acedlTestNativeLists || 0));
+    mock.clearLog();
+    // 模擬腳本完成一個已驗證本機 WAV：native 檔案清單與 manifest 同時更新。
+    await page.evaluate((root) => {
+      const flags = document.documentElement.dataset;
+      const fixture = JSON.parse(flags.acedlTestNative);
+      const absolute = root + '\\local-repair-fixture\\Neon Drive.wav';
+      fixture.files = [{ path: absolute, size: 60 }];
+      fixture.verified = { savedAt: 'repair-revision-2', files: [{ task_id: 'song-a', kind: 'wav', absolute, bytes: 60, sha256: 'a'.repeat(64), verifiedAt: '2026-11-16T00:00:00Z' }] };
+      flags.acedlTestNative = JSON.stringify(fixture);
+    }, ROOT);
+    await page.waitForFunction(() => !document.getElementById('acedl-host')?.shadowRoot?.querySelector('[data-song-id="song-a"]'), null, { timeout: 6500 });
+    assertEqual(await page.locator('[data-song-id]').count(), 0, 'S22 修復完成後自動離開待補清單');
+    assertEqual(await page.locator('#prompt').inputValue(), 'Keep this unfinished input', 'S22 本機刷新不改輸入內容');
+    assertEqual(await page.evaluate(() => document.documentElement.dataset.acedlLocalPageSentinel), 'same-page', 'S22 不重新載入頁面');
+    assertEqual((await page.locator('[data-radio-title]').textContent()).trim(), 'Neon Drive', 'S22 本機刷新保留播放曲目');
+    assertEqual(await page.locator('[data-radio-player]').evaluate((node) => node.classList.contains('playing')), true, 'S22 播放不被本機索引刷新打斷');
+    assertEqual(mock.log.filter((entry) => /^\/api\/(?:songs|status)/.test(entry.path)).length, 0, 'S22 本機版本輪詢不能打站點 API');
+    const nativeListsAfter = await page.evaluate(() => Number(document.documentElement.dataset.acedlTestNativeLists || 0));
+    assertEqual(nativeListsAfter - nativeListsBefore, 1, 'S22 一次本機版本改動只重掃一次');
+    await page.locator('[data-act="filter-undownloaded"]').click();
+    assertEqual((await page.locator('[data-song-id="song-a"] [data-download-status]').textContent()).trim(), '已下載', 'S22 該 task 顯示 WAV 已下載');
+  } finally {
+    await swEval(context, async (saved) => chrome.storage.local.set({ aceHistory: saved.aceHistory || {}, aceSettings: saved.aceSettings || {}, aceRadio: saved.aceRadio || {} }), before);
+  }
+});
+
+scenario('S23_wav_independent_from_requested_notation_scope', async () => {
+  await freshPanel(page, mock.base);
+  await applyOptions(page, { midi: true, musicxml: true, wav: true });
+  await setOption(page, 'autoNew', false);
+  await setRootFolder(page, 'no-notation-request');
+  mock.addSong({ task_id: 'song-no-notation', status: 'succeeded', capability: 'music_generate', model: 'acemusic-v1.1', created_at: '2026-11-16T12:00:00Z', local_audio: '/data/mock/no-notation.mp3', meta: { title: 'No Requested Stems' }, stems: {} });
+  try {
+    await panelHasSong(page, 'song-no-notation');
+    await page.locator('[data-act="select-none"]').click();
+    await selectSongs(page, ['song-no-notation']);
+    mock.clearLog();
+    await clickDownload(page);
+    const progress = await waitJobDone(page, 10000);
+    assertEqual(progress.counts, { done: 1, failed: 0, skipped: 0, total: 1 }, 'S23 未請求分軌的歌仍可獨立下載 WAV');
+    assertEqual(mock.log.filter((entry) => entry.method === 'POST').length, 0, 'S23 未請求分軌不送 MIDI／MusicXML 生成');
+    assertFileMap(ROOT, { 'no-notation-request/No Requested Stems/No Requested Stems.wav': expectedBytes('AUDIO-WAV', 'song-no-notation') }, 'S23 WAV 獨立');
+  } finally { mock.removeSong('song-no-notation'); }
 });
 
 scenario('S7_logged_out_shows_login_hint', async () => {

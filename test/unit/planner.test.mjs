@@ -144,7 +144,7 @@ test('pickStemGroup：empty 軌與沒有 local_audio 的軌要跳過', () => {
 test('normalizeOptions：預設值與型別過濾', () => {
   const o = P.normalizeOptions({});
   assert.equal(o.root, 'ai音樂');
-  assert.deepEqual([...o.types], ['stems', 'midi']);
+  assert.deepEqual([...o.types], ['stems', 'midi', 'wav']);
   assert.equal(o.typeFolders, false);
   assert.equal(o.force, false);
   assert.equal(o.origin, 'https://acemusic.ai');
@@ -167,7 +167,7 @@ test('absolutize：相對 URL 補站點 origin', () => {
 
 test('buildDownloadPlan：完整清單、命名與資料夾（stems+MIDI）', () => {
   const plan = planFor();
-  assert.equal(plan.tasks.length, 5, 'song-d 未完成應跳過');
+  assert.equal(plan.tasks.length, 4, 'song-d 未完成、song-c 未請求分軌且未選音檔，均不應排檔');
   assert.deepEqual([...plan.warnings.map((w) => w.task_id)], ['song-d']);
   assert.equal(plan.warnings[0].reason, 'not_ready');
 
@@ -187,14 +187,14 @@ test('buildDownloadPlan：完整清單、命名與資料夾（stems+MIDI）', ()
   assert.equal(byId['song-a'].stemsMode, '2');
   // B：mode 0 兩軌 + MIDI
   assert.deepEqual(namesOf(byId['song-b']), ['Paper Sky - Vocals.mp3', 'Paper Sky - Instrumental.mp3', 'Paper Sky - MIDI.mid']);
-  // C：無分軌，只剩 MIDI；資料夾名清理非法字元
-  assert.equal(byId['song-c'].folder, 'Rain Loop v2');
-  assert.deepEqual(namesOf(byId['song-c']), ['Rain Loop v2 - MIDI.mid']);
+  // C：沒有主動分軌，不應因 capability 可用就請求 MIDI。
+  assert.equal(byId['song-c'], undefined);
+  assert.equal(plan.folderByTask['song-c'], 'Rain Loop v2');
   // E1/E2 同名 → (2) 後綴
   assert.equal(byId['song-e1'].folder, 'Where Am I');
   assert.equal(byId['song-e2'].folder, 'Where Am I (2)');
   assert.deepEqual(namesOf(byId['song-e2']), ['Where Am I (2) - Vocals.mp3', 'Where Am I (2) - Drums.mp3']);
-  assert.equal(plan.total, 3 + 3 + 1 + 2 + 2);
+  assert.equal(plan.total, 3 + 3 + 2 + 2);
   assert.equal(plan.skipped, 0);
 });
 

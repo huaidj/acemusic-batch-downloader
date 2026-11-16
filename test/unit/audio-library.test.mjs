@@ -58,3 +58,45 @@ test('audio integrity: local inspection reports valid, truncated, mismatched and
   assert.equal((await inspectAudioFile(path.join(dir, 'missing.wav'))).validity, 'unknown');
   assert.equal(fs.statSync(short).size, 100);
 });
+
+function wavWithLargeMetadata() {
+  const normal = wav();
+  const metadata = Buffer.alloc(70010);
+  metadata.write('LIST', 0);
+  metadata.writeUInt32LE(70001, 4); // An odd-size chunk exercises the required padding byte.
+  metadata.write('INFO', 8);
+  const output = Buffer.concat([normal.subarray(0, 36), metadata, normal.subarray(36)]);
+  output.writeUInt32LE(output.length - 8, 4);
+  return output;
+}
+
+test('audio integrity: seek over metadata larger than 64 KiB to verify the actual fmt/data boundary', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acedl-wav-metadata-'));
+  const file = path.join(dir, 'large-cover.part');
+  const complete = wavWithLargeMetadata();
+  fs.writeFileSync(file, complete);
+  const checked = await inspectAudioFile(file);
+  assert.equal(checked.validity, 'valid');
+  assert.equal(checked.format, 'wav');
+  assert.equal(checked.duration, 0.1);
+  assert.equal(checked.expectedBytes, complete.length);
+  assert.equal(fs.statSync(file).size, complete.length);
+  assert.equal(validateAudioBuffer(complete, 'wav').validity, 'valid');
+});
+
+test('audio integrity: metadata seek still rejects truncated data and chunks extending beyond RIFF', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acedl-wav-metadata-bad-'));
+  const complete = wavWithLargeMetadata();
+  const short = Buffer.from(complete.subarray(0, complete.length - 100));
+  short.writeUInt32LE(short.length - 8, 4); // Do not rely only on the outer RIFF size.
+  const shortFile = path.join(dir, 'short.wav');
+  fs.writeFileSync(shortFile, short);
+  const damaged = await inspectAudioFile(shortFile);
+  assert.equal(damaged.validity, 'damaged');
+  assert.equal(damaged.expectedBytes, complete.length);
+  const badRiff = Buffer.from(complete);
+  badRiff.writeUInt32LE(70048, 4); // data header/payload cannot extend beyond this RIFF container.
+  const badFile = path.join(dir, 'bad-riff.wav');
+  fs.writeFileSync(badFile, badRiff);
+  assert.equal((await inspectAudioFile(badFile)).validity, 'damaged');
+});
