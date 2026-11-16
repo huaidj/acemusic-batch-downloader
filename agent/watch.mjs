@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config, writeJson, readJson, sleep } from './lib/config.mjs';
-import { extractFullMp3s, collectSamples, classifyByAttributes, dedupeSongCopies, classifyByAudio, listSongs } from './lib/ace.mjs';
+import { extractFullMp3s, collectSamples, classifyByAttributes, dedupeSongCopies, classifyByAudio, listSongs, collectFavorites } from './lib/ace.mjs';
 
 const cfg = config();
 const ROOT_NAME = process.env.ACE_WATCH_ROOT || 'ai音樂';
@@ -63,7 +63,7 @@ function fingerprint() {
   return result;
 }
 
-const PIPELINE_SERVICES = { listSongs, extractFullMp3s, collectSamples, classifyByAttributes, dedupeSongCopies, classifyByAudio };
+const PIPELINE_SERVICES = { listSongs, extractFullMp3s, collectSamples, classifyByAttributes, dedupeSongCopies, classifyByAudio, collectFavorites };
 export async function runPipeline({ cfg: runCfg = cfg, rootName = ROOT_NAME, services = PIPELINE_SERVICES, reportStatus } = {}) {
   const runRoot = path.join(runCfg.downloadDir, rootName);
   const report = reportStatus || (runCfg === cfg && rootName === ROOT_NAME ? setStatus : createWatchStatusWriter({ file: path.join(runCfg.stateDir, 'watch-status.json'), root: runRoot }));
@@ -83,6 +83,10 @@ export async function runPipeline({ cfg: runCfg = cfg, rootName = ROOT_NAME, ser
     status.steps.push({ name: 'dedupe', removed: dedupe.removed, savedMB: Math.round(dedupe.savedBytes / 1048576), failed: dedupe.failed.length });
     const audio = await services.classifyByAudio({ root: rootName, cfg: runCfg });
     status.steps.push({ name: 'audio', total: audio.total, analyzed: audio.analyzed, linked: audio.linked, failed: audio.failed.length, unanalyzable: audio.unanalyzable ? audio.unanalyzable.length : 0 });
+    if (typeof services.collectFavorites === 'function') {
+      const favorites = await services.collectFavorites({ root: rootName, cfg: runCfg });
+      status.steps.push({ name: 'favorites', total: favorites.total, copied: favorites.copied, skipped: favorites.skipped, missing: favorites.missing, failed: favorites.failed.length });
+    }
     status.ok = !status.steps.some((step) => step.failed > 0);
     await report({ phase: 'running', startedAt, steps: status.steps });
   } catch (err) {

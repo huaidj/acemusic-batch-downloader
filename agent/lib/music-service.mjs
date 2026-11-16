@@ -428,6 +428,7 @@ export function createMusicService({ stateDir, onEvent = () => {}, createApi, co
       case 'research_propose_terms': return research.proposeTerms(input);
       case 'research_review_candidate': return research.reviewCandidate(input);
       case 'research_stop': return research.stop();
+      case 'research_analyze': return research.analyze(input);
       case 'research_run': {
         const result = research.getJob(input.job_id);
         if (!result.ok) return result;
@@ -530,7 +531,7 @@ export function createMusicService({ stateDir, onEvent = () => {}, createApi, co
           case 'loop_resume': return loops().resume(input);
           case 'loop_stop': return loops().stop(input);
           case 'loop_state': return input.loop_id ? loops().get(input) : loops().list();
-          case 'research_summary': case 'research_library': case 'research_prepare': case 'research_run': case 'research_job': case 'research_evidence': case 'research_import_evidence': case 'research_propose_terms': case 'research_review_candidate': case 'research_stop': return researchAction(action, input);
+          case 'research_summary': case 'research_library': case 'research_prepare': case 'research_run': case 'research_analyze': case 'research_job': case 'research_evidence': case 'research_import_evidence': case 'research_propose_terms': case 'research_review_candidate': case 'research_stop': return researchAction(action, input);
           case 'performance_state': case 'performance_probe': case 'performance_plan': case 'performance_queue': case 'performance_dequeue': case 'performance_pause': case 'performance_takeover': case 'performance_resume': case 'performance_stop': case 'performance_manifest': return performanceAction(action, input);
           default: return failure('unsupported', '未知音樂操作。');
         }

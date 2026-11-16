@@ -8,7 +8,7 @@ import { hubJson, hubRequest, canFallbackHubWrite, HUB_URL } from './lib/hubclie
 import { MUSIC_CONTRACT, MUSIC_TOOLS, validateMusicInput } from './lib/music-contract.mjs';
 import { CREATE_CONTRACT, CREATE_TOOLS } from './lib/create-tools.mjs';
 
-const SERVER = { name: 'ace-music-downloader', version: '1.8.1' };
+const SERVER = { name: 'ace-music-downloader', version: '1.8.4' };
 const jobs = new Map();
 let jobSeq = 0;
 const hubJobs = new Set();
@@ -154,6 +154,19 @@ const TOOLS = [
         name: 'ace_favorites',
         description: '面板電臺裡收藏的歌曲清單（新 → 舊）。要拿檔案路徑再用 ace_locate { song_id }。',
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    },
+    {
+        name: 'ace_collect_favorites',
+        description: '把「站點點讚 ∪ 面板愛心」的歌複製到 ai音樂/收藏/<歌名>/（整首歌的檔案：成品 MP3/WAV、分軌、MIDI、MusicXML、封面）。只複製、不動原檔；內容相同跳過，同名不同內容不覆寫（force 才覆寫）。dry_run=true 只回計畫。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                dry_run: { type: 'boolean', description: '只回計畫，不實際複製（預設 false）' },
+                force: { type: 'boolean', description: '同名不同內容也覆寫（舊檔先歸檔，預設 false）' },
+                root: { type: 'string', description: '最上層資料夾（預設 ai音樂）' },
+            },
+            additionalProperties: false,
+        },
     },
     {
         name: 'ace_random_prompt',
@@ -506,6 +519,13 @@ async function callTool(name, args) {
             } catch {
                 return await ACE.readFavorites();
             }
+        }
+        case 'ace_collect_favorites': {
+            return await ACE.collectFavorites({
+                root: args.root ? String(args.root) : 'ai音樂',
+                dryRun: !!args.dry_run,
+                force: !!args.force,
+            });
         }
         case 'ace_random_prompt': {
             const params = new URLSearchParams();

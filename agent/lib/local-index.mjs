@@ -7,6 +7,7 @@ import { config, replaceFileAtomic } from './config.mjs';
 import { loadShared } from './shared.mjs';
 import { inspectAudioFile } from './audio-library.mjs';
 import { fileIdFromStat, physicalFileKey, legacyPathFileId } from './file-id.mjs';
+import { DEFAULT_FAVORITES_FOLDER } from './favorites.mjs';
 
 const { P } = loadShared();
 const AUDIO = new Set(['mp3', 'wav', 'flac', 'm4a', 'ogg', 'aac', 'aif', 'aiff', 'aifc']);
@@ -151,7 +152,11 @@ export async function buildLocalDownloadIndex({ cfg = config(), root = 'ai音樂
         for (const entry of entries) {
             const absolutePath = path.join(dir, entry.name);
             if (entry.isSymbolicLink()) { problems.push({ code: 'SYMLINK_SKIPPED', path: slash(path.relative(libraryRoot, absolutePath)) }); continue; }
-            if (entry.isDirectory()) { scan(absolutePath); continue; }
+            if (entry.isDirectory()) {
+                // 收藏 是複本資料夾：不進歌曲索引，否則同一首歌會被算兩次、播放器也會出現重複
+                if (dir === libraryRoot && entry.name === DEFAULT_FAVORITES_FOLDER) continue;
+                scan(absolutePath); continue;
+            }
             const extension = path.extname(entry.name).slice(1).toLowerCase();
             if (!entry.isFile() || !INDEXED.has(extension)) continue;
             try {

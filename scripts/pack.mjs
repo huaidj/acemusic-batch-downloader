@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { assertNoSecrets } from '../agent/lib/secret-scan.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
@@ -91,11 +92,16 @@ function zip(fromDir, outFile) {
   return fs.statSync(outFile).size;
 }
 
+// 脫敏：金鑰只從執行環境拿來比對，命中就中止打包（錯誤訊息不含金鑰內容）。
+const SECRET_ENV_KEYS = ['DEEPSEEK_API_KEY', 'ACE_API_KEY', 'OPENAI_API_KEY', 'GH_TOKEN', 'GITHUB_TOKEN', 'HF_TOKEN'].map((key) => process.env[key]).filter(Boolean);
+
 stage(STORE_ITEMS);
+assertNoSecrets(tmp, { keys: SECRET_ENV_KEYS });
 const storeFile = path.join(dist, `${name}-${version}-store.zip`);
 const storeSize = zip(tmp, storeFile);
 
 stage(FULL_ITEMS);
+assertNoSecrets(tmp, { keys: SECRET_ENV_KEYS });
 const fullFile = path.join(dist, `${name}-${version}-full.zip`);
 const fullSize = zip(tmp, fullFile);
 rimraf(tmp);

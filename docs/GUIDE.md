@@ -59,6 +59,7 @@
 | 封面 | `ai音樂\封面\` | `歌名 - Cover.jpg` |
 | 壓縮檔／其他 | `ai音樂\壓縮檔\`、`ai音樂\其他\` | |
 | 音頻屬性檢視 | `ai音樂\音頻分類\{完整歌曲,分軌,其他音檔}\{BPM,Key,Energy,類型}\` | **hardlink**，不佔額外空間 |
+| 收藏（喜歡的歌） | `ai音樂\收藏\<歌名>\` | 整首歌的檔案複製一份（站點點讚 ∪ 面板愛心）；只複製、原檔不動 |
 
 - 樂器資料夾：Vocals、Backing vocals、Drums、Percussion、Bass、Guitar、Keys、Strings、Brass、Woodwinds、Synth、FX、Instrumental、Other。
 - BPM 每 5 一格（`120-125`）；Key 用 Camelot（`8A`、`11B`）；Energy 分 `Low／Mid／High`。
@@ -66,10 +67,22 @@
 
 ### 3.3 一鍵整理流程
 
-`舊檔改名 → 成品MP3 → 成品WAV → 採樣包／採樣包WAV → 檔案分類（MIDI／MusicXML／封面／壓縮檔／其他）→ 內容去重 → 空殼清理 → 音頻屬性分類（hardlink）`
+`舊檔改名 → 成品MP3 → 成品WAV → 採樣包／採樣包WAV → 檔案分類（MIDI／MusicXML／封面／壓縮檔／其他）→ 內容去重 → 空殼清理 → 音頻屬性分類（hardlink）→ 收藏夾 → 指紋清除`
 
 - **內容去重**：相同內容（size→sha256）只留一份，其餘搬到 `%LOCALAPPDATA%\AceMusicDL\organize-backups\`（不直接刪）。
 - **hardlink 不是重複**：`音頻分類` 的檔案與原檔是同一份資料，刪了也省不到空間，還會讓 BPM／Key 檢視缺檔。
+- **收藏夾**：把 acemusic.ai 上按過拇指向上（`meta.rating === "good"`）與面板播放器按過愛心的歌，整首複製到 `ai音樂\收藏\<歌名>\`。只複製、不搬原檔；內容相同就跳過，同名不同內容不覆寫（`favorites --force` 才覆寫，舊檔先歸檔）。清單在 `收藏\_收藏清單.json`；未被喜歡的歌不會被收進來，取消喜歡後已複製的檔也不會自動刪除。整理流程（含「下載完自動整理」）每次都會補齊；也可單獨跑 `node agent\cli.mjs favorites [--dry-run]`。
+- **指紋清除**：把既有檔案裡的 ACE metadata 就地抹掉——WAV 的 `LIST/INFO`（IART／ICMT／ISFT…）、`id3`／`bext`／`iXML`／`XMP`，MP3 的 `TSSE`／`TENC`、含 `ACE Music` 的 `COMM`、指向 `acemusic.ai` 的 `WOAS`；標題、藝人、專輯、BPM、調性、封面、歌詞保留。就地覆寫不改變檔案長度與 inode（硬連結的音頻分類檢視同步），原 bytes 存 `%LOCALAPPDATA%\AceMusicDL\fingerprint-backups\`，`strip-fingerprints --restore` 可還原。新下載的檔案會自動清，舊檔用一次整理或 `node agent\cli.mjs strip-fingerprints` 補齊。
+
+### 3.4 維護功能一覽：指紋、分類、命名
+
+| 功能 | 自動時機 | 手動入口 | 產物／紀錄 |
+|---|---|---|---|
+| 指紋清除 | 下載寫檔前（WAV＋MP3）；一鍵整理最後一步 | 面板「維護 → 指紋清除」、`cli.mjs strip-fingerprints [--dry-run\|--restore]` | 就地抹掉 ACE metadata；`fingerprint-backups\` 可還原；已驗證音檔的 sha256 同步更新 |
+| 自動分類 | 一鍵整理、下載完自動整理、背景自動整理 | 面板「維護」內各按鈕；`extract-mp3`／`extract-samples`／`classify-files`／`classify-audio` | 成品MP3／WAV、採樣包（按樂器）、MIDI／MusicXML／封面、音頻分類（hardlink，不佔空間） |
+| 命名（命名爐） | 下載時只套標準檔名（`<歌名> - Vocals.mp3`）；命名爐本身要人工「採用」 | 面板「維護 → 命名爐」 | 同組分軌／版本一個雙語名（銘／儀／並／抽）；改名紀錄 `_命名爐改名紀錄.json`，套用後自動重建本機索引並通知面板 |
+
+三個功能的分工：**命名爐**決定歌怎麼叫、**分類**決定檔案放哪裡、**指紋清除**決定檔案裡留下什麼。命名爐在擴充功能頁面套用改名後會自動重建索引（檔案模式仍提示回面板「維護 → 一鍵整理」）。
 
 ## 4. 狀態怎麼讀
 
@@ -133,6 +146,8 @@ CLI／Hub／MCP 的下載另外在 `%LOCALAPPDATA%\AceMusicDL\agent.log` 保存�
 | `list [--query] [--undownloaded] [--json]` | 歌單＋下載進度 |
 | `download --all\|--song id [--types stems,midi,musicxml,mp3,wav,cover] [--dry-run] [--force]` | 下載 |
 | `tidy-all` | 一鍵整理 |
+| `favorites [--dry-run] [--force] [--sync]` | 站點點讚／面板愛心的歌複製到 `ai音樂\收藏\` |
+| `strip-fingerprints [--dry-run\|--restore]` | 就地抹掉既有檔案裡的 ACE metadata 指紋 |
 | `dedupe-content [--commit]` | 內容去重（預設預覽） |
 | `classify-audio` | 音頻屬性分類 |
 | `hub --background\|--status\|--stop` | 常駐中樞 |

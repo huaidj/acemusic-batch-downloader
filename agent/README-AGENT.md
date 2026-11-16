@@ -142,6 +142,7 @@ args = ["F:\\code\\acemusic-batch-downloader\\agent\\mcp.mjs"]
 | `ace_events` | 中樞事件：`song_new`、`auto_download`、`download_done`；`since`（seq）增量 |
 | `ace_library` | 曲庫分類總覽（成品MP3／WAV、採樣包各樂器、MIDI、MusicXML、封面…），`sizes:true` 算大小 |
 | `ace_favorites` | 面板電臺裡收藏的歌曲清單（新 → 舊）；要路徑再用 `ace_locate { song_id }` |
+| `ace_collect_favorites` | 把「站點點讚 ∪ 面板愛心」的歌複製到 `ai音樂/收藏/<歌名>/`（整首歌的檔案）；只複製、內容相同跳過、不覆寫，`dry_run` 只回計畫 |
 | `ace_random_prompt` | 隨機提示詞（12×12 風格矩陣）：依「音樂模型＋模式」選詞典與字數上限（Idea→自然語言框、Custom→Style 框）；回傳文字＋追溯（格子、seed、詞典版本、字數／上限）。只有 acemusic-v1.1 有驗證過的詞典，其他模型回 `no_dictionary`（不硬截斷、不亂填）；只產生文字，不提交生成 |
 | `ace_tidy` | 一鍵整理（成品MP3／WAV、採樣包、檔案分類、去重、音頻分類）；`wait:true` 等完成 |
 | `ace_backups` | 整理備份清單＋依規則可刪預覽（MCP 只預覽，不刪） |
@@ -282,6 +283,7 @@ MCP 工具會自動偵測 hub（`ACE_HUB_URL`），偵測不到就本地回落�
 | `music_research_library` | 重新載入有限研究任務、來源、候選及已審快照。 |
 | `music_research_prepare` | 準備公開文字 Search/Fetch，請求不能加入供應商憑據或預算。 |
 | `music_research_run` | 有限伺服器授權下排入研究，短回任務識別。 |
+| `music_research_analyze` | 有限授權內用 DeepSeek 思考模式（`deepseek-flash`，thinking 預設開）分析公開文字；回 content／reasoning／usage，按 token 結算，結果不是證據卡、不自動寫詞典。 |
 | `music_research_job` | 讀取已持久化研究狀態。 |
 | `music_research_evidence` | 讀取有來源的證據卡。 |
 | `music_research_import_evidence` | 匯入獨立允許的公開文字證據。 |

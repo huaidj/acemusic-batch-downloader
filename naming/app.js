@@ -1399,7 +1399,18 @@ if ($DryRun) { Write-Host '目前為預覽模式。把 $DryRun 改成 $false 即
           renderStage();
           applyFilter();
           setStatus(`已改名 ${res.renamed} 檔${res.failed ? ` · 失敗 ${res.failed}` : ''}`);
-          toast(`已改名 ${res.renamed} 檔；回 ACE 面板按「一鍵整理」重建索引`, 6200);
+          // 在擴充功能頁面裡直接叫背景重建本機索引，並通知開著的面板重畫；檔案模式則維持原本提示。
+          if (globalThis.chrome?.runtime?.id) {
+            toast(`已改名 ${res.renamed} 檔；正在重建本機索引…`, 3000);
+            try {
+              const ack = await chrome.runtime.sendMessage({ type: 'ACE_NAMING_APPLIED', renamed: res.renamed });
+              toast(ack && ack.ok ? `已改名 ${res.renamed} 檔，索引已重建` : `已改名 ${res.renamed} 檔；回 ACE 面板按「維護 → 一鍵整理」重建索引`, 6200);
+            } catch {
+              toast(`已改名 ${res.renamed} 檔；回 ACE 面板按「維護 → 一鍵整理」重建索引`, 6200);
+            }
+          } else {
+            toast(`已改名 ${res.renamed} 檔；回 ACE 面板按「維護 → 一鍵整理」重建索引`, 6200);
+          }
         } catch (err) {
           toast('改名失敗：' + ((err && err.message) || err).toString().slice(0, 80), 4200);
         } finally {

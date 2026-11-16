@@ -17,6 +17,19 @@ const unwrap = value => {
   return text.length > 1 && (text[0] === '"' && text.at(-1) === '"' || text[0] === "'" && text.at(-1) === "'") ? text.slice(1, -1).trim() : text;
 };
 
+// 研究只接受 DeepSeek 官方 origin。共用 DEEPSEEK_BASE_URL 常被指向 Anthropic 相容路徑
+// （/anthropic），這裡只保留 origin；明確的非官方 origin 仍原樣交給執行器拒絕。
+function researchBaseUrl(env) {
+  const explicit = unwrap(env.DEEPSEEK_RESEARCH_BASE_URL);
+  if (explicit) return explicit;
+  const shared = unwrap(env.DEEPSEEK_BASE_URL);
+  if (!shared) return 'https://api.deepseek.com';
+  try {
+    const url = new URL(shared);
+    return url.origin === 'https://api.deepseek.com' ? 'https://api.deepseek.com' : shared;
+  } catch { return shared; }
+}
+
 // Only process configuration can select credentials, destinations and budgets.
 // A request body cannot supply an environment variable name or a config path.
 export function createMusicRuntime({ cfg, createApi, env = process.env }) {
@@ -26,7 +39,7 @@ export function createMusicRuntime({ cfg, createApi, env = process.env }) {
   let researchConfig = {};
   if (researchSettings.enabled === true && researchSettings.api_key_env === 'DEEPSEEK_API_KEY') {
     researchConfig = {
-      api_key: unwrap(env.DEEPSEEK_API_KEY), base_url: unwrap(env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'),
+      api_key: unwrap(env.DEEPSEEK_API_KEY), base_url: researchBaseUrl(env),
       budget_usd: researchSettings.budget_usd, max_requests: researchSettings.max_requests,
       expires_at: researchSettings.expires_at, grant_id: researchSettings.grant_id,
       allowed_kinds: researchSettings.allowed_kinds,

@@ -16,6 +16,16 @@ const fail = (status, code, reason, extra = {}) => ({ ok: false, status, code, r
 const invalid = (reason) => fail('invalid', 'INVALID_INPUT', reason);
 const PRICE_UNITS = 750; // one USD = 1,000,000 units; official per-call price.
 const UNIT = 1_000_000;
+// 思考模式（deepseek-flash）：價格用尖峰價當上限，預算寧可多留不可少算。
+const ANALYZE_MODEL = 'deepseek-flash';
+const ANALYZE_ENDPOINT = '/chat/completions';
+const ANALYZE_PRICE_INPUT = 0.3;       // USD / 1M tokens (peak, cache miss)
+const ANALYZE_PRICE_CACHE_HIT = 0.006; // USD / 1M tokens (peak, cache hit)
+const ANALYZE_PRICE_OUTPUT = 1.2;      // USD / 1M tokens (peak)
+const ANALYZE_MAX_MESSAGES = 20;
+const ANALYZE_MAX_CHARS = 24000;
+const ANALYZE_MAX_OUTPUT_TOKENS = 8192;
+const ANALYZE_EFFORTS = new Set(['low', 'high', 'max']);
 const DOH_ORIGIN = 'https://1.1.1.1';
 const DOH_ENDPOINT = DOH_ORIGIN + '/dns-query';
 const DNS_POLICY_SOURCE = 'https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-https/make-api-requests/dns-json/';
@@ -25,7 +35,7 @@ const PROVENANCE = Object.freeze({ url: 'https://api-docs.deepseek.com/guides/se
 
 export function getResearchCapabilities() {
   return { ok: true, status: 'documented', provider: 'deepseek', protocol: 'Search/Fetch raw JSON', sources: [copy(PROVENANCE)],
-    endpoints: { search: 'https://api.deepseek.com/v1/tools/search', fetch: 'https://api.deepseek.com/v1/tools/fetch' },
+    endpoints: { search: 'https://api.deepseek.com/v1/tools/search', fetch: 'https://api.deepseek.com/v1/tools/fetch', analyze: 'https://api.deepseek.com/chat/completions (' + ANALYZE_MODEL + ', thinking mode)' },
     limits: { query_code_points: 128, count: [1, 50], fetch_url_code_points: 8192 },
     estimated_usd_per_billable_request: PRICE_UNITS / UNIT, actual_cost_known: false,
     billing: 'HTTP 200 non-empty Search results / Fetch content is billable per documentation; count does not change per-call cost. Final invoice cost remains unknown.',
@@ -42,6 +52,25 @@ export const RESEARCH_PREPARE_SCHEMA = deepFreeze({
     references: { type: 'array', maxItems: 20, items: { type: 'object', properties: { id: { type: 'string' }, source: { type: 'string' }, source_url: { type: 'string' }, url: { type: 'string' }, user_input: { type: 'string' }, rights_status: { type: 'string' }, ai_ingestion_allowed: { const: true } }, required: ['source', 'rights_status', 'ai_ingestion_allowed'], additionalProperties: false } },
     snapshot_ids: { type: 'object', properties: Object.fromEntries(Object.keys(DEFAULT_SNAPSHOTS).map((key) => [key, { type: 'string' }])), additionalProperties: false },
   },
+});
+
+export const RESEARCH_ANALYZE_SCHEMA = deepFreeze({
+  type: 'object', additionalProperties: false, properties: {
+    messages: {
+      type: 'array', minItems: 1, maxItems: ANALYZE_MAX_MESSAGES, items: {
+        type: 'object', additionalProperties: false,
+        properties: { role: { type: 'string', enum: ['system', 'user', 'assistant'] }, content: { type: 'string', minLength: 1, maxLength: 8000 } },
+        required: ['role', 'content'],
+      },
+    },
+    model: { type: 'string', enum: [ANALYZE_MODEL] },
+    reasoning_effort: { type: 'string', enum: ['low', 'high', 'max'], default: 'high' },
+    max_output_tokens: { type: 'integer', minimum: 128, maximum: ANALYZE_MAX_OUTPUT_TOKENS, default: 2048 },
+    idempotency_key: { type: 'string', minLength: 1, maxLength: 128 },
+    snapshot_ids: { type: 'object', properties: Object.fromEntries(Object.keys(DEFAULT_SNAPSHOTS).map((key) => [key, { type: 'string' }])), additionalProperties: false },
+    references: { type: 'array', maxItems: 20, items: { type: 'object' } },
+  },
+  required: ['messages'],
 });
 
 const secretParameter = name => /(?:^|[_-])(?:access[_-]?token|api[_-]?key|key|token|secret|password|credential|signature|authorization|session|auth)(?:$|[_-])/i.test(name) || /(?:token|secret|password|credential|signature|authorization|session|api[_-]?key)$/i.test(name);
@@ -162,7 +191,7 @@ function configGrant(config) {
   if (base.origin !== 'https://api.deepseek.com' || base.username || base.password || !['/', '/v1', '/v1/'].includes(base.pathname) || base.search || base.hash) return fail('unsupported', 'DEEPSEEK_ORIGIN', '研究執行器只接受 DeepSeek 官方 HTTPS origin。');
   if (units(config.budget_usd) === null || config.budget_usd <= 0 || !Number.isSafeInteger(config.max_requests) || config.max_requests < 1 || config.max_requests > 10000 || typeof config.expires_at !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(config.expires_at) || !Number.isFinite(Date.parse(config.expires_at)) || new Date(Date.parse(config.expires_at)).toISOString().slice(0, 19) !== config.expires_at.slice(0, 19)) return fail('auth_required', 'FINITE_RESEARCH_GRANT_REQUIRED', '需要明確的有限 USD 預算、請求數與 UTC 到期時間。');
   const kinds = config.allowed_kinds ?? ['search', 'fetch'];
-  if (!Array.isArray(kinds) || !kinds.length || kinds.some((kind) => !['search', 'fetch'].includes(kind))) return fail('auth_required', 'RESEARCH_SCOPE_INVALID', '研究授權範圍無效。');
+  if (!Array.isArray(kinds) || !kinds.length || kinds.some((kind) => !['search', 'fetch', 'analyze'].includes(kind))) return fail('auth_required', 'RESEARCH_SCOPE_INVALID', '研究授權範圍無效。');
   if (Date.parse(config.expires_at) <= Date.now()) return fail('auth_required', 'RESEARCH_GRANT_EXPIRED', '研究批次授權已到期。');
   const data = { provider: 'deepseek', budget_usd: config.budget_usd, max_requests: config.max_requests, expires_at: config.expires_at, allowed_kinds: [...new Set(kinds)].sort(), public_text_only: true };
   // An omitted ID must not silently create a fresh budget when a launcher
@@ -171,8 +200,52 @@ function configGrant(config) {
   if (!safeText(id, 128)) return fail('auth_required', 'RESEARCH_SCOPE_INVALID', '研究授權識別碼無效。');
   return { ok: true, id, hash: hashObject(data), data, budget_units: units(data.budget_usd) };
 }
-async function boundedJson(response, maxBytes) {
-  const declared = Number(response.headers?.get?.('content-length'));
+function analyzePlan(input, containsSecret = () => false) {
+  if (!OBJECT(input) || Object.keys(input).some((key) => !own(RESEARCH_ANALYZE_SCHEMA.properties, key))) return invalid('思考模式只接受公開文字訊息、模型與輸出上限，不接受憑據或上傳欄位。');
+  if (hasSensitive(input) || containsSecret(input)) return fail('policy_blocked', 'SENSITIVE_RESEARCH_INPUT', '請先移除憑據、本機路徑與私人素材。');
+  if (/spotify/i.test(JSON.stringify(input))) return fail('policy_blocked', 'SPOTIFY_RESEARCH_INPUT', 'Spotify 與其衍生內容不能進入研究請求。');
+  if (!Array.isArray(input.messages) || !input.messages.length || input.messages.length > ANALYZE_MAX_MESSAGES) return invalid(`messages 需要 1–${ANALYZE_MAX_MESSAGES} 則。`);
+  const messages = [];
+  let chars = 0;
+  for (const message of input.messages) {
+    if (!OBJECT(message) || Object.keys(message).some((key) => !['role', 'content'].includes(key))) return invalid('每則訊息只能有 role 與 content。');
+    if (!['system', 'user', 'assistant'].includes(message.role)) return invalid('role 只能是 system／user／assistant。');
+    if (!safeText(message.content, 8000)) return invalid('訊息內容需要 1–8000 個公開文字字元，且不能含憑據。');
+    chars += [...message.content].length;
+    messages.push({ role: message.role, content: message.content });
+  }
+  if (chars > ANALYZE_MAX_CHARS) return invalid(`訊息合計不能超過 ${ANALYZE_MAX_CHARS} 字。`);
+  const model = input.model === undefined ? ANALYZE_MODEL : input.model;
+  if (model !== ANALYZE_MODEL) return invalid(`目前只允許 ${ANALYZE_MODEL}（思考模式預設開啟）。`);
+  const effort = input.reasoning_effort === undefined ? 'high' : input.reasoning_effort;
+  if (!ANALYZE_EFFORTS.has(effort)) return invalid('reasoning_effort 只能是 low／high／max。');
+  const maxOutput = input.max_output_tokens === undefined ? 2048 : input.max_output_tokens;
+  if (!Number.isInteger(maxOutput) || maxOutput < 128 || maxOutput > ANALYZE_MAX_OUTPUT_TOKENS) return invalid(`max_output_tokens 必須是 128–${ANALYZE_MAX_OUTPUT_TOKENS} 整數（思考模式的 reasoning 也算在內）。`);
+  if (input.idempotency_key !== undefined && !safeText(input.idempotency_key, 128)) return invalid('需要有效的幂等鍵。');
+  const snapshots = validSnapshots(input.snapshot_ids); if (!snapshots.ok) return snapshots;
+  const refs = input.references === undefined ? [] : input.references;
+  const policy = validateReferences(refs); if (!policy.ok) return policy;
+  const body = { model, messages, reasoning_effort: effort, thinking: { type: 'enabled' }, max_tokens: maxOutput, stream: false };
+  return { ok: true, request: { kind: 'analyze', endpoint: ANALYZE_ENDPOINT, body }, snapshots: snapshots.value, references: copy(refs) };
+}
+
+function analyzeReservation(body) {
+  const chars = body.messages.reduce((sum, message) => sum + [...message.content].length, 0);
+  const promptTokens = Math.ceil(chars / 3) + 32; // 保守：每 token 3 字
+  const usd = (promptTokens * ANALYZE_PRICE_INPUT + body.max_tokens * ANALYZE_PRICE_OUTPUT) / UNIT;
+  return Math.max(1, Math.ceil(usd * UNIT));
+}
+
+function analyzeCharge(usage) {
+  const hit = Number(usage?.prompt_cache_hit_tokens) || 0;
+  const prompt = Number(usage?.prompt_tokens) || 0;
+  const miss = Number.isFinite(Number(usage?.prompt_cache_miss_tokens)) ? Number(usage.prompt_cache_miss_tokens) : Math.max(0, prompt - hit);
+  const completion = Number(usage?.completion_tokens) || 0;
+  const usd = (Math.max(0, miss) * ANALYZE_PRICE_INPUT + Math.max(0, hit) * ANALYZE_PRICE_CACHE_HIT + Math.max(0, completion) * ANALYZE_PRICE_OUTPUT) / UNIT;
+  return { units: Math.max(0, Math.ceil(usd * UNIT)), usd };
+}
+
+async function boundedJson(response, maxBytes) {  const declared = Number(response.headers?.get?.('content-length'));
   if (declared > maxBytes) throw new Error('RESPONSE_LIMIT');
   if (!response.body?.getReader) throw new Error('RESPONSE_BODY');
   const reader = response.body.getReader();
@@ -458,6 +531,107 @@ export function createResearchService({ stateDir, config = {}, fetchImpl = globa
       return fail(requestId ? 'outcome_unknown' : 'failed', requestId ? 'RESEARCH_OUTCOME_UNKNOWN' : 'RESEARCH_UNAVAILABLE', requestId ? '研究請求結果未知；原預留保留，不會重送。' : '研究暫時無法執行，未送出請求。', requestId ? { job_id: id, request_id: requestId, reserved_usd: PRICE_UNITS / UNIT } : {});
     } finally { if (timeout) clearTimeout(timeout); active.delete(id); }
   }
+  /**
+   * DeepSeek 思考模式（deepseek-flash，thinking 預設開啟）。只回傳模型輸出與用量，
+   * 不建立證據卡、不寫詞典；費用按 usage 的 token 數結算（以尖峰價為上限），
+   * 並受同一份有限授權的預算與請求數限制。
+   */
+  async function analyze(input = {}) {
+    if (closed) return fail('closed', 'CLOSED', '研究帳本已關閉。');
+    const parsed = analyzePlan(input, containsConfiguredSecret); if (!parsed.ok) return parsed;
+    if (stopped()) return fail('stopped', 'RESEARCH_STOPPED', '研究批次已停止新增工作。');
+    const requestHash = hashObject(parsed.request);
+    const idem = hashObject(input.idempotency_key ?? `analyze:${requestHash}`);
+    const jobId = `research_analyze_${idem.slice(0, 24)}`;
+    const cached = db.prepare('SELECT * FROM research_cache WHERE request_hash=? AND expires_at>?').get(requestHash, Date.now());
+    if (cached) {
+      const previous = decode(cached);
+      return { ok: true, status: 'completed', from_cache: true, job_id: jobId, content: previous.content, reasoning_content: previous.reasoning_content, usage: previous.usage, model: previous.model, finish_reason: previous.finish_reason, estimated_billed_usd: 0, actual_cost_usd: null, evidence_ids: [], long_term_taste_updated: false };
+    }
+    const grant = configGrant(serverConfig); if (!grant.ok) return grant;
+    if (!grant.data.allowed_kinds.includes('analyze')) return fail('auth_required', 'RESEARCH_SCOPE_DENIED', '此研究操作未在伺服器授權範圍。');
+    const reserve = analyzeReservation(parsed.request.body);
+    let requestId, job, controller, timeout;
+    try {
+      const claim = tx(() => {
+        const current = configGrant(serverConfig); if (!current.ok) return current;
+        const priorGrant = db.prepare('SELECT * FROM research_grants WHERE id=?').get(current.id);
+        if (priorGrant && priorGrant.hash !== current.hash) return fail('auth_required', 'RESEARCH_GRANT_CHANGED', '同一研究授權識別的限制已改變，不建立新預留。');
+        const used = ledger(current.id);
+        if (used.requests_used >= current.data.max_requests || used.reserved_units + used.estimated_spent_units + reserve > current.budget_units) return fail('budget_blocked', 'RESEARCH_BUDGET_LIMIT', '研究已達請求數或全批次 USD 上限。');
+        if (!priorGrant) db.prepare('INSERT INTO research_grants VALUES(?,?,?)').run(current.id, current.hash, JSON.stringify(current.data));
+        requestId = `research_request_${hashObject(jobId).slice(0, 24)}`;
+        job = { id: jobId, kind: 'analyze', request: parsed.request, request_hash: requestHash, status: 'outcome_unknown', model: parsed.request.body.model, reasoning_effort: parsed.request.body.reasoning_effort, max_output_tokens: parsed.request.body.max_tokens, snapshot_ids: parsed.snapshots, reference_ids: parsed.references.map((ref) => ref.id || hashObject(ref).slice(0, 16)), reference_permissions: parsed.references, source_policy_version: '1.0.0', created_at: now(), estimated_cost_usd: reserve / UNIT, actual_cost_usd: null, evidence_ids: [], execution_enabled: true, request_id: requestId };
+        db.prepare('INSERT OR REPLACE INTO research_jobs VALUES(?,?,?,?)').run(job.id, idem, requestHash, JSON.stringify(job));
+        const receipt = { id: requestId, job_id: job.id, request_hash: requestHash, grant_id: current.id, state: 'outcome_unknown', reserved_usd: reserve / UNIT, estimated_billed_usd: null, actual_cost_usd: null, created_at: now(), source: PROVENANCE.url };
+        db.prepare('INSERT OR REPLACE INTO research_requests VALUES(?,?,?,?,?,?,NULL,?)').run(requestId, job.id, current.id, requestHash, 'outcome_unknown', reserve, JSON.stringify(receipt));
+        event('analysis_reserved', { job_id: job.id, request_id: requestId, reserved_usd: reserve / UNIT });
+        return { ok: true, send: true };
+      });
+      if (!claim.send) return claim;
+      controller = new AbortController(); active.set(jobId, controller);
+      const timeoutMs = Number.isInteger(serverConfig.analyze_timeout_ms) ? Math.max(5000, Math.min(180000, serverConfig.analyze_timeout_ms)) : 90000;
+      const maxBytes = Number.isInteger(serverConfig.response_max_bytes) ? Math.max(1024, Math.min(2_000_000, serverConfig.response_max_bytes)) : 1_000_000;
+      timeout = setTimeout(() => controller.abort(), timeoutMs);
+      const response = await fetchImpl('https://api.deepseek.com' + ANALYZE_ENDPOINT, { method: 'POST', headers: { Authorization: 'Bearer ' + serverConfig.api_key, 'Content-Type': 'application/json' }, body: JSON.stringify(parsed.request.body), redirect: 'error', signal: controller.signal });
+      if (response.redirected || response.url && new URL(response.url).origin !== 'https://api.deepseek.com') throw new Error('REDIRECT_DENIED');
+      if (response.status !== 200) {
+        const code = response.status === 401 ? 'DEEPSEEK_AUTH_REQUIRED' : response.status === 402 ? 'DEEPSEEK_BALANCE_REQUIRED' : response.status === 429 ? 'DEEPSEEK_RATE_LIMITED' : 'DEEPSEEK_HTTP_FAILED';
+        tx(() => {
+          const receipt = decode(db.prepare('SELECT * FROM research_requests WHERE id=?').get(requestId));
+          const updated = { ...receipt, state: 'completed', reserved_usd: 0, estimated_billed_usd: 0, billing_basis: 'documented_non_200', completed_at: now() };
+          db.prepare("UPDATE research_requests SET state='completed',billed_units=0,data=? WHERE id=?").run(JSON.stringify(updated), requestId);
+          job = { ...job, status: 'failed', code, completed_at: now() }; saveJob(job); event('analysis_failed', { job_id: job.id, code, http: response.status });
+        });
+        return fail(response.status === 401 ? 'auth_required' : response.status === 402 ? 'budget_blocked' : 'failed', code, '思考模式請求未完成；不會自動重試或充值。', { job_id: jobId });
+      }
+      const data = await boundedJson(response, maxBytes);
+      if (controller.signal.aborted) throw new Error('REQUEST_TIMEOUT');
+      if (containsConfiguredSecret(data)) throw new Error('SENSITIVE_PROVIDER_RESPONSE');
+      const choice = Array.isArray(data?.choices) ? data.choices[0] : null;
+      const message = choice && OBJECT(choice.message) ? choice.message : null;
+      if (!message || typeof message.content !== 'string') throw new Error('RESPONSE_SCHEMA');
+      const content = message.content.slice(0, 12000);
+      const reasoning = typeof message.reasoning_content === 'string' ? message.reasoning_content.slice(0, 20000) : '';
+      const rawUsage = OBJECT(data.usage) ? data.usage : null;
+      const usage = rawUsage ? {
+        prompt_tokens: Number(rawUsage.prompt_tokens) || 0,
+        completion_tokens: Number(rawUsage.completion_tokens) || 0,
+        prompt_cache_hit_tokens: Number(rawUsage.prompt_cache_hit_tokens) || 0,
+        prompt_cache_miss_tokens: Number.isFinite(Number(rawUsage.prompt_cache_miss_tokens)) ? Number(rawUsage.prompt_cache_miss_tokens) : Math.max(0, (Number(rawUsage.prompt_tokens) || 0) - (Number(rawUsage.prompt_cache_hit_tokens) || 0)),
+        total_tokens: Number(rawUsage.total_tokens) || 0,
+      } : null;
+      const charge = analyzeCharge(usage);
+      const truncated = choice.finish_reason === 'length';
+      const result = { content, reasoning_content: reasoning, model: typeof data.model === 'string' ? data.model : parsed.request.body.model, finish_reason: choice.finish_reason || null, truncated, usage, estimated_billed_usd: charge.units / UNIT, snapshot_ids: parsed.snapshots };
+      // 思考模式的 reasoning 也吃 max_output_tokens；用光時只有 reasoning、沒有答案。
+      // 不自動重試（會重複計費），把用量與 reasoning 回給呼叫端並要求調高上限。
+      if (!content.trim()) {
+        tx(() => {
+          const receipt = decode(db.prepare('SELECT * FROM research_requests WHERE id=?').get(requestId));
+          const updated = { ...receipt, state: 'completed', reserved_usd: 0, estimated_billed_usd: result.estimated_billed_usd, actual_cost_usd: null, billing_basis: 'token_usage_peak_price_upper_bound', completed_at: now() };
+          db.prepare("UPDATE research_requests SET state='completed',billed_units=?,data=? WHERE id=?").run(charge.units, JSON.stringify(updated), requestId);
+          job = { ...job, status: 'incomplete', result, actual_cost_usd: null, completed_at: now() }; saveJob(job);
+          event('analysis_incomplete', { job_id: job.id, max_output_tokens: parsed.request.body.max_tokens, completion_tokens: usage?.completion_tokens || 0 });
+        });
+        return { ok: false, status: 'incomplete', code: 'ANALYZE_OUTPUT_TRUNCATED', result, job_id: jobId, reasoning_content: reasoning, usage, estimated_billed_usd: result.estimated_billed_usd, advice: '思考模式把輸出上限用在 reasoning；請提高 max_output_tokens（例如 4096）後用新的 idempotency_key 重試，系統不會自動重送。' };
+      }
+      tx(() => {
+        const receipt = decode(db.prepare('SELECT * FROM research_requests WHERE id=?').get(requestId));
+        const updated = { ...receipt, state: 'completed', reserved_usd: 0, estimated_billed_usd: result.estimated_billed_usd, actual_cost_usd: null, billing_basis: 'token_usage_peak_price_upper_bound', completed_at: now() };
+        db.prepare("UPDATE research_requests SET state='completed',billed_units=?,data=? WHERE id=?").run(charge.units, JSON.stringify(updated), requestId);
+        job = { ...job, status: 'completed', result, actual_cost_usd: null, completed_at: now() }; saveJob(job);
+        const ttl = Number.isInteger(serverConfig.cache_ttl_ms) ? Math.max(0, Math.min(7 * 86400000, serverConfig.cache_ttl_ms)) : 86400000;
+        db.prepare('INSERT OR REPLACE INTO research_cache VALUES(?,?,?)').run(requestHash, Date.now() + ttl, JSON.stringify(result));
+        event('analysis_completed', { job_id: job.id, estimated_billed_usd: result.estimated_billed_usd });
+      });
+      return { ok: true, status: 'completed', job_id: jobId, ...result, evidence_ids: [], long_term_taste_updated: false, instructions_executable: false };
+    } catch {
+      if (requestId && !closed) safe(() => event('analysis_outcome_unknown', { job_id: jobId, request_id: requestId }));
+      return fail(requestId ? 'outcome_unknown' : 'failed', requestId ? 'RESEARCH_OUTCOME_UNKNOWN' : 'RESEARCH_UNAVAILABLE', requestId ? '思考模式請求結果未知；原預留保留，不會重送。' : '研究暫時無法執行，未送出請求。', requestId ? { job_id: jobId, request_id: requestId, reserved_usd: reserve / UNIT } : {});
+    } finally { if (timeout) clearTimeout(timeout); active.delete(jobId); }
+  }
+
   function importEvidence(input = {}) {
     return safe(() => {
       const allowed = ['source_url', 'title', 'summary', 'source', 'rights_status', 'ai_ingestion_allowed', 'facts', 'inferences', 'snapshot_ids'];
@@ -520,7 +694,7 @@ export function createResearchService({ stateDir, config = {}, fetchImpl = globa
   return {
     prepare,
     prepareFetch(input = {}) { return prepare({ ...input, kind: 'fetch' }); },
-    run, importEvidence, proposeTerms, reviewCandidate,
+    run, analyze, importEvidence, proposeTerms, reviewCandidate,
     getJob(id) { return safe(() => { if (!safeText(id, 128)) return invalid('需要工作 ID。'); const job = normalizeJob(decode(jobRow(id))); return job ? { ok: true, status: job.status, job } : fail('not_found', 'JOB_NOT_FOUND', '找不到研究工作。'); }); },
     getEvidence(id) { return safe(() => { if (!safeText(id, 128)) return invalid('需要證據 ID。'); const evidence = decode(db.prepare('SELECT * FROM research_evidence WHERE id=?').get(id)); return evidence ? { ok: true, evidence } : fail('not_found', 'EVIDENCE_NOT_FOUND', '找不到證據卡。'); }); },
     getSnapshot(id) { return safe(() => { if (!safeText(id, 128)) return invalid('需要快照 ID。'); const snapshot = decode(db.prepare('SELECT * FROM research_snapshots WHERE id=?').get(id)); return snapshot ? { ok: true, snapshot } : fail('not_found', 'SNAPSHOT_NOT_FOUND', '找不到詞典候選快照。'); }); },

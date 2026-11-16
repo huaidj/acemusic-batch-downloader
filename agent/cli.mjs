@@ -22,7 +22,7 @@ async function hubTry(pathname, { method = 'GET', body, timeoutMs = 1200 } = {})
     }
 }
 function usage() {
-    console.log(`ACE Music 批量下載器 CLI  v1.8.1
+    console.log(`ACE Music 批量下載器 CLI  v1.8.4
 
 用法：
   node cli.mjs create capabilities            Create 頁面完整 API 參數契約
@@ -55,6 +55,8 @@ function usage() {
   node cli.mjs organize [--commit]             整理 Downloads 內已下載的檔案（預設 dry-run）
   node cli.mjs extract-mp3 [選項]              把所有歌曲的成品 MP3 集中到 ai音樂\\成品MP3\\（會自動補齊漏掉的）
   node cli.mjs extract-samples                 把分軌/採樣集中到 ai音樂\\採樣包\\（按樂器類型分資料夾）
+  node cli.mjs favorites [--dry-run] [--force] [--sync]  把站點點讚／面板愛心的歌複製到 ai音樂\\收藏\\（整首歌的檔案）
+  node cli.mjs strip-fingerprints [--dry-run|--restore]  就地抹掉既有檔案裡的 ACE metadata 指紋（檔長、inode 不變）
   node cli.mjs classify-files [--copy]         依檔案屬性分類 MIDI/MusicXML/封面/壓縮檔/其他（預設搬移，--copy 保留原檔）
   node cli.mjs dedupe-songs [--commit]         歌名資料夾內與分類庫相同的副本（預設預覽）
   node cli.mjs dedupe-content [--commit]       內容去重：全庫相同內容只留一份（預設預覽，--commit 才搬移）
@@ -89,6 +91,20 @@ extract-mp3 選項：
   --background     背景執行（會寫入狀態檔，面板按鈕用）
   --status         讀取背景執行進度
   --json           以 JSON 輸出
+
+favorites 選項：
+  --sync     先唯讀同步站點點讚（保留上次快照；失敗不影響收藏夾）
+  --dry-run  只列出會複製哪些檔，不動檔案
+  --force    同名不同內容也覆寫（舊檔先歸檔到 organize-backups）
+  --folder <名稱>  收藏資料夾（預設 收藏，位於 ai音樂 底下）
+  --root <資料夾>  最上層資料夾（預設 ai音樂）
+  --json     以 JSON 輸出
+
+strip-fingerprints 選項：
+  --dry-run  只列出命中哪些檔案／frame，不改檔
+  --restore  用最近一次備份把指紋原 bytes 寫回（同一份備份只還原一次）
+  --root <資料夾>  最上層資料夾（預設 ai音樂）
+  --json     以 JSON 輸出
 
 登入狀態：擴充功能面板按「同步登入狀態給 Agent」，會寫入
   %LOCALAPPDATA%\\AceMusicDL\\session.json
@@ -169,7 +185,9 @@ async function main() {
         const error = validateMusicInput(input, contract.inputSchema);
         if (error) throw new Error(error);
         const query = contract.method === 'GET' ? '?' + new URLSearchParams(Object.entries(input).map(([k,v]) => [k, String(v)])).toString() : '';
-        const { status, data } = await hubRequest(contract.path + query, { method: contract.method, body: contract.method === 'POST' ? input : undefined, timeoutMs: 5000 });
+        // 思考模式（reasoner）一次可能跑數十秒；其他音樂操作仍是短呼叫。
+        const timeoutMs = action === 'research_analyze' ? 180000 : 5000;
+        const { status, data } = await hubRequest(contract.path + query, { method: contract.method, body: contract.method === 'POST' ? input : undefined, timeoutMs });
         printJson(data || { ok: false, status: 'unsupported', error: '此 Hub 不支援音樂準備介面。', http: status });
         if (status >= 400 || data?.ok === false) process.exitCode = 1;
         return;
@@ -447,6 +465,55 @@ async function main() {
         if (result.failed.length) {
             for (const fail of result.failed.slice(0, 10)) console.log(`  ✗ ${fail.file}：${fail.error}`);
         }
+        return;
+    }
+
+    if (cmd === 'favorites' || cmd === 'collect-favorites') {
+        const root = args.flags.root ? String(args.flags.root) : 'ai音樂';
+        const folder = args.flags.folder ? String(args.flags.folder) : ACE.DEFAULT_FAVORITES_FOLDER;
+        if (args.flags.sync) {
+            const synced = await ACE.syncSiteLikesFromSite(cfg);
+            if (!args.flags.json) {
+                console.log(synced.ok
+                    ? `站點點讚已同步：${synced.count} 首（${synced.complete ? '完整' : '不完整'}）`
+                    : `站點點讚同步失敗，沿用上次快照：${synced.error || synced.code || '未知錯誤'}`);
+            }
+        }
+        const result = await ACE.collectFavorites({ root, folder, dryRun: !!args.flags['dry-run'], force: !!args.flags.force, cfg });
+        if (args.flags.json) return printJson(result);
+        console.log(`收藏夾：喜歡 ${result.total} 首（站點點讚 ${result.sources.site.count}、面板愛心 ${result.sources.panel.count}）`);
+        console.log(`  複製 ${result.copied}、已存在 ${result.skipped}、同名保留原檔 ${result.conflicts}、未下載 ${result.missing}、清單外 ${result.unknown}、失敗 ${result.failed.length}`);
+        if (result.dryRun) {
+            const mb = Math.round((result.plannedBytes || 0) / 1048576);
+            console.log(`  預計複製 ${result.planned || 0} 個檔（約 ${mb} MB）`);
+        }
+        console.log(`  資料夾：${result.folder}`);
+        console.log(`  清單  ：${result.manifestPath}`);
+        if (result.dryRun) console.log('  （dry-run：只列計畫，沒有複製任何檔案）');
+        if (result.failed.length) {
+            for (const fail of result.failed.slice(0, 10)) console.log(`  ✗ ${fail.title || fail.task_id}：${fail.error}`);
+        }
+        return;
+    }
+
+    if (cmd === 'strip-fingerprints' || cmd === 'fingerprints') {
+        const root = args.flags.root ? String(args.flags.root) : 'ai音樂';
+        if (args.flags.restore) {
+            const restored = await ACE.restoreFingerprints({ cfg });
+            if (args.flags.json) return printJson(restored);
+            console.log(`指紋還原：${restored.restored} 個區段（備份 ${restored.backup}）`);
+            if (restored.skipped) console.log(`  跳過 ${restored.skipped}（檔案長度已變，無法原位還原）`);
+            if (restored.failed.length) for (const fail of restored.failed.slice(0, 10)) console.log(`  ✗ ${fail.file}：${fail.error}`);
+            return;
+        }
+        const result = await ACE.stripFingerprints({ root, dryRun: !!args.flags['dry-run'], cfg });
+        if (args.flags.json) return printJson(result);
+        console.log(`指紋清除：掃 ${result.scanned} 個實體音檔，命中 ${result.targets} 個`);
+        console.log(`  清除 ${result.cleaned} 個檔（MP3 ${result.mp3}、WAV ${result.wav}）；抹掉 ${result.framesRemoved} 個 frame、${result.chunksNeutralized} 個 chunk，約 ${(result.bytesNeutralized / 1024).toFixed(1)} KB`);
+        console.log(`  已驗證紀錄更新 ${result.proofsUpdated || 0} 筆`);
+        if (result.backup) console.log(`  備份（可 --restore 還原）：${result.backup}`);
+        if (result.dryRun) console.log('  （dry-run：沒有改任何檔案）');
+        if (result.failed.length) for (const fail of result.failed.slice(0, 10)) console.log(`  ✗ ${fail.file}：${fail.error}`);
         return;
     }
 

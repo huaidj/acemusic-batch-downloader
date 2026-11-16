@@ -96,7 +96,8 @@ internal static class Program
                 case "dedupe-custom": return RunCli("dedupe-content --commit --include-custom --json", 120000, "清理自訂重複");
                 case "extract-mp3": return RunCli("extract-mp3 --background --json", 30000, "成品 MP3");
                 case "watch": return RunCli("watch --background --json", 30000, "背景整理");
-                case "open": return OpenFolder(request);
+                case "strip-fingerprints": return RunCli("strip-fingerprints --json", 180000, "指紋清除");
+        case "open": return OpenFolder(request);
                 default: return Error("unknown cmd: " + cmd);
             }
         }

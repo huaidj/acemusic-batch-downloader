@@ -9,6 +9,21 @@ const DOWNLOAD_TIMEOUT_MS = 180000;
 const pending = new Map(); // downloadId -> { done, filename }
 let lastCompletedId = null;
 
+// 命名爐改完檔名後通知所有分頁重新整理本機索引；沒有任何分頁在線時安靜略過。
+async function broadcastToAceTabs(message) {
+  let tabs = [];
+  try { tabs = await chrome.tabs.query({}); } catch { return 0; }
+  let sent = 0;
+  for (const tab of tabs) {
+    if (tab.id == null) continue;
+    try {
+      await chrome.tabs.sendMessage(tab.id, message);
+      sent += 1;
+    } catch { /* 沒有 content script 的分頁（chrome://、商店…）會丟錯，忽略 */ }
+  }
+  return sent;
+}
+
 // 送出下載前先登記「URL → 想要的相對路徑」，onDeterminingFilename 觸發時用它覆寫檔名。
 // 這是 Chrome 擴充功能裡唯一保證能蓋過伺服器 Content-Disposition / URL 檔名的機制。
 const namedQueue = new Map(); // url -> [{ filename, conflictAction }]
@@ -383,6 +398,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return respondLater(async () => {
         const tab = await chrome.tabs.create({ url: chrome.runtime.getURL('naming/index.html') });
         return { ok: true, tabId: tab.id };
+      }, sendResponse);
+    case 'ACE_NAMING_APPLIED':
+      return respondLater(async () => {
+        // 命名爐套用改名後：重建本機索引（journal 已記錄搬移鏈），再叫面板重畫。
+        let rebuilt = false;
+        try {
+          const result = await hostRequest({ cmd: 'local-index', root: String(msg.root || 'ai音樂') }, 120000);
+          rebuilt = !!(result && result.ok && result.data && result.data.ok);
+        } catch { /* 索引重建失敗仍要通知面板，讓它自己重試 */ }
+        const tabs = await broadcastToAceTabs({ type: 'ACE_LIBRARY_CHANGED', at: Date.now() });
+        return { ok: rebuilt, rebuilt, tabs, renamed: Number(msg.renamed) || 0 };
+      }, sendResponse);
+    case 'ACE_HOST_STRIP_FINGERPRINTS':
+      return respondLater(async () => {
+        const result = await hostRequest({ cmd: 'strip-fingerprints' }, 180000);
+        if (!result || !result.ok || result.exitCode !== 0) return { ok: false, error: (result && result.error) || '本機工具沒有回應' };
+        return { ok: true, data: result.data };
       }, sendResponse);
     case 'ACE_OPEN_PLAYER':
       return respondLater(async () => {

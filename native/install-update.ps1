@@ -72,6 +72,15 @@ foreach ($base in @('HKCU:\Software\Google\Chrome\NativeMessagingHosts','HKCU:\S
     New-Item -Path $key -Force | Out-Null
     Set-ItemProperty -Path $key -Name '(default)' -Value $manifestPath
 }
+# 研究授權：憑據只從環境變數來。安裝器若在沒有這些變數的 shell 裡執行，
+# 從使用者／機器環境補回，避免更新後 Hub 失去 DeepSeek 研究能力。
+if (-not $env:DEEPSEEK_API_KEY) {
+    $env:DEEPSEEK_API_KEY = [Environment]::GetEnvironmentVariable('DEEPSEEK_API_KEY', 'Machine')
+    if (-not $env:DEEPSEEK_API_KEY) { $env:DEEPSEEK_API_KEY = [Environment]::GetEnvironmentVariable('DEEPSEEK_API_KEY', 'User') }
+}
+if (-not $env:ACE_RESEARCH_CONFIG_FILE) {
+    $env:ACE_RESEARCH_CONFIG_FILE = [Environment]::GetEnvironmentVariable('ACE_RESEARCH_CONFIG_FILE', 'User')
+}
 & node (Join-Path $installDir 'agent\cli.mjs') hub --background
 if ($LASTEXITCODE -ne 0) { throw 'Hub did not start; rollback backup is preserved.' }
 Write-Host ('Updated ' + $version + '. Reload the extension and refresh the ACE page.')

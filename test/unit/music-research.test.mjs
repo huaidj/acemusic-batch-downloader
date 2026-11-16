@@ -505,3 +505,80 @@ test('adding a DNS technical allowlist preserves the existing immutable grant an
     assert.equal(service.summary().ledger.length, 1); assert.equal(service.summary().budget.requests_used, 2); assert.equal(service.summary().budget.estimated_spent_usd, 0.0015); assert.equal(service.summary().budget.actual_spent_usd, null);
   } finally { service.close(); }
 });
+test('analyze：DeepSeek 思考模式走官方 chat/completions，回 content／reasoning 並按 usage 結算', async () => {
+  const seen = [];
+  const service = createResearchService({ stateDir: directory(), config: grant({ allowed_kinds: ['analyze'] }), fetchImpl: async (url, options) => {
+    seen.push({ url, options });
+    return json({ model: 'deepseek-flash', choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '答案', reasoning_content: '思考過程' } }], usage: { prompt_tokens: 1000, completion_tokens: 500, prompt_cache_hit_tokens: 200, prompt_cache_miss_tokens: 800, total_tokens: 1500 } });
+  } });
+  try {
+    const input = { messages: [{ role: 'user', content: '把這段歌詞的段落結構整理成三點。' }], reasoning_effort: 'high', max_output_tokens: 800 };
+    const result = await service.analyze(input);
+    assert.equal(result.ok, true);
+    assert.equal(result.content, '答案');
+    assert.equal(result.reasoning_content, '思考過程');
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].url, 'https://api.deepseek.com/chat/completions');
+    assert.equal(seen[0].options.redirect, 'error');
+    const body = JSON.parse(seen[0].options.body);
+    assert.equal(body.model, 'deepseek-flash');
+    assert.deepEqual(body.thinking, { type: 'enabled' });
+    assert.equal(body.reasoning_effort, 'high');
+    assert.equal(body.max_tokens, 800);
+    assert.equal(body.stream, false);
+    // (800×0.30 + 200×0.006 + 500×1.20) / 1e6 = 0.0008412 → 無條件進位到 842 units
+    assert.equal(result.estimated_billed_usd, 0.000842);
+    assert.equal(service.summary().budget.estimated_spent_usd, 0.000842);
+    const again = await service.analyze(input);
+    assert.equal(again.from_cache, true);
+    assert.equal(seen.length, 1, '相同請求命中快取，不再打網路');
+  } finally { service.close(); }
+});
+
+test('analyze：授權範圍沒有 analyze、預算不足、含憑據的輸入都在送請求前擋下', async () => {
+  let calls = 0;
+  const noScope = createResearchService({ stateDir: directory(), config: grant(), fetchImpl: async () => { calls++; return json({}); } });
+  try {
+    const denied = await noScope.analyze({ messages: [{ role: 'user', content: '整理段落' }] });
+    assert.equal(denied.ok, false);
+    assert.equal(denied.code, 'RESEARCH_SCOPE_DENIED');
+    assert.equal(calls, 0);
+    assert.equal((await noScope.analyze({ messages: [{ role: 'user', content: 'x' }], api_key: KEY })).status, 'invalid');
+    assert.equal((await noScope.analyze({ messages: [{ role: 'user', content: 'Bearer hidden-private-token-value' }] })).status, 'policy_blocked');
+    assert.equal((await noScope.analyze({ messages: [{ role: 'user', content: 'Spotify 歌單' }] })).status, 'policy_blocked');
+  } finally { noScope.close(); }
+  const poor = createResearchService({ stateDir: directory(), config: grant({ allowed_kinds: ['analyze'], budget_usd: 0.000001 }), fetchImpl: async () => { calls++; return json({}); } });
+  try {
+    const blocked = await poor.analyze({ messages: [{ role: 'user', content: '整理段落' }] });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.code, 'RESEARCH_BUDGET_LIMIT');
+    assert.equal(calls, 0);
+  } finally { poor.close(); }
+});
+
+test('analyze：HTTP 401 不計費、不重試，保留請求數紀錄', async () => {
+  const service = createResearchService({ stateDir: directory(), config: grant({ allowed_kinds: ['analyze'] }), fetchImpl: async () => json({ error: { message: 'Authentication Fails' } }, 401) });
+  try {
+    const result = await service.analyze({ messages: [{ role: 'user', content: '整理段落' }] });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'DEEPSEEK_AUTH_REQUIRED');
+    assert.equal(result.status, 'auth_required');
+    const summary = service.summary();
+    assert.equal(summary.budget.estimated_spent_usd, 0);
+    assert.equal(summary.budget.reserved_usd, 0);
+    assert.equal(summary.budget.requests_used, 1);
+  } finally { service.close(); }
+});
+
+test('analyze：reasoning 用盡輸出上限時回 incomplete 並保留用量，不自動重試', async () => {
+  const service = createResearchService({ stateDir: directory(), config: grant({ allowed_kinds: ['analyze'] }), fetchImpl: async () => json({ model: 'deepseek-flash', choices: [{ finish_reason: 'length', message: { role: 'assistant', content: '', reasoning_content: '很長的思考' } }], usage: { prompt_tokens: 50, completion_tokens: 2048, total_tokens: 2098 } }) });
+  try {
+    const result = await service.analyze({ messages: [{ role: 'user', content: '整理段落' }], max_output_tokens: 2048 });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 'incomplete');
+    assert.equal(result.code, 'ANALYZE_OUTPUT_TRUNCATED');
+    assert.equal(result.reasoning_content, '很長的思考');
+    assert.equal(result.usage.completion_tokens, 2048);
+    assert.equal(service.summary().budget.estimated_spent_usd, result.estimated_billed_usd);
+  } finally { service.close(); }
+});

@@ -34,7 +34,7 @@
   <h2>傳輸對象</h2>
   <ul>
     <li>下載與生成使用 <code>acemusic.ai</code>（以及 <code>www.acemusic.ai</code>）。官方音訊端點重新導向到明確允許的儲存 CDN 時，後續下載不附 ACE Cookie 或登入標頭；簽名下載網址不寫入紀錄。</li>
-    <li>使用者另行啟用公開文字研究時，本機 Hub 會向 <code>api.deepseek.com</code> 發送已審閱的搜尋文字及來源網址。DeepSeek API key 只用於該官方 API 的授權標頭；ACE Cookie、私人音訊與本機路徑不送給 DeepSeek。</li>
+    <li>使用者另行啟用公開文字研究時，本機 Hub 會向 <code>api.deepseek.com</code> 發送已審閱的搜尋文字及來源網址（搜尋／抓頁），或使用者提供的公開文字提示（思考模式 <code>deepseek-flash</code>）。DeepSeek API key 只用於該官方 API 的授權標頭；ACE Cookie、私人音訊與本機路徑不送給 DeepSeek。思考模式的模型輸出只留在本機 Hub 的稽核紀錄，不傳給其他對象。</li>
     <li>中樞可讀取已配置的本機 BadDJ MixCore 狀態；不因此啟動引擎、修改它的曲庫或自動播放。</li>
     <li>不連接廣告或行為分析網路。</li>
     <li>不販售、不分享、不用於信用評估或與核心功能無關的用途。</li>
@@ -58,7 +58,7 @@
   <p>有隱私相關問題請開 GitHub Issue：<a href="https://github.com/huaidj/acemusic-batch-downloader/issues">https://github.com/huaidj/acemusic-batch-downloader/issues</a></p>
 
   <h2>可選的生成與研究功能（本機中樞）</h2>
-  <p>本機準備詞典與 HTTP JSON 不對外傳輸。使用者明確啟用受限生成後，音樂描述、Style、Lyrics、選定的模型與控件會直接傳至 ACE Music；Cookie 僅用於官方同源請求，不交給第三方代理。參考及上傳仍預設關閉，Spotify 來源內容不得進 AI 請求。DeepSeek 研究需要獨立有限預算、請求數與期限，預設關閉；來源內容是資料，不會改變工具權限。密鑰不寫進程式、SQLite、提示詞、頁面或交付包。</p>
+  <p>本機準備詞典與 HTTP JSON 不對外傳輸。使用者明確啟用受限生成後，音樂描述、Style、Lyrics、選定的模型與控件會直接傳至 ACE Music；Cookie 僅用於官方同源請求，不交給第三方代理。參考及上傳仍預設關閉，Spotify 來源內容不得進 AI 請求。DeepSeek 研究需要獨立有限預算、請求數與期限，預設關閉；搜尋／抓頁按次計費，思考模式按 token 用量計費。來源內容是資料，不會改變工具權限。密鑰不寫進程式、SQLite、提示詞、頁面或交付包；打包流程會掃描發佈物，命中金鑰樣式或私密狀態檔就中止。</p>
   <footer>本擴充功能與 ACE Music／ACE Studio 無隸屬關係，為非官方工具。</footer>
 </main>
 </body>

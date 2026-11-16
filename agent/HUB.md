@@ -185,6 +185,7 @@ agent / CLI / MCP ──HTTP──► agent/hub.mjs (127.0.0.1:8788)
 | GET | `/music/research/library` | 重新載入有限研究任務、來源、候選及已審快照。 |
 | POST | `/music/research/prepare` | 準備公開文字 Search/Fetch，請求不能加入供應商憑據或預算。 |
 | POST | `/music/research/run` | 有限伺服器授權下排入研究，短回任務識別。 |
+| POST | `/music/research/analyze` | 有限授權內用 DeepSeek 思考模式（deepseek-flash）分析公開文字；不是證據卡、不自動寫入詞典。 |
 | GET | `/music/research/job` | 讀取已持久化研究狀態。 |
 | GET | `/music/research/evidence` | 讀取有來源的證據卡。 |
 | POST | `/music/research/evidence/import` | 匯入獨立允許的公開文字證據。 |

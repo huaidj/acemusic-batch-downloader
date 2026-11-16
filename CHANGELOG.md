@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.8.4 — 2026-11-17（DeepSeek 研究上線：搜尋＋思考；面板維護整合）
+
+- DeepSeek 研究正式可用：`/music/research` 由 `auth_required` 變成 `ready`；金鑰只從伺服器環境變數 `DEEPSEEK_API_KEY` 讀取，不寫入請求、狀態或 SQLite。授權為有限批次（$2／200 次／2026-12-17 到期，`allowed_kinds`＝search、fetch、analyze）。
+- 新增 `research_analyze`（`POST /music/research/analyze`）：用 `deepseek-flash` 思考模式（`thinking:{type:enabled}`、`reasoning_effort` low/high/max）分析公開文字，回 `content`／`reasoning_content`／`usage`；依實際 token 用量以尖峰價結算，受同一份預算限制。reasoning 吃光 `max_output_tokens` 時回 `ANALYZE_OUTPUT_TRUNCATED`（附用量與 reasoning），不自動重送、不重複計費。
+- `music-runtime`：新增 `DEEPSEEK_RESEARCH_BASE_URL`；共用的 `DEEPSEEK_BASE_URL` 若指向官方 origin 只取其 origin（避免 `/anthropic` 相容路徑讓研究被判非官方），非官方 origin 仍交給執行器拒絕。
+- 安裝器 `install-update.ps1`：缺少時從使用者／機器環境補回 `DEEPSEEK_API_KEY` 與 `ACE_RESEARCH_CONFIG_FILE`，重跑更新不會讓 Hub 失去研究能力。
+- 面板把「一鍵整理／成品MP3／開啟分類資料夾／命名爐／指紋清除／整理舊檔／背景自動整理／清自訂重複／同步 Agent」收進同一個「維護」折疊區；新增「指紋清除」按鈕（native host 新命令 `strip-fingerprints`）。
+- 命名爐套用改名後會叫背景重建本機索引並通知開著的面板重畫；檔案模式仍提示回面板「維護 → 一鍵整理」。
+- 文件：`docs/GUIDE.md` 新增「3.4 維護功能一覽：指紋、分類、命名」；`HUB.md`、`README-AGENT.md` 補上新端點與工具。
+- 測試：`music-research.test.mjs` 新增 4 個 analyze 案例（思考參數、token 結算、範圍／預算／憑據門禁、401 不計費、reasoning 截斷）。
+- 打包脫敏：新增 `agent/lib/secret-scan.mjs`，`npm run pack` 會先掃描發佈物（`sk-` 金鑰樣式、GitHub token、Bearer token、`session.json`／`*.sqlite` 等私密狀態檔），命中就中止打包；錯誤訊息只列檔名與規則，不輸出金鑰內容。`PRIVACY.md` 與 `docs/privacy.html` 補上思考模式的傳輸與計費說明。
+
+## 1.8.3 — 2026-11-17（既有檔案指紋清除）
+
+- 新增 `agent/lib/fingerprints.mjs` 與 CLI `strip-fingerprints [--dry-run|--restore]`：把**已經在磁碟上**的音檔裡殘留的 ACE metadata 就地抹掉。
+  - WAV：`LIST/INFO`（IART／ICMT／ISFT…）、`id3 `／`bext`／`iXML`／`XMP ` chunk、`data` 尾端夾帶的 ID3；被截斷的 `data` chunk 後面接的完整 `id3 ` chunk 也處理。
+  - MP3：`TSSE`／`TENC` 編碼器戳記、含 `ACE Music` 的 `COMM`、指向 `acemusic.ai` 的 `WOAS`（`TIT2`／`TPE1`／`TALB`／`BPM`／`KEY`／`APIC`／`USLT` 一律保留）。
+  - 就地覆寫、**檔案長度與 inode 不變** → 硬連結的音頻分類檢視同步更新，`agent-state`／manifest／Chrome 下載紀錄的 size 與音頻分析快取都不失效；`mtime`／`atime` 還原。
+  - 指紋原 bytes 存到 `%LOCALAPPDATA%\AceMusicDL\fingerprint-backups\`，`--restore` 可原位還原；已驗證音檔的 `sha256` 同步更新，索引不會誤判「待核對」。
+- 下載路徑：MP3 也套用同一套等長清除（`stripMp3TagBuffer`），新下載的檔案不再帶 `TSSE`／`ACE COMM`／`WOAS`。
+- 一鍵整理最後新增 `fingerprints` 步驟（面板進度顯示「指紋清除」），重複執行會自動跳過已清的檔案。
+- 新增 `test/unit/fingerprints.test.mjs`：MP3 v2.3／v2.4、WAV LIST/INFO、硬連結、mtime 還原、備份還原、sha256 更新、下載緩衝區版、截斷檔尾端 id3、dry-run 共 10 個案例。
+
+## 1.8.2 — 2026-11-17（收藏夾）
+
+- 新增「收藏夾」：站點拇指點讚（`meta.rating === "good"`）與面板愛心收藏取聯集（同一首只算一次），把整首歌的檔案（成品 MP3／WAV、分軌、MIDI、MusicXML、封面）複製到 `ai音樂\收藏\<歌名>\`。
+- 只複製不搬原檔；內容相同跳過、同名不同內容保留使用者的檔（`--force` 才覆寫，舊檔先歸檔到 `organize-backups`）；`收藏\_收藏清單.json` 固定每首歌的資料夾名，兩首同名歌各自一個資料夾、不混檔。
+- 一鍵整理（含「下載完自動整理」）最後多一步 `favorites`；面板進度條與完成提示同步顯示「收藏夾」。
+- 整理各步（成品 WAV、採樣包、檔案分類、內容去重、空殼清理、音頻屬性分類）都把 `收藏` 排除在外，複本不會被搬走或再去重。
+- 新增 CLI `favorites [--dry-run] [--force] [--sync] [--root] [--folder] [--json]`、MCP `ace_collect_favorites`（`dry_run` 只回計畫）。
+- 新增 `test/unit/favorites.test.mjs`：聯集、整首歌複製、重跑只跳過、改過的檔不覆寫（force 才覆寫並歸檔）、dry-run 不落地、同名歌分開、站點快照損壞時面板愛心仍可用。
+
 ## 1.8.1 — 2026-11-17（WAV 指紋清洗）
 
 - 新增 `stripWavMetadata`：下載 WAV 時預設移除 RIFF `LIST/INFO`（`IART`／`ICMT`／`ISFT` 等 ACE 生成器與帳號指紋）與 `id3 `／`bext`／`iXML`／`XMP ` 等 metadata chunk；音頻樣本 bytes 不變，RIFF 長度重算。

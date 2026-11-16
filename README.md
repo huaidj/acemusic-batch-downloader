@@ -13,13 +13,15 @@
 - **批次下載**：分軌、MIDI、MusicXML、MP3、WAV、封面；可全選或單曲下載
 - **自動命名／分資料夾**：`<歌名>/<歌名> - Vocals.mp3`、`<歌名> - MIDI.mid`、`<歌名> - MusicXML.musicxml`
 - **WAV**：依站點模型能力與原始上傳音源判斷；有來源便獨立下載，不等 MIDI。原始 WAV 不冒充 MP3。
-- **一鍵整理**：舊檔整理 → 成品 MP3 → 成品 WAV → 採樣包（MP3 分軌）／採樣包WAV（WAV 分軌）→ 檔案分類 → 內容去重 → 空殼清理 → 音頻屬性分類（BPM／調性／能量）
+- **一鍵整理**：舊檔整理 → 成品 MP3 → 成品 WAV → 採樣包（MP3 分軌）／採樣包WAV（WAV 分軌）→ 檔案分類 → 內容去重 → 空殼清理 → 音頻屬性分類（BPM／調性／能量）→ 收藏夾
+- **收藏夾**：站點拇指點讚與面板愛心的歌，整首複製到 `ai音樂\收藏\<歌名>\`；只複製、內容相同跳過、同名不覆寫，原檔不動
+- **指紋清除**：既有檔案裡的 ACE metadata（WAV `LIST/INFO`／`id3`、MP3 `TSSE`／ACE `COMM`／`WOAS`）就地抹掉；檔長不變、可 `--restore` 還原，下載時也自動清
 - **不重複下載**：比對本機檔案、下載紀錄、去重紀錄；已存在的自動跳過
 - **狀態顯示**：本機索引按歌曲 ID、來源與實存檔案判斷；分開顯示確定缺檔與待核對，整理搬移後自動刷新。同名歌曲互不繼承紀錄。
 - **即時同步＋新歌自動下載**：訂閱站點推送，新歌完成約 50 ms 出現；可選「新歌自動下載」（MIDI／MusicXML 需另勾，因可能扣 credit）
 - **老歌新增分軌**：已開啟自動分軌下載時，偵測既有歌曲新增或更新的就緒分軌並下載；不主動購買分軌。MIDI／MusicXML 僅用於該歌已主動要求分軌且已授權樂譜生成的情況。
 - **獨立播放器**：可拖動及調整大小的視窗；本機曲庫、搜尋、下載狀態、佇列、播放清單、收藏、歷史與系統媒體鍵。[播放器說明](player/README.md)
-- **命名爐（預設顯示）**：面板「命名爐」按鈕打開雙語命名裝置；同一首歌的分軌／版本共用一個名字，可連接 ai音樂 資料夾後直接套用改名。名字有銘／儀／並／抽四種體裁。
+- **命名爐（預設顯示）**：面板「維護 → 命名爐」打開雙語命名裝置；同一首歌的分軌／版本共用一個名字，可連接 ai音樂 資料夾後直接套用改名，套用後自動重建本機索引。
 - **Agent 中樞**：CLI、MCP（含 `ace_locate` 找最新歌曲真實路徑、`ace_download_index`、`ace_player`、`ace_wait_new_song` 等新歌、`ace_generate` 預覽及明確提交 v1.1）、常駐 Agent Hub（127.0.0.1:8788，既有查詢熱路徑 <2 ms）
 - **HuaiDJ 創作中樞**：音樂意圖、版本化詞典、提示詞編譯、有限授權生成、產物回收與人評、DeepSeek 研究候選（`music_*`、`ace_create_*` 工具；預設不提交付費生成）
 - 完整說明：[docs/GUIDE.md](docs/GUIDE.md)｜開發規範：[docs/CONVENTIONS.md](docs/CONVENTIONS.md)｜設計系統：[docs/DESIGN-SYSTEM.md](docs/DESIGN-SYSTEM.md)
@@ -59,6 +61,7 @@ node agent\cli.mjs doctor
 node agent\cli.mjs list --undownloaded
 node agent\cli.mjs download --all --types stems,midi,cover
 node agent\cli.mjs tidy-all
+node agent\cli.mjs favorites --dry-run   # 站點點讚／面板愛心的歌 → ai音樂\收藏\
 ```
 
 MCP（stdio）：`node <repo>\agent\mcp.mjs`，工具包含 `ace_overview`、`ace_list_songs`、`ace_download`、`ace_job_status`、`ace_organize`、`ace_warm`、`ace_hub_status` 等。

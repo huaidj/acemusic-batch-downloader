@@ -1,6 +1,6 @@
 // One narrow contract shared by HTTP, MCP and CLI. No provider credentials here.
 import { CREATE_INPUT_SCHEMA } from './create-contract.mjs';
-import { RESEARCH_PREPARE_SCHEMA } from '../research/service.mjs';
+import { RESEARCH_PREPARE_SCHEMA, RESEARCH_ANALYZE_SCHEMA } from '../research/service.mjs';
 import { MUSIC_LOOP_PREPARE_SCHEMA } from './music-loop.mjs';
 const string = { type: 'string', maxLength: 8000 };
 const stringList = { type: 'array', items: string, maxItems: 50 };
@@ -17,7 +17,7 @@ const compile = {
 };
 function entry(action, name, method, path, description, properties = {}, required = [], readOnly = true) {
   return { action, name, method, path, description, inputSchema: { type: 'object', properties, required, additionalProperties: false },
-    annotations: { readOnlyHint: readOnly, destructiveHint: false, idempotentHint: readOnly || ['prompt_compile', 'generation_prepare', 'generation_submit', 'poll_generation', 'session_stop', 'dictionary_activate'].includes(action), openWorldHint: ['generation_submit', 'poll_generation', 'research_run', 'performance_probe'].includes(action) } };
+    annotations: { readOnlyHint: readOnly, destructiveHint: false, idempotentHint: readOnly || ['prompt_compile', 'generation_prepare', 'generation_submit', 'poll_generation', 'session_stop', 'dictionary_activate', 'research_analyze'].includes(action), openWorldHint: ['generation_submit', 'poll_generation', 'research_run', 'research_analyze', 'performance_probe'].includes(action) } };
 }
 export const MUSIC_CONTRACT = [
   entry('capabilities', 'music_capabilities', 'GET', '/music/capabilities', '三模型與模式的文件能力、實測狀態及授權限制。'),
@@ -43,6 +43,7 @@ export const MUSIC_CONTRACT = [
   entry('research_library', 'music_research_library', 'GET', '/music/research/library', '重新載入有限研究任務、來源、候選及已審快照。'),
   entry('research_prepare', 'music_research_prepare', 'POST', '/music/research/prepare', '準備公開文字 Search/Fetch，請求不能加入供應商憑據或預算。', RESEARCH_PREPARE_SCHEMA.properties, [], false),
   entry('research_run', 'music_research_run', 'POST', '/music/research/run', '有限伺服器授權下排入研究，短回任務識別。', { job_id: string }, ['job_id'], false),
+  entry('research_analyze', 'music_research_analyze', 'POST', '/music/research/analyze', '有限授權內用 DeepSeek 思考模式（deepseek-flash）分析公開文字；結果不是證據卡、不自動寫入詞典。', RESEARCH_ANALYZE_SCHEMA.properties, RESEARCH_ANALYZE_SCHEMA.required, false),
   entry('research_job', 'music_research_job', 'GET', '/music/research/job', '讀取已持久化研究狀態。', { job_id: string }, ['job_id']),
   entry('research_evidence', 'music_research_evidence', 'GET', '/music/research/evidence', '讀取有來源的證據卡。', { evidence_id: string }, ['evidence_id']),
   entry('research_import_evidence', 'music_research_import_evidence', 'POST', '/music/research/evidence/import', '匯入獨立允許的公開文字證據。', { source_url: string, title: string, summary: string, source: string, rights_status: string, ai_ingestion_allowed: { type: 'boolean' }, facts: stringList, inferences: stringList, snapshot_ids: RESEARCH_PREPARE_SCHEMA.properties.snapshot_ids }, ['source_url', 'summary', 'source', 'rights_status', 'ai_ingestion_allowed'], false),

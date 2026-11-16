@@ -727,11 +727,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       }
     });
     const dedupeCustomBtn = el('button', { type: 'button', 'data-act': 'dedupe-custom', text: '清自訂重複' });
+    const stripBtn = el('button', { type: 'button', 'data-act': 'strip-fingerprints', title: '掃描並就地抹掉既有檔案裡的 ACE metadata（WAV LIST/INFO、MP3 TSSE／COMM／WOAS）', text: '指紋清除' });
+    stripBtn.addEventListener('click', () => runStripFingerprints());
+    // 整理、分類、命名、指紋全部收在同一個「維護」折疊區，工具列只留一個入口。
     const maintenanceTools = el('details', { class: 'more-tools', 'data-maintenance-tools': '' }, [
-      el('summary', { text: '更多維護' }),
-      el('div', { class: 'maintenance-menu', role: 'group', 'aria-label': '進階維護工具' }, [organizeBtn, extractMp3Btn, watchBtn, dedupeCustomBtn, exportAgentBtn]),
+      el('summary', { text: '維護' }),
+      el('div', { class: 'maintenance-menu', role: 'group', 'aria-label': '整理、分類、命名與指紋' }, [tidyBtn, extractMp3Btn, openClassifyBtn, namingBtn, stripBtn, organizeBtn, watchBtn, dedupeCustomBtn, exportAgentBtn]),
     ]);
-    const toolbar2 = el('div', { class: 'toolbar library-tools', role: 'toolbar', 'aria-label': '曲庫工具' }, [el('span', { class: 'toolbar-label', text: '曲庫' }), tidyBtn, namingBtn, openClassifyBtn, maintenanceTools]);
+    const toolbar2 = el('div', { class: 'toolbar library-tools', role: 'toolbar', 'aria-label': '曲庫工具' }, [el('span', { class: 'toolbar-label', text: '曲庫' }), maintenanceTools]);
 
     const songsBox = el('div', { class: 'songs', 'data-songs': '' });
     const organizeBox = el('div', { class: 'organize', 'data-organize': '', hidden: true });
@@ -1870,7 +1873,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     }
   }
 
-  const TIDY_WEIGHTS = { organize: 4, mp3: 26, samples: 8, classify: 8, dedupe: 6, content: 14, folders: 5, audio: 29 };
+  const TIDY_WEIGHTS = { organize: 4, mp3: 26, samples: 8, classify: 8, dedupe: 6, content: 14, folders: 5, audio: 24, favorites: 3, fingerprints: 2 };
   const TIDY_LABELS = {
     organize: '整理舊檔',
     mp3: '補齊成品MP3',
@@ -1880,6 +1883,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     content: '內容去重',
     folders: '重複清理',
     audio: '音頻屬性分類',
+    favorites: '收藏夾',
+    fingerprints: '指紋清除',
     running: '補齊成品MP3',
     done: '完成',
   };
@@ -1961,9 +1966,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       const btn = S.els.tidyBtn;
       if (btn) btn.classList.add('on');
       if (silent) {
-        if (S.els.footHint) S.els.footHint.textContent = '已下載完成，背景自動整理中（成品MP3／採樣包／分類／音頻屬性）…';
+        if (S.els.footHint) S.els.footHint.textContent = '已下載完成，背景自動整理中（成品MP3／採樣包／分類／音頻屬性／收藏夾／指紋清除）…';
       } else {
-        flash('已開始一鍵整理（背景執行）：舊檔 → 成品MP3 → 採樣包 → 分類 → 音頻屬性分類');
+        flash('已開始一鍵整理（背景執行）：舊檔 → 成品MP3 → 採樣包 → 分類 → 音頻屬性分類 → 收藏夾 → 指紋清除');
       }
       startStatusPoll({
         name: 'tidy-status',
@@ -1992,6 +1997,20 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       });
     } catch (err) {
       if (!silent) flash('啟動整理失敗：' + ((err && err.message) || err));
+    }
+  }
+
+  async function runStripFingerprints() {
+    if (!S.host.ok) return flash('需要本機整理工具：請重跑 native\\install-host.ps1');
+    try {
+      const res = await sendMessage({ type: 'ACE_HOST_STRIP_FINGERPRINTS' });
+      if (!res || !res.ok) return flash('指紋清除失敗：' + ((res && res.error) || '本機工具沒有回應'));
+      const data = res.data || {};
+      const kb = Math.round((Number(data.bytesNeutralized) || 0) / 1024);
+      flash(`指紋清除：掃 ${data.scanned || 0} 個實體音檔、清除 ${data.cleaned || 0} 個（MP3 ${data.mp3 || 0}／WAV ${data.wav || 0}，抹掉 ${kb} KB）`);
+      refreshDownloadIndex(true).then(() => { if (S.songs.length) renderSongs(); }).catch(() => {});
+    } catch (err) {
+      flash('指紋清除失敗：' + friendlyError(err));
     }
   }
 
@@ -3716,6 +3735,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     .catch(() => {})
     .finally(startLocalStateSync);
   chrome.runtime.onMessage.addListener((message, sender) => {
+    if (message?.type === 'ACE_LIBRARY_CHANGED') {
+      if (sender?.id && sender.id !== chrome.runtime.id) return;
+      refreshDownloadIndex(true).then(() => { if (S.songs.length) renderSongs(); }).catch(() => {});
+      return;
+    }
     if (message?.type !== 'ACE_LOCAL_FILES_CHANGED' || !Number.isFinite(message.at)) return;
     if (sender?.id && sender.id !== chrome.runtime.id) return;
     scheduleLocalStateSync();
