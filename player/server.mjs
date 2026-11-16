@@ -281,7 +281,7 @@ export function createPlayerServer(options = {}) {
       if (![`127.0.0.1:${port}`, `localhost:${port}`].includes(host) || (req.headers.origin && req.headers.origin !== `http://${host}`) || req.headers['sec-fetch-site'] === 'cross-site') throw failure(403, '只允許播放器本機視窗存取', 'LOCAL_ORIGIN_REQUIRED');
       const url = new URL(req.url, `http://${host}`);
       const method = req.method || 'GET';
-      if (url.pathname === '/api/health' && method === 'GET') return json(res, 200, { ok: true, service: 'huaidj-player', version: '1.7.5', pid: process.pid });
+      if (url.pathname === '/api/health' && method === 'GET') return json(res, 200, { ok: true, service: 'huaidj-player', version: '1.8.0', pid: process.pid });
       if (url.pathname === '/api/selection' && method === 'GET') return json(res, 200, selection);
       if (url.pathname === '/api/library/revision' && method === 'GET') {
         const [indexed, likes] = await Promise.all([library(), likesRevision()]);
@@ -390,5 +390,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('ACE_PLAYER_PORT 必須是 1 到 65535 的整數');
   const server = createPlayerServer({ autoSyncSiteLikes: process.env.ACE_PLAYER_SITE_LIKES !== '0' });
   server.once('error', (err) => { console.error('播放器無法啟動：', err.code || err.name); process.exitCode = 1; });
-  server.listen(port, '127.0.0.1', () => console.log(`HuaiDJ Player 1.7.5 http://127.0.0.1:${port}`));
+  server.listen(port, '127.0.0.1', () => console.log(`HuaiDJ Player 1.8.0 http://127.0.0.1:${port}`));
 }

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ACE Music 批量下載器",
-  "version": "1.7.5",
+  "version": "1.8.0",
   "description": "在 acemusic.ai 一次下載整首歌的所有分軌（stems）、MIDI、MusicXML、MP3/WAV，自動改名並分類到「下載/ai音樂」。",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAr26tftjsO8eT8KnJkH5tqNxtSOcn7SGfckEJS6eCCoej24snDsZHNvblYwQ6rH4+4yypGha8/eWUg6aSOfBq+QIAMDMltxE88orHlKxx1EpBpOLNbl8iyGRHs2fs1ECvhPCMMMjdzUgMmJMoCjkjY1iEEyxCvDZI6Urf8KYqI4zOBgTT46wgCU9WAJ27+fckHS9nXwOnSPO5xLIxN95TrHOsHi36aanGzyeEuaPF+Rg5hLIeZ9gySB0ApOdZk/SfxxX6axl0OLw9JOITj3eoWfIvxgomzleW6dkbMCzplUfFVKMXKBuAcDAOoIk1UQz1YA258caCRl8AEWd59GKzKwIDAQAB",
   "icons": {

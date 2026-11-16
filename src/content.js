@@ -587,7 +587,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     const closeBtn = el('button', { class: 'iconbtn', type: 'button', 'data-act': 'close', title: '收起' }, ['✕']);
     const refreshBtn = el('button', { class: 'iconbtn', type: 'button', 'data-act': 'refresh', title: '重新整理歌單' }, ['↻']);
     const titleBox = el('div', { class: 'title', text: 'ACE 批量下載' });
-    const subBox = el('div', { class: 'sub', text: 'v1.7.5 · 分軌 · MIDI · WAV' });
+    const subBox = el('div', { class: 'sub', text: 'v1.8.0 · 分軌 · MIDI · WAV' });
     const alphaInput = el('input', { type: 'range', min: '40', max: '100', step: '5', 'data-ui': 'alpha', 'aria-label': '面板不透明度' });
     const alphaBox = el('label', { class: 'alpha', title: '面板不透明度（拖曳標題列可移動面板，雙擊標題列回到預設位置）' }, ['透明', alphaInput]);
     const header = el('header', { title: '拖曳移動；雙擊回到預設位置' }, [titleBox, subBox, alphaBox, refreshBtn, closeBtn]);
@@ -1356,9 +1356,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     if (cur.dictionary !== ctx.dictionaryId || cur.dictionaryVersion !== ctx.dictionaryVersion) return '詞典版本已改變，請重新隨機；原草稿已保留';
     if (!(ctx.limit > 0) || cur.text.length > ctx.limit) return `目前上限 ${ctx.limit || '?'} 字，這份草稿有 ${cur.text.length} 字；請重新隨機，原文不截斷`;
     if (Number(cur.limit) !== ctx.limit) return '欄位字數上限已改變，請重新隨機；原草稿已保留';
-    const compiled = P2.compile(ctx.dictionary, cur.a?.id, cur.b?.id, ctx.limit);
+    const compiled = P2.compile(ctx.dictionary, cur.a?.id, cur.b?.id, 0);
     if (!compiled.ok) return compiled.reason;
-    if (compiled.text !== cur.text) return '詞條內容已更新，請重新隨機；原草稿已保留';
+    // Idea 草稿帶歌名前綴；重編時用同一個歌名，才能判斷詞條本身有沒有變。
+    const expected = cur.titleInPrompt ? P2.withTitle(compiled.text, cur.title) : compiled.text;
+    if (expected.length > ctx.limit) return `目前上限 ${ctx.limit} 字，這份草稿有 ${expected.length} 字；請重新隨機，原文不截斷`;
+    if (expected !== cur.text) return '詞條內容已更新，請重新隨機；原草稿已保留';
     return '';
   }
   function setNativeValue(node, value) {
