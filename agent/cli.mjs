@@ -33,6 +33,10 @@ function usage() {
 用法：
   node cli.mjs doctor                         檢查登入狀態與環境
   node cli.mjs locate [--latest N|--query 字|--song id] [--views] [--json]  歌曲 → 本機真實目錄（預設最新一首）
+  node cli.mjs library [--sizes] [--json]      曲庫分類總覽（成品MP3/WAV、採樣包各樂器、MIDI…）
+  node cli.mjs events [--since seq] [--type t]  中樞事件（新歌、自動下載、下載完成）
+  node cli.mjs wait [--timeout 秒]             等待下一首新歌（需 Hub＋開著站點分頁）
+  node cli.mjs probe                           站點健康（唯讀）
   node cli.mjs list [--query 關鍵字] [--undownloaded] [--json] 列出可下載歌曲
   node cli.mjs download --all [選項]           下載全部歌曲
   node cli.mjs download --song <task_id> ...   下載指定歌曲（可重複）
@@ -143,6 +147,53 @@ async function main() {
         console.log('  已記住歌曲/檔案 :', report.rememberedSongs, '/', report.rememberedFiles);
         const pg = report.page;
         console.log('  頁面快照        :', pg.savedAt ? ` 首，${pg.savedAt}（${pg.fresh ? '新鮮' : '過舊，開一次 acemusic.ai/create 頁面即可更新'}）；不可用紀錄 ${pg.unavailable}` : '尚未收到（開 acemusic.ai/create 頁面，面板會自動送出）');
+        return;
+    }
+
+    if (cmd === 'library') {
+        const viaHub = args.flags.local ? null : await hubTry('/library' + (args.flags.sizes ? '?sizes=1' : ''), { timeoutMs: 15000 });
+        const result = viaHub || (await ACE.libraryOverview(cfg, { withSizes: !!args.flags.sizes }));
+        if (args.flags.json) return printJson(result);
+        console.log('曲庫：' + result.root);
+        for (const c of result.categories) {
+            const label = c.sub ? `${c.category}／${c.sub}` : c.category;
+            console.log(`  ${label.padEnd(18)} ${String(c.files).padStart(5)} 檔${c.bytes != null ? `　${(c.bytes / 1048576).toFixed(1)} MB` : ''}`);
+        }
+        if (result.otherFolderCount) console.log(`  （另有 ${result.otherFolderCount} 個未分類資料夾，例如歌名資料夾）`);
+        return;
+    }
+
+    if (cmd === 'probe') {
+        const result = await ACE.probeSite(cfg);
+        if (args.flags.json) return printJson(result);
+        const st = result.status || {};
+        console.log(`站點 ${result.baseUrl}：HTTP ${st.http || '—'}（${result.elapsedMs} ms）`);
+        console.log(`  登入：${st.loggedIn ? '是' : '否'}${st.plan ? '　方案：' + st.plan : ''}`);
+        if (st.models) console.log('  模型：' + st.models.join('、'));
+        if (st.error) console.log('  錯誤：' + st.error);
+        return;
+    }
+
+    if (cmd === 'events' || cmd === 'wait') {
+        if (cmd === 'events') {
+            const q = new URLSearchParams();
+            if (args.flags.since) q.set('since', String(args.flags.since));
+            if (args.flags.type && args.flags.type !== true) q.set('type', String(args.flags.type));
+            const viaHub = await hubTry('/page/events?' + q.toString(), { timeoutMs: 2000 });
+            const result = viaHub || { ok: true, hub: false, events: await ACE.readPageEvents(cfg) };
+            if (args.flags.json) return printJson(result);
+            if (!result.events.length) return console.log('（沒有事件；開著 acemusic.ai/create 分頁時才會產生）');
+            for (const e of result.events) console.log(`${new Date(e.at).toLocaleString()}  ${e.seq != null ? '#' + e.seq + ' ' : ''}${e.type}  ${e.title || e.task_id || (e.task_ids || []).join(',')}${e.type === 'download_done' ? `（完成 ${e.done}／失敗 ${e.failed}）` : ''}`);
+            return;
+        }
+        const timeoutSec = Number(args.flags.timeout) || 120;
+        const head = await hubTry('/page/events?limit=1', { timeoutMs: 2000 });
+        if (!head) throw new Error('Hub 未啟動：node agent\\cli.mjs hub --background');
+        if (!args.flags.json) console.log(`等待新歌（最多 ${timeoutSec} 秒）…`);
+        const got = await hubTry(`/wait?type=song_new&since=${head.lastSeq || 0}&timeout=${timeoutSec * 1000}`, { timeoutMs: timeoutSec * 1000 + 5000 });
+        if (args.flags.json) return printJson(got || { ok: false });
+        if (!got || !got.event) return console.log('逾時，沒有新歌');
+        console.log(`新歌：${got.event.title || ''}　[${got.event.task_id}]`);
         return;
     }
 

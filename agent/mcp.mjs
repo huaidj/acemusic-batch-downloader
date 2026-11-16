@@ -67,6 +67,45 @@ const TOOLS = [
         },
     },
     {
+        name: 'ace_wait_new_song',
+        description: '等待下一首「新完成」的歌（站點即時推送 → 面板 → Hub）。wait_download=true 時再等它被自動下載完成並回傳真實路徑。需要開著 acemusic.ai/create 分頁與 Hub。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                timeout_sec: { type: 'number', description: '最長等待秒數（預設 120，上限 1800）' },
+                wait_download: { type: 'boolean', description: '等自動下載完成後回傳 locate 結果（預設 false）' },
+            },
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'ace_events',
+        description: '最近的中樞事件：song_new（新歌完成）、auto_download（開始自動下載）、download_done（下載完成，含完成/失敗數）。用 since（seq）只拿新的。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                since: { type: 'number', description: '只回 seq 大於此值的事件' },
+                type: { type: 'string', description: 'song_new / auto_download / download_done' },
+                limit: { type: 'number', description: '最多幾筆（預設 50）' },
+            },
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'ace_library',
+        description: '曲庫分類總覽：成品MP3、成品WAV、採樣包（各樂器）、MIDI、MusicXML、封面、壓縮檔、其他、音頻分類 各自的資料夾路徑與檔案數（sizes=true 另算大小）。',
+        inputSchema: {
+            type: 'object',
+            properties: { sizes: { type: 'boolean', description: '計算大小（較慢）' } },
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'ace_probe',
+        description: '站點健康（唯讀、不扣額度）：/api/status 是否可連、是否登入、方案、可用模型。',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    },
+    {
         name: 'ace_list_songs',
         description: '列出 ACE Music 已完成的歌曲（含分軌數、MIDI 可用、長度、以及「已下載/部分/未下載」狀態與每種類型進度）。預設回傳精簡欄位（速度快）；需要完整 detail 時傳 compact=false。',
         inputSchema: {
@@ -229,6 +268,51 @@ async function callTool(name, args) {
             }
             if (args.files === false) result.songs = result.songs.map(({ files, ...rest }) => rest);
             return result;
+        }
+        case 'ace_wait_new_song': {
+            const timeoutMs = Math.min(1800, Math.max(1, Number(args.timeout_sec) || 120)) * 1000;
+            const deadline = Date.now() + timeoutMs;
+            let head;
+            try {
+                head = await hubCall('/page/events?limit=1', { timeoutMs: 1500 });
+            } catch (err) {
+                return { ok: false, error: 'Hub 未啟動：先執行 node agent\\cli.mjs hub --background，並開著 acemusic.ai/create 分頁', detail: String((err && err.message) || err) };
+            }
+            const since = head.lastSeq || 0;
+            const got = await hubCall(`/wait?type=song_new&since=${since}&timeout=${timeoutMs}`, { timeoutMs: timeoutMs + 5000 });
+            if (!got.event) return { ok: true, timedOut: true };
+            const result = { ok: true, timedOut: false, song: got.event };
+            if (args.wait_download) {
+                const left = Math.max(1000, deadline - Date.now());
+                const done = await hubCall(`/wait?type=download_done&task_id=${encodeURIComponent(got.event.task_id)}&since=${got.event.seq}&timeout=${left}`, { timeoutMs: left + 5000 });
+                result.download = done.event || null;
+                result.downloadTimedOut = !done.event;
+                if (done.event) result.locate = await hubCall('/locate?song=' + encodeURIComponent(got.event.task_id), { timeoutMs: 5000 }).catch(() => null);
+            }
+            return result;
+        }
+        case 'ace_events': {
+            const params = new URLSearchParams();
+            if (args.since) params.set('since', String(args.since));
+            if (args.type) params.set('type', String(args.type));
+            if (args.limit) params.set('limit', String(args.limit));
+            try {
+                return { ...(await hubCall('/page/events?' + params.toString(), { timeoutMs: 1500 })), hub: true };
+            } catch {
+                // 沒有 Hub：直接讀面板寫的事件檔（沒有 seq，用 at）
+                const events = await ACE.readPageEvents(undefined, {});
+                return { ok: true, hub: false, events: events.slice(-(Number(args.limit) || 50)) };
+            }
+        }
+        case 'ace_library': {
+            try {
+                return { ...(await hubCall('/library' + (args.sizes ? '?sizes=1' : ''), { timeoutMs: 15000 })), hub: true };
+            } catch {
+                return await ACE.libraryOverview(undefined, { withSizes: !!args.sizes });
+            }
+        }
+        case 'ace_probe': {
+            return await ACE.probeSite();
         }
         case 'ace_list_songs': {
             const limit = args.limit === 0 ? 0 : Number(args.limit) || 50;

@@ -77,6 +77,7 @@ async function refreshSnapshot(rebuild = false) {
     try {
       // rebuild：重算快照（不打網路，歌單優先吃頁面快照）；否則可用 60 秒內的磁碟快照
       const next = rebuild ? await ACE.buildLibrarySnapshot(cfg, { refresh: false }) : await ACE.getLibrarySnapshot(cfg, { refresh: false });
+      noteSnapshotSongs(next);
       snapshot = next;
       snapshotAt = Date.now();
       broadcast('snapshot', { at: new Date(snapshotAt).toISOString(), counts: next.counts });
@@ -88,9 +89,57 @@ async function refreshSnapshot(rebuild = false) {
   return refreshing;
 }
 
-/* 頁面 → agent：面板寫入 page-songs／page-unavailable 時立即失效快照並推 SSE（不等 TTL） */
-const PAGE_FILES = new Set(['page-songs.json', 'page-unavailable.json']);
-let pageTimer = null;
+/* ------------------------------------------------------------------ *
+ * 事件環（最近 200 筆）：頁面事件＋Hub 自己從歌單差異推出的 song_new
+ * /wait 長輪詢：agent 等「下一首新歌／下一次下載完成」
+ * ------------------------------------------------------------------ */
+const EVENTS = [];
+const waiters = new Set();
+let lastPageEventAt = 0;
+let knownSongIds = null;
+function pushEvent(evt) {
+  const event = { ...evt, at: Number(evt.at) || Date.now(), seq: (EVENTS.length ? EVENTS[EVENTS.length - 1].seq : 0) + 1 };
+  EVENTS.push(event);
+  if (EVENTS.length > 200) EVENTS.splice(0, EVENTS.length - 200);
+  broadcast('event', event);
+  for (const waiter of [...waiters]) {
+    if (waiter.match(event)) {
+      waiters.delete(waiter);
+      waiter.resolve(event);
+    }
+  }
+}
+function noteSnapshotSongs(next) {
+  const ids = new Set((next.songs || []).map((s) => s.task_id));
+  if (knownSongIds) {
+    for (const song of next.songs || []) {
+      if (!knownSongIds.has(song.task_id)) pushEvent({ type: 'song_new', source: 'hub', task_id: song.task_id, title: song.title });
+    }
+  }
+  knownSongIds = ids;
+}
+async function ingestPageEvents() {
+  const fresh = await ACE.readPageEvents(cfg, { since: lastPageEventAt });
+  for (const evt of fresh) {
+    lastPageEventAt = Math.max(lastPageEventAt, Number(evt.at) || 0);
+    pushEvent({ ...evt, source: 'page' });
+  }
+}
+function waitForEvent(match, timeoutMs) {
+  return new Promise((resolve) => {
+    const waiter = { match, resolve };
+    waiters.add(waiter);
+    const timer = setTimeout(() => {
+      waiters.delete(waiter);
+      resolve(null);
+    }, Math.max(100, Math.min(timeoutMs, 30 * 60 * 1000)));
+    timer.unref?.();
+  });
+}
+
+/* 頁面 → agent：面板寫入 page-songs／page-unavailable／page-events 時立即處理並推 SSE（不等 TTL） */
+const PAGE_FILES = new Set(['page-songs.json', 'page-unavailable.json', 'page-events.json']);
+const pageTimers = new Map();
 let pageWatcher = null;
 let lastPageEvent = null;
 function startPageWatch() {
@@ -98,13 +147,18 @@ function startPageWatch() {
     pageWatcher = fs.watch(cfg.stateDir, (_event, filename) => {
       const name = String(filename || '');
       if (!PAGE_FILES.has(name)) return;
-      clearTimeout(pageTimer);
-      pageTimer = setTimeout(() => {
-        snapshotAt = 0;
+      // 每個檔案各自 debounce（事件檔與歌單檔同時寫入時互不吃掉）
+      clearTimeout(pageTimers.get(name));
+      pageTimers.set(name, setTimeout(() => {
         lastPageEvent = { file: name, at: new Date().toISOString() };
         broadcast('page', lastPageEvent);
+        if (name === 'page-events.json') {
+          ingestPageEvents().catch(() => {});
+          return;
+        }
+        snapshotAt = 0;
         refreshSnapshot(true).catch(() => {});
-      }, 250);
+      }, name === 'page-events.json' ? 60 : 200));
     });
     pageWatcher.on('error', () => {});
   } catch (err) {
@@ -369,6 +423,31 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, ...(await ACE.pageChannelStatus(cfg)), lastEvent: lastPageEvent });
     }
 
+    if (pathname === '/page/events' && req.method === 'GET') {
+      const since = Number(url.searchParams.get('since') || 0);
+      const type = url.searchParams.get('type') || '';
+      const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') || 50)));
+      const rows = EVENTS.filter((e) => e.seq > since && (!type || e.type === type)).slice(-limit);
+      return json(res, 200, { ok: true, total: rows.length, lastSeq: EVENTS.length ? EVENTS[EVENTS.length - 1].seq : 0, events: rows });
+    }
+
+    // 長輪詢：等下一個符合的事件（type、task_id 可選）；timeout 毫秒，預設 60 秒
+    if (pathname === '/wait' && req.method === 'GET') {
+      const type = url.searchParams.get('type') || 'song_new';
+      const taskId = url.searchParams.get('task_id') || '';
+      const since = Number(url.searchParams.get('since') || 0);
+      const timeoutMs = Number(url.searchParams.get('timeout') || 60000);
+      const match = (e) => e.type === type && (!taskId || e.task_id === taskId || (Array.isArray(e.task_ids) && e.task_ids.includes(taskId)));
+      // since 之後已經發生過 → 立即回
+      const already = since ? EVENTS.find((e) => e.seq > since && match(e)) : null;
+      const event = already || (await waitForEvent(match, timeoutMs));
+      return json(res, 200, { ok: true, timedOut: !event, event });
+    }
+
+    if (pathname === '/library' && req.method === 'GET') {
+      return json(res, 200, await ACE.libraryOverview(cfg, { withSizes: url.searchParams.get('sizes') === '1' }));
+    }
+
     if (pathname === '/songs' && req.method === 'GET') {
       const snap = await getSnapshot();
       const rows = filterSongs(snap.songs, url);
@@ -506,6 +585,7 @@ server.listen(PORT, HOST, () => {
   console.log(`[hub] 讀取走記憶體快照；寫入走單一佇列；事件流：GET /events`);
   refreshSnapshot().catch((err) => console.error('[hub] 初次快照失敗：', (err && err.message) || err));
   startPageWatch();
+  ingestPageEvents().catch(() => {}); // 載入既有頁面事件當歷史
 });
 
 const heartbeat = setInterval(() => {

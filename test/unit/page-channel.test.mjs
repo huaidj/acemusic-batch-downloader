@@ -190,6 +190,109 @@ function freePort() {
   });
 }
 
+async function startHub(sb) {
+  const port = await freePort();
+  const env = { ...process.env, ACE_HUB_PORT: String(port), ACE_STATE_DIR: sb.stateDir, ACE_DOWNLOAD_DIR: sb.downloadDir, ACE_BASE_URL: 'http://127.0.0.1:9' };
+  const child = spawn(process.execPath, [HUB], { env, cwd: PROJECT, stdio: ['ignore', 'pipe', 'pipe'] });
+  const get = async (p, timeout = 3000) => (await fetch(`http://127.0.0.1:${port}${p}`, { signal: AbortSignal.timeout(timeout) })).json();
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    try {
+      const o = await get('/overview');
+      if (o.ok) break;
+    } catch { /* retry */ }
+    await sleep(150);
+  }
+  return { child, get, port };
+}
+
+test('hub 中樞：歌單差異 → song_new 事件；頁面事件 → /page/events；/wait 長輪詢；/library', async () => {
+  const sb = sandbox('hub-events');
+  sb.write('page-songs.json', { savedAt: Date.now(), songs: [song('e1', 'Event One', 1000)] });
+  sb.write('cache/session-status.json', { cachedAt: Date.now(), ttlMs: 120000, sessionMtimeMs: 0, status: { authenticated: false } });
+  sb.touch('ai音樂/成品MP3/Event One.mp3');
+  sb.touch('ai音樂/採樣包/Vocals/Event One - Vocals.mp3');
+  sb.touch('ai音樂/採樣包/Drums/Event One - Drums.mp3');
+  sb.touch('ai音樂/MIDI/Event One - MIDI.mid');
+  const hub = await startHub(sb);
+  try {
+    const head = await hub.get('/page/events?limit=1');
+    // 開始等，然後模擬面板送來新歌單
+    const waiting = hub.get(`/wait?type=song_new&since=${head.lastSeq}&timeout=5000`, 8000);
+    await sleep(100);
+    sb.write('page-songs.json', { savedAt: Date.now(), songs: [song('e2', 'Event Two', 2000), song('e1', 'Event One', 1000)] });
+    const got = await waiting;
+    assert.equal(got.timedOut, false, '/wait 應在新歌出現時回應');
+    assert.equal(got.event.type, 'song_new');
+    assert.equal(got.event.task_id, 'e2');
+
+    // 面板事件檔 → 事件環
+    sb.write('page-events.json', { savedAt: Date.now(), events: [{ type: 'download_done', task_ids: ['e2'], done: 3, failed: 0, at: Date.now() }] });
+    let events = null;
+    const until = Date.now() + 4000;
+    while (Date.now() < until) {
+      events = await hub.get('/page/events?type=download_done');
+      if (events.total) break;
+      await sleep(80);
+    }
+    assert.equal(events.total, 1, 'download_done 應進入事件環');
+    assert.equal(events.events[0].source, 'page');
+
+    // since 之後已發生的事件：/wait 立即回
+    const immediate = await hub.get(`/wait?type=download_done&task_id=e2&since=${got.event.seq}&timeout=3000`);
+    assert.equal(immediate.timedOut, false);
+
+    const timed = await hub.get('/wait?type=song_new&timeout=300');
+    assert.equal(timed.timedOut, true);
+
+    const lib = await hub.get('/library');
+    const by = Object.fromEntries(lib.categories.map((c) => [c.sub ? `${c.category}/${c.sub}` : c.category, c.files]));
+    assert.equal(by['成品MP3'], 1);
+    assert.equal(by['採樣包/Vocals'], 1);
+    assert.equal(by['採樣包/Drums'], 1);
+    assert.equal(by['MIDI'], 1);
+  } finally {
+    hub.child.kill();
+  }
+});
+
+test('mcp：tools/list 含中樞工具', async () => {
+  const child = spawn(process.execPath, [path.join(PROJECT, 'agent', 'mcp.mjs')], { cwd: PROJECT, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ACE_HUB_URL: 'http://127.0.0.1:1' } });
+  let buf = '';
+  const replies = new Map();
+  child.stdout.on('data', (chunk) => {
+    buf += String(chunk);
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line) continue;
+      try {
+        const msg = JSON.parse(line);
+        if (msg.id != null) replies.set(msg.id, msg);
+      } catch { /* ignore */ }
+    }
+  });
+  const send = (msg) => child.stdin.write(JSON.stringify(msg) + '\n');
+  const reply = async (id) => {
+    const until = Date.now() + 8000;
+    while (!replies.has(id) && Date.now() < until) await sleep(20);
+    return replies.get(id);
+  };
+  try {
+    send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '0' } } });
+    await reply(1);
+    send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
+    const list = await reply(2);
+    const names = list.result.tools.map((t) => t.name);
+    for (const name of ['ace_locate', 'ace_wait_new_song', 'ace_events', 'ace_library', 'ace_probe', 'ace_overview', 'ace_download']) {
+      assert.ok(names.includes(name), 'MCP 應提供 ' + name);
+    }
+  } finally {
+    child.kill();
+  }
+});
+
 test('hub：/locate、/page；寫入 page-songs.json 後快照立即更新（不等 TTL）', async () => {
   const sb = sandbox('hub-page');
   sb.write('page-songs.json', { savedAt: Date.now(), songs: [song('h1', 'Hub One', 1000)] });

@@ -92,6 +92,91 @@ export async function readPageSongs(cfg = config()) {
     return { savedAt: Number(raw.savedAt) || 0, songs };
 }
 
+/** 面板送來的頁面事件（song_new／auto_download／download_done），由舊到新 */
+export async function readPageEvents(cfg = config(), { since = 0 } = {}) {
+    const raw = await readJson(path.join(cfg.stateDir, 'page-events.json'), null);
+    const events = raw && Array.isArray(raw.events) ? raw.events : [];
+    return events.filter((evt) => evt && Number(evt.at) > Number(since || 0));
+}
+
+/**
+ * 曲庫分類總覽：ai音樂 下每個分類（成品MP3／成品WAV／採樣包各樂器／MIDI…）的檔案數；
+ * withSizes=true 另算大小（需 stat，較慢）。音頻分類是 hardlink 檢視，只列檔數、不重複算大小。
+ */
+export async function libraryOverview(cfg = config(), { withSizes = false } = {}) {
+    const index = await collectDownloadIndex(cfg);
+    const root = path.join(cfg.downloadDir, 'ai音樂');
+    const rootLower = root.toLowerCase() + path.sep;
+    const groups = new Map();
+    let songFolders = 0;
+    for (const full of index.files || []) {
+        if (!full.toLowerCase().startsWith(rootLower)) continue;
+        const parts = full.slice(rootLower.length).split(/[\\/]/);
+        if (parts.length < 2) continue;
+        const top = parts[0];
+        const sub = (top === '採樣包' || top === '採樣包WAV') && parts.length > 2 ? parts[1] : '';
+        const key = sub ? `${top}/${sub}` : top;
+        const entry = groups.get(key) || { category: top, sub: sub || null, dir: path.join(root, ...(sub ? [top, sub] : [top])), files: 0, bytes: withSizes ? 0 : undefined };
+        entry.files += 1;
+        if (withSizes && top !== '音頻分類') {
+            try {
+                entry.bytes += fs.statSync(full).size;
+            } catch {
+                /* ignore */
+            }
+        }
+        groups.set(key, entry);
+    }
+    const KNOWN = ['成品MP3', '成品WAV', '採樣包', '採樣包WAV', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他', '音頻分類', '俱樂部版'];
+    const categories = [...groups.values()];
+    for (const cat of categories) if (!KNOWN.includes(cat.category)) songFolders += 1;
+    categories.sort((a, b) => {
+        const ia = KNOWN.indexOf(a.category);
+        const ib = KNOWN.indexOf(b.category);
+        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || String(a.sub || '').localeCompare(String(b.sub || ''));
+    });
+    return {
+        ok: true,
+        root,
+        indexedAt: index.at ? new Date(index.at).toISOString() : null,
+        note: '音頻分類 是 hardlink 檢視（同一份資料），索引深度 3 層，深層檔案未全數列入',
+        categories: categories.filter((c) => KNOWN.includes(c.category)),
+        otherFolders: categories.filter((c) => !KNOWN.includes(c.category)).map((c) => ({ name: c.category, dir: c.dir, files: c.files })),
+        otherFolderCount: songFolders,
+    };
+}
+
+/** 站點健康（唯讀）：/api/status 的方案／模型；不回傳個資 */
+export async function probeSite(cfg = config()) {
+    const started = Date.now();
+    const out = { ok: false, baseUrl: cfg.baseUrl, checkedAt: new Date().toISOString() };
+    let session = null;
+    try {
+        session = await loadSession(cfg);
+    } catch (err) {
+        out.session = { ok: false, error: String(err.code || err.message) };
+    }
+    try {
+        const res = await aceFetch(cfg, session || {}, '/api/status', { headers: { Accept: 'application/json' } });
+        out.status = { http: res.status };
+        const data = await res.json().catch(() => null);
+        if (data && typeof data === 'object') {
+            const user = data.user || null;
+            out.status.loggedIn = !!user;
+            if (user) out.status.plan = user.plan || null;
+            if (Array.isArray(data.models)) out.status.models = data.models.map((m) => (typeof m === 'string' ? m : m && (m.id || m.name))).filter(Boolean);
+            out.status.upload = !!data.upload;
+            out.status.cover = !!data.cover;
+        }
+        out.ok = res.ok;
+    } catch (err) {
+        out.status = { error: String((err && err.message) || err) };
+    }
+    if (session) out.session = { ok: !!(out.status && out.status.loggedIn), exportedAt: session.savedAt ? new Date(session.savedAt).toISOString() : null };
+    out.elapsedMs = Date.now() - started;
+    return out;
+}
+
 /** 頁面通道健康度：快照時間、筆數、是否新鮮、不可用紀錄數 */
 export async function pageChannelStatus(cfg = config(), { freshMs = 10 * 60 * 1000 } = {}) {
     const [page, na] = await Promise.all([
