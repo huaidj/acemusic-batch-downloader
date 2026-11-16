@@ -1195,6 +1195,46 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       .join('|');
   }
 
+  /**
+   * 頁面 → agent 快速通道：歌單變了就把精簡快照交給本機（page-songs.json），
+   * agent 不必再打站點 API（也不受 session 過期影響）。背景執行、不阻塞 UI。
+   */
+  const PAGE_SONG_FIELDS = ['task_id', 'model', 'capability', 'status', 'created_at', 'finished_at', 'local_audio', 'local_cover', 'stems'];
+  function pageSongSnapshot(songs) {
+    return songs.map((song) => {
+      const out = {};
+      for (const key of PAGE_SONG_FIELDS) if (song[key] != null) out[key] = song[key];
+      out.meta = { title: (song.meta && song.meta.title) || '' };
+      const result = song.result || {};
+      if (result.duration_sec != null || result.duration != null) out.result = { duration_sec: result.duration_sec != null ? result.duration_sec : result.duration };
+      return out;
+    });
+  }
+  let pageExportSig = '';
+  let pageExportAt = 0;
+  const PAGE_EXPORT_HEARTBEAT_MS = 5 * 60 * 1000; // 沒變化也定期刷新 savedAt，讓 agent 知道快照仍新鮮
+  function exportPageSongs(songs, sig) {
+    if (TEST_MODE || !S.host || !S.host.ok || !songs.length) return;
+    if (sig === pageExportSig && Date.now() - pageExportAt < PAGE_EXPORT_HEARTBEAT_MS) return;
+    pageExportSig = sig;
+    pageExportAt = Date.now();
+    sendMessage({
+      type: 'ACE_HOST_EXPORT_PAGE',
+      name: 'page-songs',
+      data: { savedAt: Date.now(), origin: location.origin, count: songs.length, songs: pageSongSnapshot(songs) },
+    })
+      .then((res) => {
+        if (!res || !res.ok) pageExportSig = '';
+      })
+      .catch(() => {
+        pageExportSig = '';
+      });
+  }
+  function exportPageUnavailable() {
+    if (TEST_MODE || !S.host || !S.host.ok) return;
+    sendMessage({ type: 'ACE_HOST_EXPORT_PAGE', name: 'page-unavailable', data: { savedAt: Date.now(), unavailable: S.unavailable } }).catch(() => {});
+  }
+
   function applySongs(songs) {
     const sig = songsSignature(songs);
     const changed = sig !== S.lastSig;
@@ -1205,6 +1245,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     S.lastUpdated = time.toLocaleTimeString('zh-TW', { hour12: false });
     if (changed) renderSongs();
     else updateCounts();
+    exportPageSongs(songs, sig);
   }
 
   async function fetchSongs() {
@@ -1230,7 +1271,12 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       S.loaded = true;
       renderSongs();
       refreshHostStatus()
-        .then(() => refreshDownloadIndex(true))
+        .then(() => {
+          // 首次載入時 host 狀態可能還沒確認，確認後補送一次快照
+          exportPageSongs(S.songs, S.lastSig);
+          if (S.unavailable && Object.keys(S.unavailable).length) exportPageUnavailable();
+          return refreshDownloadIndex(true);
+        })
         .then(() => {
           if (S.songs.length) renderSongs();
         });
@@ -1509,6 +1555,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
         const next = P.markUnavailable(prev, taskId, kind, 'no_download');
         S.unavailable = P.mergeUnavailable(S.unavailable, next);
         await storageSet({ [KEY_UNAVAILABLE]: next });
+        exportPageUnavailable();
       })
       .catch(() => {});
     return unavailableChain;

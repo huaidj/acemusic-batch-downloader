@@ -32,6 +32,7 @@ function usage() {
 
 用法：
   node cli.mjs doctor                         檢查登入狀態與環境
+  node cli.mjs locate [--latest N|--query 字|--song id] [--views] [--json]  歌曲 → 本機真實目錄（預設最新一首）
   node cli.mjs list [--query 關鍵字] [--undownloaded] [--json] 列出可下載歌曲
   node cli.mjs download --all [選項]           下載全部歌曲
   node cli.mjs download --song <task_id> ...   下載指定歌曲（可重複）
@@ -128,6 +129,7 @@ async function main() {
             session: { authenticated: status.authenticated, exportedAt: status.exportedAt, error: status.error },
             rememberedSongs: Object.keys(state.folderByTask).length,
             rememberedFiles: Object.values(state.history).reduce((n, item) => n + Object.keys((item && item.files) || {}).length, 0),
+            page: await ACE.pageChannelStatus(cfg),
         };
         if (args.flags.json) return printJson(report);
         console.log('ACE Music 批量下載器 CLI — 環境檢查');
@@ -139,6 +141,36 @@ async function main() {
         if (report.session.exportedAt) console.log('  匯出時間        :', report.session.exportedAt);
         console.log('  下載紀錄        :', report.historyFile.path, report.historyFile.exists ? `（${report.historyFile.records} 筆）` : '（未匯出）');
         console.log('  已記住歌曲/檔案 :', report.rememberedSongs, '/', report.rememberedFiles);
+        const pg = report.page;
+        console.log('  頁面快照        :', pg.savedAt ? ` 首，${pg.savedAt}（${pg.fresh ? '新鮮' : '過舊，開一次 acemusic.ai/create 頁面即可更新'}）；不可用紀錄 ${pg.unavailable}` : '尚未收到（開 acemusic.ai/create 頁面，面板會自動送出）');
+        return;
+    }
+
+    if (cmd === 'locate') {
+        // 歌曲 → 本機真實目錄；預設最新一首。Hub 在跑就走 Hub（記憶體／ms 級）
+        const q = new URLSearchParams();
+        const songId = (args.multi.song && args.multi.song[0]) || '';
+        if (songId) q.set('song', songId);
+        if (args.flags.query && args.flags.query !== true) q.set('q', String(args.flags.query));
+        if (args.flags.latest) q.set('latest', String(args.flags.latest === true ? 1 : args.flags.latest));
+        if (args.flags.views) q.set('views', '1');
+        const viaHub = args.flags.local ? null : await hubTry('/locate?' + q.toString(), { timeoutMs: 5000 });
+        const result = viaHub || (await ACE.locateSongs(cfg, {
+            songId,
+            query: q.get('q') || '',
+            latest: Number(q.get('latest') || 0),
+            includeViews: !!args.flags.views,
+        }));
+        if (args.flags.json) return printJson(result);
+        if (!result.songs.length) return console.log('找不到符合的歌曲');
+        for (const song of result.songs) {
+            console.log(`　[${song.task_id}]　${song.created_at || ''}`);
+            if (!song.fileCount) {
+                console.log('   （本機還沒有這首歌的檔案）');
+                continue;
+            }
+            for (const d of song.dirs) console.log(`   ${d.dir}　（${d.count}：${d.kinds.join('、')}）`);
+        }
         return;
     }
 
@@ -253,10 +285,12 @@ async function main() {
             try {
                 const health = await (await fetch(base + '/health', { signal: AbortSignal.timeout(2500) })).json();
                 const overview = await (await fetch(base + '/overview', { signal: AbortSignal.timeout(2500) })).json();
-                const payload = { ok: true, url: base, hub: health, counts: overview.counts };
+                const counts = overview && overview.counts;
+                const payload = { ok: true, url: base, hub: health, counts: counts || null, overviewError: counts ? undefined : (overview && overview.error) || 'overview 無資料' };
                 if (args.flags.json) return printJson(payload);
                 console.log(`Hub 運行中：${base}（v${health.version}，pid ${health.pid}，${Math.round(health.uptimeMs / 1000)}s）`);
-                console.log(`  歌曲 ${overview.counts.songs}（已下載 ${overview.counts.downloaded}／未下載 ${overview.counts.undownloaded}）`);
+                if (counts) console.log(`  歌曲 ${counts.songs}（已下載 ${counts.downloaded}／部分 ${counts.partial}／未下載 ${counts.undownloaded}）`);
+                else console.log('  曲庫概覽不可用：' + payload.overviewError);
                 return;
             } catch (err) {
                 if (args.flags.json) return printJson({ ok: false, error: String((err && err.message) || err) });

@@ -67,11 +67,16 @@ let snapshot = null;
 let snapshotAt = 0;
 let refreshing = null;
 
-async function refreshSnapshot() {
-  if (refreshing) return refreshing;
+async function refreshSnapshot(rebuild = false) {
+  if (refreshing) {
+    // 正在重算時又來了頁面更新：這輪結束後再重算一次，避免吃到舊資料
+    if (rebuild) refreshing.finally(() => refreshSnapshot(true)).catch(() => {});
+    return refreshing;
+  }
   refreshing = (async () => {
     try {
-      const next = await ACE.getLibrarySnapshot(cfg, { refresh: false });
+      // rebuild：重算快照（不打網路，歌單優先吃頁面快照）；否則可用 60 秒內的磁碟快照
+      const next = rebuild ? await ACE.buildLibrarySnapshot(cfg, { refresh: false }) : await ACE.getLibrarySnapshot(cfg, { refresh: false });
       snapshot = next;
       snapshotAt = Date.now();
       broadcast('snapshot', { at: new Date(snapshotAt).toISOString(), counts: next.counts });
@@ -81,6 +86,30 @@ async function refreshSnapshot() {
     }
   })();
   return refreshing;
+}
+
+/* 頁面 → agent：面板寫入 page-songs／page-unavailable 時立即失效快照並推 SSE（不等 TTL） */
+const PAGE_FILES = new Set(['page-songs.json', 'page-unavailable.json']);
+let pageTimer = null;
+let pageWatcher = null;
+let lastPageEvent = null;
+function startPageWatch() {
+  try {
+    pageWatcher = fs.watch(cfg.stateDir, (_event, filename) => {
+      const name = String(filename || '');
+      if (!PAGE_FILES.has(name)) return;
+      clearTimeout(pageTimer);
+      pageTimer = setTimeout(() => {
+        snapshotAt = 0;
+        lastPageEvent = { file: name, at: new Date().toISOString() };
+        broadcast('page', lastPageEvent);
+        refreshSnapshot(true).catch(() => {});
+      }, 250);
+    });
+    pageWatcher.on('error', () => {});
+  } catch (err) {
+    console.error('[hub] 無法監看頁面快照：', (err && err.message) || err);
+  }
 }
 
 async function getSnapshot() {
@@ -324,6 +353,22 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    if (pathname === '/locate' && req.method === 'GET') {
+      const sp = url.searchParams;
+      const result = await ACE.locateSongs(cfg, {
+        songId: sp.get('song') || sp.get('song_id') || '',
+        query: sp.get('q') || '',
+        latest: Number(sp.get('latest') || 0),
+        includeViews: sp.get('views') === '1',
+        limitFiles: Number(sp.get('limit_files') || 200),
+      });
+      return json(res, 200, result);
+    }
+
+    if (pathname === '/page' && req.method === 'GET') {
+      return json(res, 200, { ok: true, ...(await ACE.pageChannelStatus(cfg)), lastEvent: lastPageEvent });
+    }
+
     if (pathname === '/songs' && req.method === 'GET') {
       const snap = await getSnapshot();
       const rows = filterSongs(snap.songs, url);
@@ -460,6 +505,7 @@ server.listen(PORT, HOST, () => {
   console.log(`[hub] 狀態目錄：${cfg.stateDir}`);
   console.log(`[hub] 讀取走記憶體快照；寫入走單一佇列；事件流：GET /events`);
   refreshSnapshot().catch((err) => console.error('[hub] 初次快照失敗：', (err && err.message) || err));
+  startPageWatch();
 });
 
 const heartbeat = setInterval(() => {

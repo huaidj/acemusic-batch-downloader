@@ -189,6 +189,8 @@ function hostRequest(payload, timeoutMs = 30000) {
     });
 }
 
+const PAGE_EXPORT_NAMES = new Set(['page-songs', 'page-unavailable']);
+
 async function exportSessionToHost() {
     const cookies = await chrome.cookies.getAll({ domain: 'acemusic.ai' });
     if (!cookies || !cookies.length) throw new Error('找不到 acemusic.ai 的 Cookie（請先登入）');
@@ -307,6 +309,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return respondLater(() => hostRequest({ cmd: 'open', folder: msg.folder || '' }, 15000), sendResponse);
     case 'ACE_EXPORT_AGENT':
       return respondLater(() => exportAgentState(), sendResponse);
+    case 'ACE_HOST_EXPORT_PAGE':
+      // 頁面 → agent 的快速通道：只允許頁面快照檔名，不能覆寫 session／history／agent-state
+      if (!PAGE_EXPORT_NAMES.has(msg.name)) {
+        sendResponse({ ok: false, error: 'invalid export name' });
+        return false;
+      }
+      return respondLater(() => hostRequest({ cmd: 'export', name: msg.name, data: msg.data || {} }, 15000), sendResponse);
     case 'ACE_AGENT_STATUS':
       return respondLater(async () => {
         const stored = await chrome.storage.local.get(['aceAgentExportAt']);

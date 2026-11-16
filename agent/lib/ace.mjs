@@ -83,25 +83,93 @@ async function aceFetch(cfg, session, url, options = {}) {
 /* ------------------------------------------------------------------ *
  * 歌單 / MIDI / 音檔 URL
  * ------------------------------------------------------------------ */
+/** 面板（頁面）交給 agent 的歌單快照：%LOCALAPPDATA%\AceMusicDL\page-songs.json */
+export async function readPageSongs(cfg = config()) {
+    const raw = await readJson(path.join(cfg.stateDir, 'page-songs.json'), null);
+    if (!raw || !Array.isArray(raw.songs)) return null;
+    const songs = raw.songs.filter((song) => song && song.task_id && P.isDone(song));
+    if (!songs.length) return null;
+    return { savedAt: Number(raw.savedAt) || 0, songs };
+}
+
+/** 頁面通道健康度：快照時間、筆數、是否新鮮、不可用紀錄數 */
+export async function pageChannelStatus(cfg = config(), { freshMs = 10 * 60 * 1000 } = {}) {
+    const [page, na] = await Promise.all([
+        readPageSongs(cfg),
+        readJson(path.join(cfg.stateDir, 'page-unavailable.json'), null),
+    ]);
+    const ageMs = page ? Date.now() - page.savedAt : null;
+    let unavailableCount = 0;
+    for (const kinds of Object.values((na && na.unavailable) || {})) unavailableCount += Object.keys(kinds || {}).length;
+    return {
+        songs: page ? page.songs.length : 0,
+        savedAt: page ? new Date(page.savedAt).toISOString() : null,
+        ageMs,
+        fresh: page ? ageMs < freshMs : false,
+        unavailable: unavailableCount,
+    };
+}
+
+function withKnown(songs, known) {
+    const map = new Map();
+    for (const song of known || []) if (song && song.task_id) map.set(song.task_id, song);
+    for (const song of songs) map.set(song.task_id, song);
+    return [...map.values()];
+}
+
 export async function listSongs(cfg = config(), { pageLimit = 50, maxPages = 40, refresh = false, includeKnown = false } = {}) {
     const SONGS_TTL_MS = 10 * 60 * 1000;
     const cached = await cacheRead('songs', { maxAgeMs: SONGS_TTL_MS, cfg });
+    // 頁面快照比 API 快取新（且本身仍新鮮）→ 直接用，免網路、免 session
+    const page = refresh ? null : await readPageSongs(cfg);
+    const pageFresh = page && Date.now() - page.savedAt < SONGS_TTL_MS && page.savedAt > Number((cached && cached.cachedAt) || 0);
+    if (pageFresh) {
+        if (!includeKnown) return page.songs;
+        const old = cached || (await cacheRead('songs', { cfg }));
+        return withKnown(page.songs, old && old.known);
+    }
     if (!refresh && cached && Array.isArray(cached.songs) && cached.songs.length) {
         return includeKnown && Array.isArray(cached.known) ? cached.known : cached.songs;
     }
-    const session = await loadSession(cfg);
+    // 連不到站點（沒 session／登入過期／離線）：唯讀查詢沿用「頁面快照／舊快取」中較新的一份；下載仍會因 session 失效而中止
+    const fallback = async (reason, err) => {
+        if (process.env.ACE_NO_STALE_SONGS) throw err;
+        const old = cached || (await cacheRead('songs', { cfg }));
+        const pageSnap = page || (await readPageSongs(cfg));
+        const oldAt = Number((old && old.cachedAt) || 0);
+        if (pageSnap && pageSnap.savedAt >= oldAt) {
+            process.stderr.write(`[ace] ${reason}，暫用頁面歌單快照（${pageSnap.songs.length} 首）\n`);
+            return includeKnown ? withKnown(pageSnap.songs, old && old.known) : pageSnap.songs;
+        }
+        if (old && Array.isArray(old.songs) && old.songs.length) {
+            process.stderr.write(`[ace] ${reason}，暫用快取歌單（${old.songs.length} 首）\n`);
+            return includeKnown && Array.isArray(old.known) ? old.known : old.songs;
+        }
+        throw err;
+    };
+    let session;
+    try {
+        session = await loadSession(cfg);
+    } catch (err) {
+        return fallback('沒有登入狀態', err);
+    }
     const songs = [];
     let after = '';
-    for (let page = 0; page < maxPages; page += 1) {
+    for (let pageNo = 0; pageNo < maxPages; pageNo += 1) {
         const params = new URLSearchParams({ limit: String(pageLimit), sort: 'new' });
         if (after) params.set('after', after);
-        const res = await aceFetch(cfg, session, '/api/songs?' + params.toString(), {
-            headers: { Accept: 'application/json' },
-        });
+        let res;
+        try {
+            res = await aceFetch(cfg, session, '/api/songs?' + params.toString(), {
+                headers: { Accept: 'application/json' },
+            });
+        } catch (err) {
+            return fallback('站點連線失敗', err);
+        }
         if (res.status === 401 || res.status === 403) {
             const err = new Error('登入已過期（HTTP ' + res.status + '），請回擴充功能面板按「同步登入狀態給 Agent」重新匯出。');
             err.code = 'AUTH_EXPIRED';
-            throw err;
+            return fallback('登入已過期（請回面板按「同步 Agent」）', err);
         }
         if (!res.ok) throw new Error('歌單讀取失敗 HTTP ' + res.status);
         const data = await res.json().catch(() => null);
@@ -113,7 +181,8 @@ export async function listSongs(cfg = config(), { pageLimit = 50, maxPages = 40,
     const fresh = songs.filter((song) => song && song.task_id && P.isDone(song));
     // 快取合併：保留之前抓過但這次已不在清單裡的歌（全量回溯用）
     const oldKnown = new Map();
-    for (const song of (cached && Array.isArray(cached.known) ? cached.known : [])) {
+    const prevCache = cached || (await cacheRead('songs', { cfg }));
+    for (const song of (prevCache && Array.isArray(prevCache.known) ? prevCache.known : [])) {
         if (song && song.task_id) oldKnown.set(song.task_id, song);
     }
     for (const song of fresh) oldKnown.set(song.task_id, song);
@@ -157,6 +226,7 @@ export async function collectDownloadIndex(cfg = config(), { refresh = false } =
             return {
                 rel: new Set(cached.rel || []),
                 names: new Set(cached.names || []),
+                files: cached.files,
                 at: Number(cached.cachedAt) || Date.now(),
             };
         }
@@ -171,7 +241,113 @@ export async function collectDownloadIndex(cfg = config(), { refresh = false } =
         names.add(path.basename(full).toLowerCase());
     }
     await cacheWrite('fs-index', { files, rel: [...rel], names: [...names] }, cfg);
-    return { rel, names, at: Date.now() };
+    return { rel, names, files, at: Date.now() };
+}
+
+/* ------------------------------------------------------------------ *
+ * locate：歌曲 → 本機真實目錄（給 agent 直接拿路徑用）
+ * ------------------------------------------------------------------ */
+const VIEW_DIR_RE = /[\\/]音頻分類[\\/]/;
+
+function songTime(song) {
+    const value = Number(song && (song.created_at || song.finished_at)) || Date.parse(song && song.created_at) || 0;
+    return value;
+}
+
+function classifyLocatedFile(base) {
+    const m = /^(.*?)(?: - (.+))?\.([a-z0-9]+)$/i.exec(base);
+    const suffix = m && m[2] ? m[2].trim() : '';
+    const ext = m ? m[3].toLowerCase() : '';
+    if (/^cover$/i.test(suffix)) return 'cover';
+    if (/^midi$/i.test(suffix) || ext === 'mid' || ext === 'midi') return 'midi';
+    if (/^musicxml$/i.test(suffix) || ext === 'musicxml') return 'musicxml';
+    if (suffix) return 'stem:' + suffix;
+    if (ext === 'mp3') return 'mp3';
+    if (ext === 'wav') return 'wav';
+    return 'other';
+}
+
+/** 純函式：在檔案清單中找出某首歌的檔案（folder 為這首歌指派到的資料夾名，可含 take 編號） */
+export function matchSongFiles(song, files, { folder = '', includeViews = false, takenFolders = null } = {}) {
+    const rawTitle = (song.meta && song.meta.title) || '';
+    const title = N.songFolderLabel(rawTitle);
+    const exact = folder ? [folder] : [...new Set([title, N.sanitizeComponent(rawTitle, 120)].filter(Boolean))];
+    // 有資料夾指派：名稱必須精確等於該 take（"X (2)" 不會吃到 "X"）；沒有才放寬到任一 take
+    const takeRe = folder ? '' : '(?: \\(\\d+\\))?';
+    const reges = exact.map((name) => new RegExp('^' + escRe(name) + takeRe + '(?: - .+)?\\.[a-z0-9]+$', 'i'));
+    const out = [];
+    for (const full of files || []) {
+        if (!includeViews && VIEW_DIR_RE.test(full)) continue;
+        const base = path.basename(full);
+        if (!reges.some((re) => re.test(base))) continue;
+        // 放寬比對時，排除已指派給其他 take 的名稱（避免同名歌互相吃檔）
+        if (!folder && takenFolders) {
+            const prefix = base.replace(/\.[^.]+$/, '').split(' - ')[0].trim().toLowerCase();
+            if (takenFolders.has(prefix)) continue;
+        }
+        out.push({ path: full, kind: classifyLocatedFile(base) });
+    }
+    return out;
+}
+
+/**
+ * 找歌曲的真實目錄。
+ * @param {{songId?:string, query?:string, latest?:number, includeViews?:boolean, limitFiles?:number}} opts
+ */
+export async function locateSongs(cfg = config(), { songId = '', query = '', latest = 0, includeViews = false, limitFiles = 200 } = {}) {
+    const [songs, index, state] = await Promise.all([listSongs(cfg), collectDownloadIndex(cfg), loadState(cfg)]);
+    let picked = [...songs].sort((a, b) => songTime(b) - songTime(a));
+    if (songId) picked = picked.filter((song) => song.task_id === songId);
+    if (query) {
+        const q = String(query).toLowerCase();
+        picked = picked.filter((song) => String((song.meta && song.meta.title) || '').toLowerCase().includes(q));
+    }
+    const n = Number(latest) > 0 ? Number(latest) : songId ? picked.length : query ? Math.min(picked.length, 20) : 1;
+    picked = picked.slice(0, n);
+    const root = path.join(cfg.downloadDir, 'ai音樂');
+    const files = index.files || [];
+    const results = picked.map((song) => {
+        const folder = (state.folderByTask && state.folderByTask[song.task_id]) || '';
+        const takenFolders = new Set();
+        for (const [taskId, name] of Object.entries(state.folderByTask || {})) {
+            if (taskId !== song.task_id && name) takenFolders.add(String(name).toLowerCase());
+        }
+        const matched = matchSongFiles(song, files, { folder, includeViews, takenFolders });
+        const dirs = new Map();
+        for (const file of matched) {
+            const dir = path.dirname(file.path);
+            const entry = dirs.get(dir) || { dir, count: 0, kinds: new Set() };
+            entry.count += 1;
+            entry.kinds.add(file.kind.startsWith('stem:') ? 'stems' : file.kind);
+            dirs.set(dir, entry);
+        }
+        // 沒指派資料夾：用實際檔名最常見的前綴（例如 "X (2)"）
+        let inferred = '';
+        if (!folder && matched.length) {
+            const counts = new Map();
+            for (const file of matched) {
+                const prefix = path.basename(file.path).replace(/\.[^.]+$/, '').split(' - ')[0].trim();
+                counts.set(prefix, (counts.get(prefix) || 0) + 1);
+            }
+            inferred = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+        }
+        const folderName = folder || inferred || N.songFolderLabel((song.meta && song.meta.title) || '');
+        const songDir = path.join(root, folderName);
+        const time = songTime(song);
+        return {
+            task_id: song.task_id,
+            title: (song.meta && song.meta.title) || 'Untitled',
+            created_at: time ? new Date(time).toISOString() : null,
+            folder: folderName,
+            songDir: exists(songDir) ? songDir : null,
+            dirs: [...dirs.values()]
+                .map((d) => ({ dir: d.dir, count: d.count, kinds: [...d.kinds].sort() }))
+                .sort((a, b) => (a.dir === songDir ? -1 : b.dir === songDir ? 1 : b.count - a.count)),
+            files: matched.slice(0, limitFiles),
+            fileCount: matched.length,
+        };
+    });
+    return { ok: true, root, total: results.length, songs: results };
 }
 
 /** 每首歌已下載進度（依檔名比對，含 CLI/擴充功能/站點下載的檔案） */
@@ -313,14 +489,18 @@ async function downloadToFile(cfg, session, url, relPath) {
 }
 
 export async function loadState(cfg = config()) {
-    const raw = await readJson(cfg.stateFile, {});
+    const [raw, pageNa] = await Promise.all([
+        readJson(cfg.stateFile, {}),
+        readJson(path.join(cfg.stateDir, 'page-unavailable.json'), null),
+    ]);
     return {
         folderByTask: raw.folderByTask || {},
         ownerByFolder: raw.ownerByFolder || {},
         history: raw.history || {},
         aliases: raw.aliases || {},
         removedPaths: raw.removedPaths || {},
-        unavailable: raw.unavailable || {},
+        // 面板記到的「站點不提供」（page-unavailable.json）合併進來，兩邊共用
+        unavailable: P.mergeUnavailable(raw.unavailable || {}, (pageNa && pageNa.unavailable) || {}),
     };
 }
 

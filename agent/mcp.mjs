@@ -52,6 +52,21 @@ const TOOLS = [
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     },
     {
+        name: 'ace_locate',
+        description: '歌曲 → 本機真實目錄與檔案絕對路徑（成品MP3/WAV、採樣包、MIDI、MusicXML、封面）。預設回最新製作的一首；也可用 query 或 song_id。走 Hub 記憶體快照、免網路；不含「音頻分類」hardlink 檢視（include_views=true 才帶）。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                latest: { type: 'number', description: '最新的 N 首（預設 1）' },
+                query: { type: 'string', description: '歌名關鍵字' },
+                song_id: { type: 'string', description: 'task_id' },
+                include_views: { type: 'boolean', description: '包含 音頻分類 hardlink 檢視路徑（預設 false）' },
+                files: { type: 'boolean', description: '回傳每個檔案路徑（預設 true；false 只回目錄）' },
+            },
+            additionalProperties: false,
+        },
+    },
+    {
         name: 'ace_list_songs',
         description: '列出 ACE Music 已完成的歌曲（含分軌數、MIDI 可用、長度、以及「已下載/部分/未下載」狀態與每種類型進度）。預設回傳精簡欄位（速度快）；需要完整 detail 時傳 compact=false。',
         inputSchema: {
@@ -158,8 +173,8 @@ function textContent(value) {
 async function callTool(name, args) {
     switch (name) {
         case 'ace_session_status': {
-            const status = await ACE.sessionStatus();
-            return { ...status, hint: status.authenticated ? '已可下載' : '請在擴充功能面板按「同步登入狀態給 Agent」' };
+            const [status, page] = await Promise.all([ACE.sessionStatus(), ACE.pageChannelStatus()]);
+            return { ...status, page, hint: status.authenticated ? '已可下載' : '請在擴充功能面板按「同步登入狀態給 Agent」' };
         }
         case 'ace_overview': {
             try {
@@ -194,6 +209,26 @@ async function callTool(name, args) {
             } catch {
                 return await ACE.warmCaches(undefined, { refreshSession: !!args.refresh_session });
             }
+        }
+        case 'ace_locate': {
+            const params = new URLSearchParams();
+            if (args.song_id) params.set('song', String(args.song_id));
+            if (args.query) params.set('q', String(args.query));
+            if (args.latest) params.set('latest', String(args.latest));
+            if (args.include_views) params.set('views', '1');
+            let result;
+            try {
+                result = { ...(await hubCall('/locate?' + params.toString(), { timeoutMs: 3000 })), hub: true };
+            } catch {
+                result = await ACE.locateSongs(undefined, {
+                    songId: args.song_id || '',
+                    query: args.query || '',
+                    latest: Number(args.latest || 0),
+                    includeViews: !!args.include_views,
+                });
+            }
+            if (args.files === false) result.songs = result.songs.map(({ files, ...rest }) => rest);
+            return result;
         }
         case 'ace_list_songs': {
             const limit = args.limit === 0 ? 0 : Number(args.limit) || 50;
@@ -370,7 +405,7 @@ async function handleMessage(message) {
             protocolVersion: (params && params.protocolVersion) || '2024-11-05',
             capabilities: { tools: {} },
             serverInfo: SERVER,
-            instructions: 'ACE Music 批量下載器 MCP。先用 ace_session_status 確認登入，再用 ace_list_songs / ace_download 下載，ace_organize 整理舊檔。',
+            instructions: 'ACE Music 批量下載器 MCP。開場用 ace_overview；要拿檔案路徑（例如最新製作的歌在哪）直接用 ace_locate（免網路、免登入）。下載前用 ace_session_status 確認登入，再用 ace_list_songs / ace_download，ace_organize 整理舊檔。',
         });
     }
     if (method === 'notifications/initialized' || method === 'initialized') return;
