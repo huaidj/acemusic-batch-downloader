@@ -4,6 +4,7 @@
 (() => {
   const N = globalThis.AceDLNaming;
   const P = globalThis.AceDLPlanner;
+  const P2 = globalThis.AceDLPrompts;
   if (!N || !P) {
     console.warn('[ACE 批量下載] naming.js / planner.js 未載入，擴充功能未啟動');
     return;
@@ -78,6 +79,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     agentUnavailable: {},
     onlyUndownloaded: false,
     onlyFavorites: false,
+    siteModels: null,
   };
 
   /* ------------------------------------------------------------------ *
@@ -363,7 +365,27 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
 .rowicon.on { color: var(--err); }
 .rowicon .ico { width: 15px; height: 15px; }
 .song .cover { cursor: pointer; }
-@media (prefers-reduced-motion: reduce) { .fab.running .dot { animation: none; } .bar i, .tidybar .track i { transition: none; } }
+/* 隨機提示詞 */
+.rand { border-bottom: 1px solid var(--line); }
+.rand > summary { cursor: pointer; padding: 8px 14px; font-size: 12px; color: var(--muted); list-style: none; user-select: none; }
+.rand > summary::-webkit-details-marker { display: none; }
+.rand > summary::before { content: "▸"; display: inline-block; margin-right: 6px; transition: transform .12s; }
+.rand[open] > summary::before { transform: rotate(90deg); }
+.rand > summary:hover { color: var(--text); }
+.randbody { padding: 2px 14px 10px; display: flex; flex-direction: column; gap: 7px; }
+.randctx { font-size: 11px; color: var(--faint); }
+.randnote { font-size: 11.5px; color: var(--warn); background: var(--warn-soft); border: 1px solid rgba(224, 180, 92, .25); border-radius: 8px; padding: 6px 9px; }
+.randnote[hidden] { display: none; }
+.randactions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
+.randlocks { display: inline-flex; gap: 8px; }
+.randtext { width: 100%; resize: vertical; min-height: 84px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--field); color: var(--text); font: 11.5px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; outline: none; }
+.randtext:focus { border-color: var(--accent); }
+.randmeta { font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.randhist { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip { padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 10.5px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.chip:hover { background: var(--surface-hover); color: var(--text); }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { .fab.running .dot { animation: none; } .bar i, .tidybar .track i { transition: none; } .rand > summary::before { transition: none; } }
 `;
 
   function applyStyles(root) {
@@ -531,7 +553,8 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     const footer = el('div', { class: 'footer' }, [downloadBtn, cancelBtn, toast, tidyBar, footHint]);
 
     const playerBar = buildPlayer();
-    panel.append(header, playerBar, optRows, toolbar, toolbar2, organizeBox, songsBox, progress, footer);
+    const randomBox = buildRandom();
+    panel.append(header, playerBar, randomBox, optRows, toolbar, toolbar2, organizeBox, songsBox, progress, footer);
     shadow.append(fab, panel);
 
     Object.assign(S.els, {
@@ -1003,6 +1026,239 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
       const row = box.querySelector(`[data-song-id="${cssEsc(R.currentId)}"]`);
       if (row) row.classList.add('nowplaying');
     }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 隨機提示詞：讀目前 ACE 頁面的「模式（Idea／Custom）＋模型」→ 選對應詞典 → 隨機一格 → 填進頁面的輸入框
+   * 規則：
+   *  - 欄位選擇來自站點自己的程式（public/app.js）：Idea 的框是 #prompt、Custom 的 Style 是 #caption；
+   *    模式存在 localStorage.createMode、模型存在 localStorage.aceModel（並與模型按鈕上的名稱交叉核對）。
+   *  - 只填文字（用原生 setter＋input 事件，頁面的字數計數才會更新），填完讀回核對；
+   *    絕不按 Generate（會扣 credit）、不動 Lyrics。
+   *  - 產生後如果模型／模式改了，套用會被拒絕並要求重新隨機（不把 v1.1 的詞塞進別的模型）。
+   * ------------------------------------------------------------------ */
+  const KEY_RANDOM = 'aceRandom';
+  const RND = { current: null, ctx: null, history: [], lockA: false, lockB: false };
+  const PAGE_FIELD_SELECTORS = { prompt: '#prompt', style: '#caption' };
+
+  const isShown = (node) => !!node && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden';
+  function pageMode() {
+    const idea = document.querySelector('#ideaMode');
+    const custom = document.querySelector('#customMode');
+    if (isShown(idea) && !isShown(custom)) return 'idea';
+    if (isShown(custom) && !isShown(idea)) return 'custom';
+    let saved = '';
+    try {
+      saved = localStorage.getItem('createMode') || '';
+    } catch (_) {
+      /* ignore */
+    }
+    return saved === 'idea' || saved === 'custom' ? saved : '';
+  }
+  function pageModelId() {
+    let stored = '';
+    try {
+      stored = localStorage.getItem('aceModel') || '';
+    } catch (_) {
+      /* ignore */
+    }
+    // 模型按鈕上顯示的名字是「眼前看到的真相」：與站點模型清單對得上就以它為準
+    const label = ((document.querySelector('#modelBtn') || {}).textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (label && S.siteModels) {
+      // 名稱互為子字串（「ACE Music v1」⊂「ACE Music v1.1 Preview」）：先精確相等，再取「最長」的包含者，絕不取第一個
+      let best = '';
+      let bestLen = 0;
+      for (const [id, info] of S.siteModels) {
+        const name = String((info && info.name) || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        if (!name) continue;
+        if (name === label) return id;
+        if (label.includes(name) && name.length > bestLen) {
+          best = id;
+          bestLen = name.length;
+        }
+      }
+      if (best) return best;
+    }
+    return stored;
+  }
+  function randomContext() {
+    return P2.resolveContext({ modelId: pageModelId(), mode: pageMode(), siteModels: S.siteModels });
+  }
+  function setNativeValue(node, value) {
+    const proto = Object.getPrototypeOf(node);
+    const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (desc && desc.set) desc.set.call(node, value);
+    else node.value = value;
+    node.dispatchEvent(new Event('input', { bubbles: true }));
+    node.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  /** 把文字填進頁面欄位；回傳 { ok, reason } */
+  function fillPageField(field, text) {
+    const node = document.querySelector(PAGE_FIELD_SELECTORS[field] || '');
+    if (!node) return { ok: false, reason: `找不到頁面的輸入框（${PAGE_FIELD_SELECTORS[field]}）；站點介面可能改版，請改用「複製」` };
+    if (!isShown(node)) return { ok: false, reason: '輸入框目前沒顯示（模式剛切換？）；請確認畫面上看得到輸入框再套用' };
+    setNativeValue(node, text);
+    if (node.value !== text) return { ok: false, reason: '填入後讀回的內容不一致，已放棄；請改用「複製」' };
+    return { ok: true };
+  }
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0;';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try {
+        ok = document.execCommand('copy');
+      } catch (_) {
+        ok = false;
+      }
+      ta.remove();
+      return ok;
+    }
+  }
+
+  function loadRandomPrefs() {
+    return storageGet([KEY_RANDOM]).then((got) => {
+      const data = (got && got[KEY_RANDOM]) || {};
+      RND.history = Array.isArray(data.history) ? data.history.slice(0, 12) : [];
+      RND.lockA = !!data.lockA;
+      RND.lockB = !!data.lockB;
+      renderRandom();
+    });
+  }
+  function saveRandomPrefs() {
+    return storageSet({ [KEY_RANDOM]: { history: RND.history.slice(0, 12), lockA: RND.lockA, lockB: RND.lockB } });
+  }
+
+  function buildRandom() {
+    const ctxLine = el('div', { class: 'randctx', 'data-rand-ctx': '' });
+    const notice = el('div', { class: 'randnote', 'data-rand-note': '', hidden: true });
+    const preview = el('textarea', { class: 'randtext', 'data-rand-text': '', readonly: true, rows: '5', 'aria-label': '隨機產生的提示詞', placeholder: '按「隨機一組」產生；Idea 模式填進自然語言框，Custom 模式填進 Style 框。' });
+    const meta = el('div', { class: 'randmeta', 'data-rand-meta': '' });
+    const rollBtn = el('button', { class: 'ghost', type: 'button', 'data-rand': 'roll', text: '隨機一組' });
+    const lockA = el('input', { type: 'checkbox', 'data-rand-lock': 'a' });
+    const lockB = el('input', { type: 'checkbox', 'data-rand-lock': 'b' });
+    const applyBtn = el('button', { class: 'ghost', type: 'button', 'data-rand': 'apply', text: '套用到頁面' });
+    const copyBtn = el('button', { class: 'ghost', type: 'button', 'data-rand': 'copy', text: '複製' });
+    const history = el('div', { class: 'randhist', 'data-rand-history': '' });
+
+    rollBtn.addEventListener('click', () => rollRandom());
+    applyBtn.addEventListener('click', () => applyRandom());
+    copyBtn.addEventListener('click', async () => {
+      if (!RND.current || !RND.current.ok) return;
+      flash((await copyText(RND.current.text)) ? '已複製提示詞' : '複製失敗，請手動選取');
+    });
+    lockA.addEventListener('change', () => {
+      RND.lockA = lockA.checked;
+      saveRandomPrefs();
+    });
+    lockB.addEventListener('change', () => {
+      RND.lockB = lockB.checked;
+      saveRandomPrefs();
+    });
+
+    const lockRow = el('div', { class: 'randlocks' }, [
+      el('label', { class: 'chk', title: '固定目前這組的 A 軸（低頻／上層音色），只重抽 B 軸（手鼓／小打／空間）' }, [lockA, '鎖 A 軸']),
+      el('label', { class: 'chk', title: '固定目前這組的 B 軸，只重抽 A 軸' }, [lockB, '鎖 B 軸']),
+    ]);
+    const actions = el('div', { class: 'randactions' }, [rollBtn, lockRow, applyBtn, copyBtn]);
+    const body = el('div', { class: 'randbody' }, [ctxLine, notice, actions, preview, meta, history]);
+    const box = el('details', { class: 'rand', 'data-rand-box': '' }, [el('summary', { text: '隨機提示詞' }), body]);
+    box.addEventListener('toggle', () => {
+      if (box.open) renderRandom();
+    });
+    Object.assign(S.els, { randBox: box, randCtx: ctxLine, randNote: notice, randText: preview, randMeta: meta, randHistory: history, randRoll: rollBtn, randApply: applyBtn, randCopy: copyBtn, randLockA: lockA, randLockB: lockB });
+    return box;
+  }
+
+  function ctxLabel(ctx) {
+    const mode = ctx.mode === 'idea' ? 'Idea' : ctx.mode === 'custom' ? 'Custom' : '未知模式';
+    const model = ctx.modelName || ctx.modelId || '未知模型';
+    return ctx.field ? `${model} · ${mode} → ${ctx.field === 'prompt' ? '自然語言框' : 'Style 框'}（上限 ${ctx.limit || '?'} 字）` : `${model} · ${mode}`;
+  }
+  function renderRandom() {
+    if (!S.els.randBox) return;
+    const ctx = randomContext();
+    RND.ctx = ctx;
+    S.els.randCtx.textContent = ctxLabel(ctx);
+    S.els.randLockA.checked = RND.lockA;
+    S.els.randLockB.checked = RND.lockB;
+    const ready = ctx.status === 'ready';
+    const note = S.els.randNote;
+    if (!ready) {
+      note.hidden = false;
+      note.textContent = ctx.reason || '目前無法產生';
+    } else {
+      note.hidden = true;
+      note.textContent = '';
+    }
+    S.els.randRoll.disabled = !ready;
+    const cur = RND.current;
+    const have = !!(cur && cur.ok);
+    // 目前這組是為「別的模型／模式」產生的 → 不能套用
+    const stale = have && ready && (cur.model !== ctx.modelId || cur.mode !== ctx.mode);
+    S.els.randApply.disabled = !have || !ready || stale;
+    S.els.randCopy.disabled = !have;
+    S.els.randText.value = have ? cur.text : '';
+    S.els.randMeta.textContent = have
+      ? `${cur.a.id} ${cur.a.name_zh} × ${cur.b.id} ${cur.b.name_zh} · ${cur.length}/${cur.limit} 字 · seed ${cur.seed} · ${cur.modelName}／${cur.mode} · 詞典 v${cur.dictionaryVersion}${stale ? ' · ⚠ 模型或模式已改變，請重新隨機' : ''}`
+      : '';
+    S.els.randHistory.textContent = '';
+    for (const item of RND.history) {
+      const b = el('button', { class: 'chip', type: 'button', title: `${item.a.name_zh} × ${item.b.name_zh}（${item.modelName}／${item.mode}）`, text: item.cell });
+      b.addEventListener('click', () => {
+        RND.current = item;
+        renderRandom();
+      });
+      S.els.randHistory.append(b);
+    }
+  }
+  /** 使用者在頁面上切換模式或模型時，面板的隨機區要跟著更新（輕量輪詢；只在展開且面板開著時） */
+  let randomSig = '';
+  function refreshRandomContext() {
+    if (!S.els.randBox || !S.els.randBox.open || (S.els.panel && S.els.panel.hidden)) return;
+    const ctx = randomContext();
+    const sig = [ctx.status, ctx.modelId, ctx.mode, ctx.limit].join('|');
+    if (sig === randomSig) return;
+    randomSig = sig;
+    renderRandom();
+  }
+  setInterval(refreshRandomContext, 1200);
+
+  function rollRandom() {
+    const ctx = randomContext();
+    const cur = RND.current && RND.current.ok && RND.current.model === ctx.modelId && RND.current.mode === ctx.mode ? RND.current : null;
+    const result = P2.randomPrompt({
+      context: ctx,
+      lockA: RND.lockA && cur ? cur.a.id : null,
+      lockB: RND.lockB && cur ? cur.b.id : null,
+    });
+    if (!result.ok) {
+      RND.current = null;
+      renderRandom();
+      flash(result.reason || '無法產生');
+      return;
+    }
+    RND.current = result;
+    RND.history = [result, ...RND.history.filter((h) => !(h.cell === result.cell && h.model === result.model && h.mode === result.mode))].slice(0, 12);
+    saveRandomPrefs();
+    renderRandom();
+  }
+  function applyRandom() {
+    const cur = RND.current;
+    if (!cur || !cur.ok) return;
+    const ctx = randomContext();
+    if (ctx.status !== 'ready' || ctx.modelId !== cur.model || ctx.mode !== cur.mode) {
+      renderRandom();
+      return flash(`目前是「${ctx.modelName || ctx.modelId || '未知'} · ${ctx.mode || '未知模式'}」，這組是為「${cur.modelName} · ${cur.mode}」產生的，請重新隨機`);
+    }
+    const res = fillPageField(cur.field, cur.text);
+    flash(res.ok ? `已填入${cur.field === 'prompt' ? '自然語言框' : 'Style 框'}（${cur.length} 字）；確認後自行按 Generate` : res.reason);
   }
 
   /* ------------------------------------------------------------------ *
@@ -2515,7 +2771,12 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
         .then((r) => (r.ok ? r.json() : null))
         .then((data) => {
           const models = data && Array.isArray(data.models) ? data.models : [];
-          if (models.length) S.lossyModels = new Set(models.filter((m) => m && m.lossy).map((m) => m.id));
+          if (models.length) {
+            S.lossyModels = new Set(models.filter((m) => m && m.lossy).map((m) => m.id));
+            // 模型清單（名稱、各欄位字數上限…）：隨機提示詞用它區分模型、決定欄位上限
+            S.siteModels = new Map(models.filter((m) => m && m.id).map((m) => [m.id, { name: m.name, limits: m.limits, reads: !!m.reads, free: !!m.free, lossy: !!m.lossy, hidden: !!m.hidden }]));
+            renderRandom();
+          }
         })
         .catch(() => {
           siteModelsPromise = null; // 下次再試
@@ -2877,7 +3138,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     .then(() => {
       syncOptionsToUi();
       startAutoRefresh();
-      return Promise.all([loadDownloadState(), loadAutoState(), loadRadio()]);
+      return Promise.all([loadDownloadState(), loadAutoState(), loadRadio(), loadRandomPrefs(), ensureSiteModels()]);
     })
     .then(() => refreshHostStatus())
     .then(() => {

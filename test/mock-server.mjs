@@ -154,11 +154,20 @@ export const VISIBLE_SONG_IDS = SONGS.filter((s) => s.status === 'succeeded' && 
 const PAGE_CREATE = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>ACE Music Mock — Create</title>
 <style>body{font-family:system-ui;margin:0;background:#111;color:#eee}main{padding:24px}</style></head>
-<body><main><h1>ACE Music Mock /create/</h1><p id="status">mock create page</p></main>
+<body><main><h1>ACE Music Mock /create/</h1><p id="status">mock create page</p>
+<!-- 對齊真站的欄位 id（public/app.js）：Idea＝#prompt、Custom Style＝#caption；模式／模型存在 localStorage createMode／aceModel -->
+<button id="modelBtn" type="button">ACE Music v1.1 Preview</button>
+<div id="ideaMode"><textarea id="prompt" rows="3"></textarea></div>
+<div id="customMode" style="display:none"><textarea id="caption" rows="3"></textarea><textarea id="lyrics" rows="2"></textarea></div>
+<button id="generate" type="button">Generate</button></main>
 <script>
   var noAuth = new URLSearchParams(location.search).has('auth-off');
   if (!noAuth) document.cookie = 'sess=1; path=/';
   document.getElementById('status').textContent = noAuth ? 'logged-out mock' : 'logged-in mock';
+  window.__gen = 0; window.__inputEvents = 0;
+  document.getElementById('generate').addEventListener('click', function () { window.__gen += 1; });
+  document.getElementById('prompt').addEventListener('input', function () { window.__inputEvents += 1; });
+  document.getElementById('caption').addEventListener('input', function () { window.__inputEvents += 1; });
 </script></body></html>`;
 
 const PAGE_OTHER = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>ACE Music Mock — Library</title></head>
@@ -292,7 +301,12 @@ export function startMockServer(options = {}) {
 
     // ---- site status（模型清單：lossy 模型沒有 WAV）----
     if (url.pathname === '/api/status' && req.method === 'GET') {
-      sendJson(200, { ok: true, upload: true, cover: true, models: [{ id: 'acemusic-v1.1' }, { id: 'ace-step-v2', lossy: true }] });
+      sendJson(200, { ok: true, upload: true, cover: true, models: [
+          { id: 'acemusic-v1', name: 'ACE Music v1', limits: { prompt: 2000, style: 1000, lyrics: 5000 } },
+          { id: 'acemusic-v1.1', name: 'ACE Music v1.1 Preview', reads: true, limits: { prompt: 2000, style: 1000, lyrics: 5000 } },
+          { id: 'ace-step-1.5-xl', name: 'ACE-Step v1.5 XL', lossy: true, free: true, limits: { prompt: 2000, style: 512, lyrics: 2000 } },
+          { id: 'ace-step-v2', lossy: true },
+        ] });
       return;
     }
 

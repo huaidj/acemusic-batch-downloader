@@ -40,6 +40,8 @@
       "js": [
         "src/naming.js",
         "src/planner.js",
+        "src/prompt-data.js",
+        "src/prompts.js",
         "src/content.js"
       ],
       "run_at": "document_idle",

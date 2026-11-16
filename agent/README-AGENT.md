@@ -110,6 +110,7 @@ args = ["F:\\code\\acemusic-batch-downloader\\agent\\mcp.mjs"]
 | `ace_wait_new_song` | 等下一首新歌完成；`wait_download:true` 再等自動下載完成並回 locate 結果（需 Hub＋開著站點分頁） |
 | `ace_events` | 中樞事件：`song_new`、`auto_download`、`download_done`；`since`（seq）增量 |
 | `ace_library` | 曲庫分類總覽（成品MP3／WAV、採樣包各樂器、MIDI、MusicXML、封面…），`sizes:true` 算大小 |
+| `ace_random_prompt` | 隨機提示詞（12×12 風格矩陣）：依「音樂模型＋模式」選詞典與字數上限（Idea→自然語言框、Custom→Style 框）；回傳文字＋追溯（格子、seed、詞典版本、字數／上限）。只有 acemusic-v1.1 有驗證過的詞典，其他模型回 `no_dictionary`（不硬截斷、不亂填）；只產生文字，不提交生成 |
 | `ace_tidy` | 一鍵整理（成品MP3／WAV、採樣包、檔案分類、去重、音頻分類）；`wait:true` 等完成 |
 | `ace_backups` | 整理備份清單＋依規則可刪預覽（MCP 只預覽，不刪） |
 | `ace_masters` | 母帶清單（俱樂部版／舊版對照；WAV 取樣率／位元深度／長度，唯讀） |

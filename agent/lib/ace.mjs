@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { config, readJson, writeJson, exists, toWin, sleep, appendLog, cacheRead, cacheWrite, cacheClear, cachePeek } from './config.mjs';
 import { loadShared } from './shared.mjs';
 
-const { N, P } = loadShared();
+const { N, P, PR } = loadShared();
 const SNAPSHOT_NAME = 'library-snapshot';
 function clearFsCaches(cfg) { cacheClear('fs-index', cfg); cacheClear(SNAPSHOT_NAME, cfg); }
 const STEM_LABELS = Object.values(N.STEM_TYPE_NAMES).map((s) => s.toLowerCase());
@@ -842,24 +842,43 @@ async function saveState(cfg, buildPlanResult, state) {
  * 站點模型的 lossy 集合（/api/status 的 models[].lossy）：lossy 模型（ACE-Step 的 m4a）沒有 WAV。
  * 快取 6 小時；讀不到（沒登入／離線）回 null → planner 用後備規則（ace-step* 視為 lossy）。
  */
-export async function getLossyModels(cfg = config()) {
+export async function getSiteModels(cfg = config()) {
     const cached = await cacheRead('site-models', { maxAgeMs: 6 * 3600 * 1000, cfg }).catch(() => null);
-    if (cached && Array.isArray(cached.lossy)) return new Set(cached.lossy);
+    if (cached && Array.isArray(cached.models)) return new Map(cached.models.map((m) => [m.id, m]));
     try {
         const session = await loadSession(cfg);
         const res = await aceFetch(cfg, session, '/api/status', { headers: { Accept: 'application/json' } });
         if (!res.ok) return null;
         const data = await res.json().catch(() => null);
-        const models = data && Array.isArray(data.models) ? data.models : [];
-        if (!models.length) return null;
-        const lossy = models.filter((m) => m && m.lossy).map((m) => m.id);
-        await cacheWrite('site-models', { lossy, all: models.map((m) => m.id) }, cfg).catch(() => {});
-        return new Set(lossy);
+        const raw = data && Array.isArray(data.models) ? data.models : [];
+        if (!raw.length) return null;
+        // 只留模型資訊（id、名稱、字數上限、旗標）；不存方案／額度／個資
+        const models = raw.filter((m) => m && m.id).map((m) => ({ id: m.id, name: m.name, limits: m.limits, reads: !!m.reads, free: !!m.free, lossy: !!m.lossy, hidden: !!m.hidden }));
+        await cacheWrite('site-models', { lossy: models.filter((m) => m.lossy).map((m) => m.id), models }, cfg).catch(() => {});
+        return new Map(models.map((m) => [m.id, m]));
     } catch {
         return null;
     }
 }
 
+export async function getLossyModels(cfg = config()) {
+    const models = await getSiteModels(cfg);
+    return models ? new Set([...models.values()].filter((m) => m.lossy).map((m) => m.id)) : null;
+}
+
+/**
+ * 隨機提示詞（與面板共用 src/prompts.js）：依「模型＋模式」選詞典與欄位上限。
+ * 只回傳文字與追溯資訊；agent 不會也不會填進頁面、不會提交生成。
+ */
+export async function randomPrompt(cfg = config(), { model = 'acemusic-v1.1', mode = 'custom', seed, lockA, lockB, count = 1 } = {}) {
+    const siteModels = await getSiteModels(cfg);
+    const base = { modelId: model, mode, siteModels };
+    const opts = { ...base, seed: seed != null && seed !== '' ? Number(seed) : undefined, lockA: lockA || undefined, lockB: lockB || undefined };
+    const n = Math.max(1, Math.min(24, Number(count) || 1));
+    const results = n > 1 ? PR.randomBatch(opts, n) : [PR.randomPrompt(opts)];
+    const clean = results.map((r) => ({ ...r, context: undefined }));
+    return { ok: clean.every((r) => r.ok), model, mode, limitsFrom: siteModels ? 'site' : 'fallback', count: clean.length, prompts: clean };
+}
 export async function buildPlanForSongs(cfg = config(), songs, options = {}) {
     const state = await loadState(cfg);
     const types = options.types || ['stems', 'midi'];

@@ -45,6 +45,7 @@ agent / CLI / MCP ──HTTP──► agent/hub.mjs (127.0.0.1:8788)
 | POST | `/jobs/:id/cancel` | 合作式取消（下載支援；其他 job 標記） |
 | GET | `/events` | SSE：`job`、`progress`、`snapshot`、`page`（頁面檔更新）、`event`（中樞事件）|
 | GET | `/locate?latest=&q=&song=&views=1` | 歌曲 → 本機真實目錄／檔案（v1.7.0） |
+| GET | `/prompts/random?model=&mode=&seed=&lock_a=&lock_b=&count=` | 隨機提示詞（依模型＋模式選詞典；只產生文字，不提交生成；缺詞典回 422）（v1.7.3） |
 | GET | `/library?sizes=1` | 曲庫分類總覽（v1.7.0） |
 | GET | `/page` | 頁面通道健康度（page-songs 快照時間、筆數、新鮮度、不可用紀錄數） |
 | GET | `/page/events?since=&type=&limit=` | 事件環（最近 200）：`song_new`（頁面或歌單差異）、`auto_download`、`download_done` |

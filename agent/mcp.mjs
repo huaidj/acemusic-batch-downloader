@@ -3,7 +3,7 @@
 // 傳輸：stdio，一行一個 JSON-RPC 訊息（MCP stdio transport）。
 import * as ACE from './lib/ace.mjs';
 import { config, readJson, exists } from './lib/config.mjs';
-import { hubJson, HUB_URL } from './lib/hubclient.mjs';
+import { hubJson, hubRequest, HUB_URL } from './lib/hubclient.mjs';
 
 const SERVER = { name: 'ace-music-downloader', version: '1.7.3' };
 const jobs = new Map();
@@ -90,6 +90,22 @@ const TOOLS = [
         inputSchema: {
             type: 'object',
             properties: { sizes: { type: 'boolean', description: '計算大小（較慢）' } },
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'ace_random_prompt',
+        description: '隨機提示詞（12×12 風格矩陣，依「音樂模型＋模式」選詞典與字數上限）。回傳文字＋追溯資訊（格子、seed、詞典版本、字數／上限）。目前只有 acemusic-v1.1 有驗證過的詞典；其他模型回 no_dictionary（不硬截斷、不亂填）。只產生文字，不提交生成、不扣 credit。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                model: { type: 'string', description: '音樂模型 id：acemusic-v1.1（預設）、acemusic-v1、ace-step-1.5-xl…' },
+                mode: { type: 'string', enum: ['idea', 'custom'], description: 'idea＝自然語言框（上限看模型，v1.1 為 2000）；custom＝Style 框（v1.1 為 1000）。預設 custom' },
+                seed: { type: 'number', description: '本地隨機種子；同 seed＋同詞典版本可復現（不保證供應商生成相同音訊）' },
+                lock_a: { type: 'string', description: '固定 A 軸格子 id（A01–A12），只變 B 軸' },
+                lock_b: { type: 'string', description: '固定 B 軸格子 id（B01–B12），只變 A 軸' },
+                count: { type: 'number', description: '一次要幾組（1–24，彼此不同格子；預設 1）' },
+            },
             additionalProperties: false,
         },
     },
@@ -334,6 +350,17 @@ async function callTool(name, args) {
             } catch {
                 return await ACE.libraryOverview(undefined, { withSizes: !!args.sizes });
             }
+        }
+        case 'ace_random_prompt': {
+            const params = new URLSearchParams();
+            for (const [k, v] of [['model', args.model], ['mode', args.mode], ['seed', args.seed], ['lock_a', args.lock_a], ['lock_b', args.lock_b], ['count', args.count]]) if (v != null && v !== '') params.set(k, String(v));
+            try {
+                const { status, data } = await hubRequest('/prompts/random?' + params.toString(), { timeoutMs: 8000 });
+                if (data) return { ...data, hub: true };
+            } catch {
+                /* 沒有 Hub：本地算 */
+            }
+            return await ACE.randomPrompt(undefined, { model: args.model, mode: args.mode, seed: args.seed, lockA: args.lock_a, lockB: args.lock_b, count: args.count });
         }
         case 'ace_tidy': {
             let started;

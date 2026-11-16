@@ -205,7 +205,7 @@ scenario('S0_manifest_hooks_and_songlist', async () => {
   assert(manifest.background.type === undefined, 'background 不應有 "type":"module"（classic SW）');
   assert(manifest.permissions.includes('downloads') && manifest.permissions.includes('storage'), 'permissions 需含 downloads/storage');
   assert(manifest.hostPermissions.includes('https://acemusic.ai/*'), 'host_permissions 需含 acemusic.ai');
-  assertEqual(manifest.contentScripts[0].js.filter((file) => file !== 'src/testmode.js'), ['src/naming.js', 'src/planner.js', 'src/content.js'], 'content_scripts 載入順序');
+  assertEqual(manifest.contentScripts[0].js.filter((file) => file !== 'src/testmode.js'), ['src/naming.js', 'src/planner.js', 'src/prompt-data.js', 'src/prompts.js', 'src/content.js'], 'content_scripts 載入順序');
   assertEqual(manifest.contentScripts[0].run_at, 'document_idle', 'run_at');
   assertEqual(manifest.contentScripts[0].all_frames, false, 'all_frames');
 
@@ -603,10 +603,10 @@ scenario('S16_drag_and_opacity', async () => {
   const hdr = await box('.panel header');
   await page.mouse.move(hdr.left + 40, hdr.top + 14);
   await page.mouse.down();
-  await page.mouse.move(hdr.left - 160, hdr.top + 34, { steps: 6 });
+  await page.mouse.move(hdr.left - 160, hdr.top - 6, { steps: 6 });
   await page.mouse.up();
   const after = await box('.panel');
-  assertEqual([after.left - before.left, after.top - before.top], [-200, 20], 'S16 面板應跟著拖曳移動');
+  assertEqual([after.left - before.left, after.top - before.top], [-200, -20], 'S16 面板應跟著拖曳移動');
   await page.evaluate(() => {
     const input = document.getElementById('acedl-host').shadowRoot.querySelector('[data-ui="alpha"]');
     input.value = '60';
@@ -670,6 +670,61 @@ scenario('S17_radio_player_favorites', async () => {
   await q('[data-radio="shuffle"]').click();
   await q('[data-radio-source]').selectOption('all');
   await q('[data-song-id="song-b"] [data-fav]').click();
+});
+
+scenario('S18_random_prompt_models_and_modes', async () => {
+  // 隨機提示詞：依「模式＋模型」選詞典與欄位；v1.1 的 Idea→#prompt、Custom→#caption；ACE-Step 不自動填；
+  // 模型／模式改變後舊結果不能套用；全程不按 Generate
+  await freshPanel(page, mock.base);
+  const setPage = (model, mode, label) =>
+    page.evaluate(
+      ([m, md, lb]) => {
+        localStorage.setItem('aceModel', m);
+        localStorage.setItem('createMode', md);
+        document.getElementById('ideaMode').style.display = md === 'idea' ? 'block' : 'none';
+        document.getElementById('customMode').style.display = md === 'custom' ? 'block' : 'none';
+        document.getElementById('modelBtn').textContent = lb;
+      },
+      [model, mode, label],
+    );
+  const q = (sel) => page.locator(sel);
+  const val = (sel) => page.evaluate((s) => document.querySelector(s).value, sel);
+  const settle = () => new Promise((r) => setTimeout(r, 1500));
+
+  await setPage('acemusic-v1.1', 'idea', 'ACE Music v1.1 Preview');
+  await q('[data-rand-box] summary').click();
+  await settle();
+  assert(/ACE Music v1\.1 Preview · Idea/.test(await q('[data-rand-ctx]').textContent()), 'S18 應顯示目前模型與模式');
+  await q('[data-rand="roll"]').click();
+  const text1 = await q('[data-rand-text]').inputValue();
+  assert(/No vocals/.test(text1) && text1.length <= 2000, 'S18 Idea 提示詞應含固定約束且 ≤ 2000');
+  await q('[data-rand="apply"]').click();
+  assertEqual(await val('#prompt'), text1, 'S18 Idea 應填進 #prompt');
+  assert((await page.evaluate(() => window.__inputEvents)) >= 1, 'S18 應觸發頁面的 input 事件（字數計數才會更新）');
+  assertEqual(await val('#caption'), '', 'S18 Idea 模式不應動到 #caption');
+
+  // 切到 Custom：舊結果是為 Idea 產生的 → 不能套用；重新隨機後填進 #caption（≤1000）
+  await setPage('acemusic-v1.1', 'custom', 'ACE Music v1.1 Preview');
+  await settle();
+  assertEqual(await q('[data-rand="apply"]').isDisabled(), true, 'S18 模式改變後舊結果不得套用');
+  await q('[data-rand="roll"]').click();
+  const text2 = await q('[data-rand-text]').inputValue();
+  assert(text2.length <= 1000, `S18 Custom 提示詞應 ≤ 1000：${text2.length}`);
+  await q('[data-rand="apply"]').click();
+  assertEqual(await val('#caption'), text2, 'S18 Custom 應填進 #caption');
+  assertEqual(await val('#lyrics'), '', 'S18 不應動 Lyrics');
+
+  // 切到 ACE-Step XL：沒有驗證過的詞典 → 不產生、不填入、說明原因
+  await setPage('ace-step-1.5-xl', 'custom', 'ACE-Step v1.5 XL');
+  await settle();
+  assert(/ACE-Step v1\.5 XL/.test(await q('[data-rand-note]').textContent()), 'S18 ACE-Step 應說明沒有詞典');
+  assert(/512/.test(await q('[data-rand-ctx]').textContent()), 'S18 應顯示 ACE-Step 的 512 字上限');
+  assertEqual(await q('[data-rand="roll"]').isDisabled(), true, 'S18 ACE-Step 不應能隨機');
+  assertEqual(await q('[data-rand="apply"]').isDisabled(), true, 'S18 ACE-Step 不應能套用');
+  assertEqual(await val('#caption'), text2, 'S18 ACE-Step 下 #caption 不應被改動');
+
+  assertEqual(await page.evaluate(() => window.__gen), 0, 'S18 絕不能按 Generate');
+  await setPage('acemusic-v1.1', 'idea', 'ACE Music v1.1 Preview');
 });
 
 scenario('S7_logged_out_shows_login_hint', async () => {

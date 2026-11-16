@@ -14,10 +14,10 @@ export function loadShared() {
     const ctx = { console };
     ctx.globalThis = ctx;
     vm.createContext(ctx);
-    for (const file of ['src/naming.js', 'src/planner.js']) {
+    for (const file of ['src/naming.js', 'src/planner.js', 'src/prompt-data.js', 'src/prompts.js']) {
         const code = fs.readFileSync(path.join(PROJECT_ROOT, file), 'utf8');
         vm.runInContext(code, ctx, { filename: file });
     }
-    cached = { N: ctx.AceDLNaming, P: ctx.AceDLPlanner };
+    cached = { N: ctx.AceDLNaming, P: ctx.AceDLPlanner, PR: ctx.AceDLPrompts };
     return cached;
 }

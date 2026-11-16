@@ -24,6 +24,7 @@ function usage() {
 用法：
   node cli.mjs doctor                         檢查登入狀態與環境
   node cli.mjs locate [--latest N|--query 字|--song id] [--views] [--json]  歌曲 → 本機真實目錄（預設最新一首）
+  node cli.mjs prompt [--model id] [--mode idea|custom] [--seed N] [--lock-a A07] [--lock-b B03] [--count 6]  隨機提示詞（依模型＋模式選詞典）
   node cli.mjs library [--sizes] [--json]      曲庫分類總覽（成品MP3/WAV、採樣包各樂器、MIDI…）
   node cli.mjs events [--since seq] [--type t]  中樞事件（新歌、自動下載、下載完成）
   node cli.mjs wait [--timeout 秒]             等待下一首新歌（需 Hub＋開著站點分頁）
@@ -218,6 +219,28 @@ async function main() {
         if (args.flags.json) return printJson(got || { ok: false });
         if (!got || !got.event) return console.log('逾時，沒有新歌');
         console.log(`新歌：${got.event.title || ''}　[${got.event.task_id}]`);
+        return;
+    }
+
+    if (cmd === 'prompt') {
+        // 隨機提示詞：node cli.mjs prompt [--model acemusic-v1.1] [--mode idea|custom] [--seed N] [--lock-a A07] [--lock-b B03] [--count 6] [--json]
+        const result = await ACE.randomPrompt(cfg, {
+            model: args.flags.model && args.flags.model !== true ? String(args.flags.model) : 'acemusic-v1.1',
+            mode: args.flags.mode && args.flags.mode !== true ? String(args.flags.mode) : 'custom',
+            seed: args.flags.seed,
+            lockA: args.flags['lock-a'] && args.flags['lock-a'] !== true ? String(args.flags['lock-a']) : undefined,
+            lockB: args.flags['lock-b'] && args.flags['lock-b'] !== true ? String(args.flags['lock-b']) : undefined,
+            count: args.flags.count,
+        });
+        if (args.flags.json) return printJson(result);
+        for (const r of result.prompts) {
+            if (!r.ok) {
+                console.log('✖ ' + (r.reason || r.status));
+                continue;
+            }
+            console.log(`[${r.cell}] ${r.a.name_zh} × ${r.b.name_zh} · ${r.length}/${r.limit} 字 · seed ${r.seed} · ${r.modelName}／${r.mode}`);
+            console.log(r.text + '\n');
+        }
         return;
     }
 

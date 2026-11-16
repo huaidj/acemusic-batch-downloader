@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const SRC_DIR = path.resolve(HERE, '..', '..', 'src');
 
-export function loadAceDlScripts(files = ['naming.js', 'planner.js']) {
+export function loadAceDlScripts(files = ['naming.js', 'planner.js', 'prompt-data.js', 'prompts.js']) {
   const sandbox = {
     console,
     URL,
@@ -18,6 +18,8 @@ export function loadAceDlScripts(files = ['naming.js', 'planner.js']) {
     clearTimeout,
     Math,
     JSON,
+    Uint32Array,
+    Object,
   };
   const context = vm.createContext(sandbox);
   for (const file of files) {
@@ -28,5 +30,6 @@ export function loadAceDlScripts(files = ['naming.js', 'planner.js']) {
     context,
     naming: context.AceDLNaming,
     planner: context.AceDLPlanner,
+    prompts: context.AceDLPrompts,
   };
 }
