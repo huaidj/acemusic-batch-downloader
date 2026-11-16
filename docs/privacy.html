@@ -20,40 +20,45 @@
 <body>
 <main>
   <h1>隱私政策／Privacy Policy</h1>
-  <p class="muted">ACE Music 批量下載器・最後更新 2026-11-16</p>
-
-  <p>ACE Music 批量下載器（以下稱「本擴充功能」）只在使用者自己的瀏覽器內運作，處理使用者自己在 acemusic.ai 的歌曲與登入狀態。</p>
+  <p class="muted">ACE Music 批量下載器・最後更新 2026-11-17</p>
+  <p>ACE Music 批量下載器（以下稱「本擴充功能」）只在使用者自己的瀏覽器內運作，處理使用者自己在 <a href="https://acemusic.ai/">acemusic.ai</a> 的歌曲與登入狀態。</p>
 
   <h2>收集與使用</h2>
   <ul>
-    <li><strong>登入狀態（Cookie）</strong>：讀取使用者自己 acemusic.ai 的登入 Cookie，用來呼叫站點自己的 API（列出歌曲、產生 MIDI／MusicXML、下載檔案）。Cookie 只存在本機 <code>chrome.storage.local</code>；按下「同步 Agent」時另寫入本機檔案 <code>%LOCALAPPDATA%\AceMusicDL\session.json</code> 供本機 CLI／MCP 使用。</li>
-    <li><strong>歌曲資料</strong>：歌名、分軌、時長、封面網址等，只用來顯示與建立下載清單，儲存在本機快取。</li>
-    <li><strong>下載紀錄</strong>：檔案路徑與狀態，存在本機，用於避免重複下載與整理。</li>
+    <li><strong>登入狀態（Cookie）</strong>：本擴充功能讀取 <code>acemusic.ai</code> 的登入 Cookie，用於代表使用者呼叫站點自己的 API（列出歌曲、產生 MIDI/MusicXML、下載檔案）。Cookie 只存在本機 <code>chrome.storage.local</code>，以及在按下「同步 Agent」時寫入本機檔案 <code>%LOCALAPPDATA%\AceMusicDL\session.json</code> 供本機 CLI／MCP 使用。</li>
+    <li><strong>歌曲資料</strong>：歌名、分軌、時長、封面網址等，只用來在面板顯示與建立下載清單，儲存在本機快取。</li>
+    <li><strong>下載紀錄</strong>：已下載的檔案路徑與狀態，存在 <code>chrome.storage.local</code> 與 <code>%LOCALAPPDATA%\AceMusicDL\</code>，用於避免重複下載與整理。</li>
+    <li><strong>中樞入口</strong>：擴充功能只保存使用者選定的 <code>127.0.0.1</code> 中樞網址。生成、研究、產物與預算的業務狀態留在同一個本機 Hub。</li>
   </ul>
 
   <h2>傳輸對象</h2>
   <ul>
-    <li>只與 <code>acemusic.ai</code>／<code>www.acemusic.ai</code> 通訊（使用者正在使用的站點）。</li>
-    <li>不連接任何第三方伺服器、分析服務或廣告網路。</li>
+    <li>下載與生成使用 <code>acemusic.ai</code>（以及 <code>www.acemusic.ai</code>）。官方音訊端點重新導向到明確允許的儲存 CDN 時，後續下載不附 ACE Cookie 或登入標頭；簽名下載網址不寫入紀錄。</li>
+    <li>使用者另行啟用公開文字研究時，本機 Hub 會向 <code>api.deepseek.com</code> 發送已審閱的搜尋文字及來源網址。DeepSeek API key 只用於該官方 API 的授權標頭；ACE Cookie、私人音訊與本機路徑不送給 DeepSeek。</li>
+    <li>中樞可讀取已配置的本機 BadDJ MixCore 狀態；不因此啟動引擎、修改它的曲庫或自動播放。</li>
+    <li>不連接廣告或行為分析網路。</li>
     <li>不販售、不分享、不用於信用評估或與核心功能無關的用途。</li>
   </ul>
 
   <h2>本機檔案</h2>
   <ul>
     <li>下載的檔案寫入使用者的 Downloads 資料夾。</li>
-    <li>選用的本機整理工具（native messaging host）只在使用者按下整理按鈕時，於 Downloads 目錄內移動／改名檔案。</li>
+    <li>選用的本機整理工具（native messaging host）只會在使用者按下整理按鈕時，於 Downloads 目錄內移動／改名檔案。</li>
     <li>Agent 匯出的登入狀態只存放在本機 <code>%LOCALAPPDATA%\AceMusicDL\</code>，不會上傳。</li>
+    <li><strong>命名爐</strong>：只有在你按下「連接 ai音樂」並授權本機資料夾後，才會讀取該資料夾的檔名與 <code>_manifest.json</code>；改名也只在你按下「套用改名」時發生。資料不離開本機、不上傳。可隨時在 Chrome 的網站資料設定撤銷資料夾權限。</li>
   </ul>
 
   <h2>資料刪除</h2>
   <ul>
     <li>移除擴充功能即清除其 <code>chrome.storage.local</code> 資料。</li>
-    <li>可手動刪除 <code>%LOCALAPPDATA%\AceMusicDL\</code> 與 <code>Downloads\ai音樂\</code>。</li>
+    <li>解除安裝不會刪除音樂、母帶或生成證據。移除狀態與音樂是不同動作，需另行指定範圍；沒有自動清理原始音樂的流程。</li>
   </ul>
 
   <h2>聯絡</h2>
-  <p>隱私相關問題請開 <a href="https://github.com/huaidj/acemusic-batch-downloader/issues">GitHub Issue</a>。</p>
+  <p>有隱私相關問題請開 GitHub Issue：<a href="https://github.com/huaidj/acemusic-batch-downloader/issues">https://github.com/huaidj/acemusic-batch-downloader/issues</a></p>
 
+  <h2>可選的生成與研究功能（本機中樞）</h2>
+  <p>本機準備詞典與 HTTP JSON 不對外傳輸。使用者明確啟用受限生成後，音樂描述、Style、Lyrics、選定的模型與控件會直接傳至 ACE Music；Cookie 僅用於官方同源請求，不交給第三方代理。參考及上傳仍預設關閉，Spotify 來源內容不得進 AI 請求。DeepSeek 研究需要獨立有限預算、請求數與期限，預設關閉；來源內容是資料，不會改變工具權限。密鑰不寫進程式、SQLite、提示詞、頁面或交付包。</p>
   <footer>本擴充功能與 ACE Music／ACE Studio 無隸屬關係，為非官方工具。</footer>
 </main>
 </body>
