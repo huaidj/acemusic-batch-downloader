@@ -190,11 +190,12 @@
   async function checkServiceVersion() {
     try {
       const health = await request('/api/health', { signal: AbortSignal.timeout(3000) });
-      if (!health?.version || health.version === PLAYER_BUILD) { if (versionWarned) { versionWarned = false; notice(''); } return; }
+      // 版本號相同但磁碟上的程式已更新（stale）也算舊服務。
+      if (!health?.version || (health.version === PLAYER_BUILD && !health.stale)) { if (versionWarned) { versionWarned = false; notice(''); } return; }
       versionWarned = true;
       const node = $('notice');
       node.hidden = false;
-      node.innerHTML = `播放器服務仍是舊版 ${esc(health.version)}（頁面是 ${PLAYER_BUILD}），網站點讚等新功能需要新版服務。<button id="restart-service">重新啟動播放器服務</button><span class="muted"> 約 2 秒，會中斷目前播放。</span>`;
+      node.innerHTML = `${health.stale ? '播放器程式已更新，但服務仍在執行更新前的程式。' : `播放器服務仍是舊版 ${esc(health.version)}（頁面是 ${PLAYER_BUILD}），網站點讚等新功能需要新版服務。`}<button id="restart-service">重新啟動播放器服務</button><span class="muted"> 約 2 秒，會中斷目前播放。</span>`;
       $('restart-service').addEventListener('click', restartService);
     } catch (_) { /* 服務暫時無回應時不打擾。 */ }
   }
@@ -213,7 +214,7 @@
       await new Promise((resolve) => setTimeout(resolve, 250));
       try {
         const health = await request('/api/health', { signal: AbortSignal.timeout(1500) });
-        if (health?.version === PLAYER_BUILD) { versionWarned = false; notice(''); await loadSiteLikes(); await loadLibrary(true); toast('播放器服務已更新'); return; }
+        if (health?.version === PLAYER_BUILD && !health.stale) { versionWarned = false; notice(''); await loadSiteLikes(); await loadLibrary(true); toast('播放器服務已更新'); return; }
       } catch (_) { /* 重新啟動期間連不上是正常的 */ }
     }
     notice('播放器服務沒有在 10 秒內回來；請重新開啟播放器。');

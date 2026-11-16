@@ -34,11 +34,11 @@ async function selectSong(port, songId) {
  * 換成磁碟上的新版播放器服務：先請服務自己重新啟動（1.8.0 起支援）；舊版不支援時，
  * 只結束「在這個連接埠回應 huaidj-player 的那個程序」，再用新檔案啟動。
  */
-export async function restartPlayer(cfg = config(), { port = Number(process.env.ACE_PLAYER_PORT || 8790) } = {}) {
+export async function restartPlayer(cfg = config(), { port = Number(process.env.ACE_PLAYER_PORT || 8790), force = false } = {}) {
   const installed = installedVersion();
   const existing = await health(port);
   if (existing.data?.service !== 'huaidj-player') return { ...(await startPlayer(cfg, { port })), restarted: false };
-  if (existing.data.version === installed) return { ok: true, restarted: false, alreadyCurrent: true, version: installed, pid: existing.data.pid };
+  if (!force && existing.data.version === installed && !existing.data.stale) return { ok: true, restarted: false, alreadyCurrent: true, version: installed, pid: existing.data.pid };
   let graceful = false;
   try {
     const response = await fetch(`http://127.0.0.1:${port}/api/restart`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(3000) });
@@ -50,7 +50,7 @@ export async function restartPlayer(cfg = config(), { port = Number(process.env.
   for (let attempt = 0; attempt < 50; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 200));
     const now = await health(port);
-    if (graceful && now.data?.version === installed) return { ok: true, restarted: true, graceful, version: installed, pid: now.data.pid };
+    if (graceful && now.data?.version === installed && !now.data.stale && now.data.pid !== existing.data.pid) return { ok: true, restarted: true, graceful, version: installed, pid: now.data.pid };
     if (!graceful && !now.reachable) return { ...(await startPlayer(cfg, { port })), restarted: true, graceful, previousVersion: existing.data.version };
   }
   throw new Error('舊的播放器服務沒有在 10 秒內結束或換新');
@@ -67,7 +67,7 @@ export async function startPlayer(cfg = config(), { port = Number(process.env.AC
   if (existing.data?.service === 'huaidj-player') {
     await selectSong(port, songId);
     const installed = installedVersion();
-    return { ok: true, alreadyRunning: true, url, pid: existing.data.pid, version: existing.data.version, installedVersion: installed, outdated: !!installed && existing.data.version !== installed };
+    return { ok: true, alreadyRunning: true, url, pid: existing.data.pid, version: existing.data.version, installedVersion: installed, outdated: (!!installed && existing.data.version !== installed) || !!existing.data.stale };
   }
   if (existing.reachable) throw new Error('播放器連接埠由其他程式使用，已保留該程式');
   const script = fileURLToPath(new URL('../../player/server.mjs', import.meta.url));

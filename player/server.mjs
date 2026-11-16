@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { config, replaceFileAtomic } from '../agent/lib/config.mjs';
 import { buildAudioLibrary } from '../agent/lib/audio-library.mjs';
@@ -150,6 +151,15 @@ export function createHubProbe({ port = Number(process.env.ACE_HUB_PORT || 8788)
   return { probe, close: () => agent.destroy() };
 }
 
+/** 播放器程式碼指紋：啟動時記下，之後磁碟上的檔案若被更新（同版本號也算），health 會回報 stale。 */
+const CODE_FILES = [fileURLToPath(import.meta.url), path.join(HERE, 'public', 'app.js'), path.join(HERE, 'public', 'index.html'), path.join(HERE, 'public', 'style.css')];
+function codeFingerprint() {
+  const hash = crypto.createHash('sha256');
+  for (const file of CODE_FILES) { try { hash.update(fs.readFileSync(file)); } catch { hash.update('missing:' + file); } }
+  return hash.digest('hex').slice(0, 16);
+}
+const STARTED_FINGERPRINT = codeFingerprint();
+
 export function createPlayerServer(options = {}) {
   const cfg = options.cfg || config();
   const root = options.root || 'ai音樂';
@@ -281,7 +291,7 @@ export function createPlayerServer(options = {}) {
       if (![`127.0.0.1:${port}`, `localhost:${port}`].includes(host) || (req.headers.origin && req.headers.origin !== `http://${host}`) || req.headers['sec-fetch-site'] === 'cross-site') throw failure(403, '只允許播放器本機視窗存取', 'LOCAL_ORIGIN_REQUIRED');
       const url = new URL(req.url, `http://${host}`);
       const method = req.method || 'GET';
-      if (url.pathname === '/api/health' && method === 'GET') return json(res, 200, { ok: true, service: 'huaidj-player', version: '1.8.0', pid: process.pid });
+      if (url.pathname === '/api/health' && method === 'GET') { const current = codeFingerprint(); return json(res, 200, { ok: true, service: 'huaidj-player', version: '1.8.0', pid: process.pid, build: STARTED_FINGERPRINT, stale: current !== STARTED_FINGERPRINT }); }
       if (url.pathname === '/api/restart' && method === 'POST') {
         // 升級後讓舊程序換成磁碟上的新版；只由使用者在播放器視窗按下，不會自動打斷播放。
         if (typeof options.onRestart !== 'function') throw failure(501, '這個播放器服務不支援自動重新啟動', 'RESTART_UNAVAILABLE');

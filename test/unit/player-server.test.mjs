@@ -292,3 +292,11 @@ test('player restart endpoint: only with a restart handler, local origin, no par
   const plain = await f.start();
   assert.equal((await request(plain.port, '/api/restart', { method: 'POST' })).status, 501);
 });
+
+test('player health exposes a code fingerprint and is not stale right after start', async (t) => {
+  const f = await fixture(t), { port } = await f.start();
+  const health = await request(port, '/api/health');
+  assert.equal(health.status, 200);
+  assert.match(health.json.build, /^[0-9a-f]{16}$/);
+  assert.equal(health.json.stale, false);
+});
