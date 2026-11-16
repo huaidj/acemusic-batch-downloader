@@ -30,3 +30,7 @@ ACE Music 批量下載器（以下稱「本擴充功能」）只在使用者自�
 ## 聯絡
 
 有隱私相關問題請開 GitHub Issue：<https://github.com/huaidj/acemusic-batch-downloader/issues>
+
+## 此分支的可選 Create API
+
+本機準備詞典與 HTTP JSON 不對外傳輸。使用者明確啟用受限生成後，音樂描述、Style、Lyrics、選定的模型與控件會直接傳至 ACE Music；Cookie 僅用於本機執行邊界的同源請求，不交給第三方代理。參考及上傳仍預設關閉，Spotify 來源內容不得進 AI 請求。本分支尚未接通 DeepSeek 外發；未來啟用研究時需另行說明傳送內容與授權。

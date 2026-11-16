@@ -1,5 +1,7 @@
 # ACE Music v1.1 直接生成
 
+> 此文件保留上游 v1.1 adapter 的契約證據。本整合分支的真站 `ace_generate` 只供預覽；以下舊提交範例不會啟用真站付費。所有新提交改走 [完整 Create API](CREATE-API.md)，需要伺服器獨立有限批次授權與累計預留。上游原分支不受此整合變更影響。
+
 使用擴充功能已同步到本機的登入狀態，直接呼叫 `https://acemusic.ai` 的網頁內部 API。不需要 useapi 帳戶、訂閱或第三方代管登入。
 
 目前範圍是 v1.1 的 Idea 文字生成與 Custom 歌詞／風格生成。音訊參考、MIDI 上傳、Mashup 與 Songwriting Assistant 尚未接入。內部 API 沒有公開穩定契約，站點變更後應重新核對。

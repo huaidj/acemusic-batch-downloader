@@ -65,6 +65,39 @@ agent / CLI / MCP ──HTTP──► agent/hub.mjs (127.0.0.1:8788)
 
 ## 4. 快照與失效
 
+### 音樂 Agent 與完整 Create API（此隔離分支）
+
+沿用同一 Hub 寫入者與來源限制。`/music` 是本機方向預覽；`/music/api` 是 Create 參數對照。下列端點均回 JSON，完整 schema 由 `/create-api/capabilities` 與 MCP tool schema 提供。
+
+| Method | Path | 說明 |
+|---|---|---|
+| GET | `/music/capabilities` | 詞典編譯能力與授權邊界 |
+| GET | `/music/dictionary` | 中英詞條與版本 |
+| POST | `/music/references` | 本機登記引用，不抓取 |
+| POST | `/music/intent/prepare` | 檢查原意與來源 |
+| POST | `/music/prompts/compile` | 編譯並固定預覽版本 |
+| POST | `/music/sessions` | 建立有限本機批次 |
+| POST | `/music/generations/prepare` | 審閱後準備待授權任務 |
+| POST | `/music/generations/submit` | 尚未串接產物閉環，固定 unsupported |
+| GET | `/music/job` | 準備任務狀態 |
+| GET | `/music/events` | SQLite 持久事件游標 |
+| POST | `/music/sessions/stop` | 停止本機後續準備 |
+| GET | `/music/assets` | 本流程實際驗證的產物（目前空） |
+| POST | `/music/feedback` | 沒有實際產物時拒絕試聽評分 |
+| GET | `/music/state` | 本機方向、批次、任務 |
+| GET | `/create-api/capabilities` | Create 前端所有已觀察的參數、上傳及輔助端點契約 |
+| POST | `/create-api/prepare` | 純本機組裝原生 JSON，不讀登入或帳本 |
+| POST | `/create-api/preview` | 唯讀核對即時模型、價格與限制 |
+| POST | `/create-api/submit` | 獨立有限授權 → 額度預留 → 單次排入 Hub |
+| GET | `/create-api/authority` | 授權與預留摘要，不含路徑或秘密 |
+| POST | `/create-api/tasks` | 三模型精確遠端 ID 狀態，不下載 |
+| POST | `/create-api/receipt` | 原幂等鍵查持久收據，不重送 |
+| POST | `/create-api/stop` | 停止授權批次；未知結果仍保留預留 |
+
+新生成任務需伺服器程序指定的 `ACE_GENERATION_GRANT_FILE`；請求不能自行設定授權、預算或上傳許可。預設無授權，會在讀取登入與站點前拒絕提交。只有 loopback 契約測試可走舊 `/generate` 的實際提交路徑；真站使用完整 Create API 的獨立帳本。預覽與遠端提交完成都不代表產物、聽感或演出已驗收。參見 [CREATE-API.md](CREATE-API.md) 與 [MUSIC-AGENT.md](MUSIC-AGENT.md)。
+
+`music` SSE 事件通知新方向、批次與準備任務；可用 `/music/events` 游標跨重啟補讀。生成收據與保留費用記於獨立 authority SQLite，由同一 Hub 執行者管理，沒有第二個排程服務。
+
 - hub 啟動時 `warmCaches()` 預熱；之後每 60s 或寫入 job 完成後刷新。
 - 讀取路徑不等待刷新：先回目前 snapshot，必要時背景更新（stale-while-revalidate）。
 - `ACE_HUB_SNAPSHOT_TTL_MS` 可調。

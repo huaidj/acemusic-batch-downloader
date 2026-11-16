@@ -7,6 +7,7 @@ import { config, readJson, writeJson, exists } from './lib/config.mjs';
 import { hubJson, hubRequest } from './lib/hubclient.mjs';
 import fs from 'node:fs/promises';
 import { MUSIC_CONTRACT, validateMusicInput } from './lib/music-contract.mjs';
+import { CREATE_CONTRACT } from './lib/create-tools.mjs';
 
 let hubSkipUntil = 0;
 
@@ -24,6 +25,9 @@ function usage() {
     console.log(`ACE Music 批量下載器 CLI  v1.7.3
 
 用法：
+  node cli.mjs create capabilities            Create 頁面完整 API 參數契約
+  node cli.mjs create prepare --input file.json  驗證所有參數，不讀登入、不扣費
+  node cli.mjs create preview --input file.json  唯讀核對即時模型/報價
   node cli.mjs music capabilities             音樂 Agent 能力與授權狀態（需此分支 Hub）
   node cli.mjs music prompt_compile --input plan.json   從 JSON 產生並保存預覽
   node cli.mjs music state                    本機提示詞、批次與任務
@@ -122,6 +126,17 @@ async function main() {
     const cfg = config();
 
     if (!cmd || cmd === 'help' || cmd === '--help') return usage();
+
+    if (cmd === 'create') {
+        const action = args._[0] || 'capabilities';
+        const route = CREATE_CONTRACT.find(item => item.action === action);
+        if (!route) throw new Error('未知 Create API 操作。');
+        const input = args.flags.input ? JSON.parse(await fs.readFile(String(args.flags.input), 'utf8')) : {};
+        const { status, data } = await hubRequest(route.path, { method: route.method, body: route.method === 'POST' ? input : undefined, timeoutMs: ['preview', 'submit', 'tasks'].includes(action) ? 50000 : 5000 });
+        printJson(data || { ok: false, status: 'unsupported', error: '此 Hub 未支援完整 Create API。' });
+        if (status >= 400 || data?.ok === false) process.exitCode = 1;
+        return;
+    }
 
     if (cmd === 'music') {
         const action = args._[0] || 'capabilities';

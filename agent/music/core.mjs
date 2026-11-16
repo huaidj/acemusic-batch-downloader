@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { DICTIONARY, CAPABILITIES } from './dictionary.mjs';
 
-export const COMPILER_VERSION = '1.0.0';
+export const COMPILER_VERSION = '1.0.1';
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const stable = (value) => Array.isArray(value) ? value.map(stable) : isObject(value) ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])])) : value;
@@ -237,6 +237,14 @@ export function compilePrompt(input = {}) {
   // described as translated. No hidden LLM or network call fills this gap.
   const translationRequired = intent.translation_required || constraintMappings.some((entry) => entry.untranslated.length > 0) || /[\u3400-\u9fff]/.test(referenceDescriptions.join(' '));
   const promptFields = mode === 'idea' ? { prompt: text } : { style: text, lyrics: input.lyrics || '' };
+  // Observed Create defaults and authenticated /api/status on 2026-11-16.
+  // The execution adapter still re-reads live limits; previews must not claim a
+  // usable plan for fields already over the known model limit.
+  const textLimits = model === 'ace-step-v1.5-xl' ? { prompt: 2000, style: 512, lyrics: 2000 } : { prompt: 2000, style: 1000, lyrics: 5000 };
+  for (const [field, value] of Object.entries(promptFields)) {
+    const characters = [...value].length;
+    if (characters > textLimits[field]) return fail('unsupported', 'TEXT_LIMIT', '編譯後文字超過此模型欄位上限，請縮短方向或減少詞條；未截斷或提交。', { field, characters, limit: textLimits[field], prompt_fields: promptFields });
+  }
   const versions = {
     dictionary_version: snapshot.version, dictionary_hash: snapshot.hash,
     taste_snapshot_id: 'project-plan-v1-initial', taste_snapshot_hash: hashObject({ source: 'project-plan-v1', status: 'initialization_only' }),

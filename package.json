@@ -5,7 +5,7 @@
   "description": "Batch-download ACE Music stems, MIDI, MusicXML, MP3 and covers; auto-organize locally. Chrome extension + CLI/MCP/Hub.",
   "license": "MIT",
   "engines": {
-    "node": ">=22"
+    "node": ">=24.18.0"
   },
   "scripts": {
     "test:unit": "node scripts/test-unit.mjs",

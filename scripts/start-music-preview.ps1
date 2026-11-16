@@ -2,7 +2,7 @@ param([switch]$Stop)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $previewRoot = 'F:\DevData\Runtime\HuaiDJ-ACE-Agent-20261116'
-$previewState = Join-Path $previewRoot 'state'
+$previewState = Join-Path $previewRoot 'preview-state'
 $previewPort = 18788
 $previewUrl = "http://127.0.0.1:$previewPort"
 if (-not (Test-Path -LiteralPath 'F:\DevData')) { throw 'F:\DevData is required; no fallback to C:.' }
@@ -34,6 +34,8 @@ $env:ACE_HUB_PORT = [string]$previewPort
 $env:ACE_HUB_HOST = '127.0.0.1'
 $env:ACE_HUB_TOKEN = ''
 $env:ACE_HUB_URL = $previewUrl
+$env:ACE_DIRECT_GENERATION_ENABLED = 'false'
+$env:ACE_GENERATION_GRANT_FILE = ''
 # This is an isolated development preview using the same Hub, not a deployment.
 $nodePath = (Get-Command node).Source
 Start-Process -FilePath $nodePath -ArgumentList @((Join-Path $repoRoot 'agent\hub.mjs')) -WorkingDirectory $repoRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $previewRoot 'logs\hub.log') -RedirectStandardError (Join-Path $previewRoot 'logs\hub-error.log') | Out-Null

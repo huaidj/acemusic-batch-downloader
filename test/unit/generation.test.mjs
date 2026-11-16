@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { generateSong, generationStatus, prepareGenerationRequest } from '../../agent/lib/ace.mjs';
@@ -79,6 +80,25 @@ test('generate guards and unsupported inputs reject before any request', async (
         { style: 'house', title: 'a'.repeat(81) },
     ]) await assert.rejects(generateSong(cfg, opts));
     assert.equal(calls.length, 0);
+});
+
+test('remote charged generation requires process authorization before session or network access', async (t) => {
+    const previous = process.env.ACE_DIRECT_GENERATION_ENABLED;
+    delete process.env.ACE_DIRECT_GENERATION_ENABLED;
+    t.after(() => {
+        if (previous === undefined) delete process.env.ACE_DIRECT_GENERATION_ENABLED;
+        else process.env.ACE_DIRECT_GENERATION_ENABLED = previous;
+    });
+    let sessionReads = 0;
+    let networkCalls = 0;
+    t.mock.method(fsp, 'readFile', async () => { sessionReads++; throw new Error('Unexpected session access'); });
+    t.mock.method(globalThis, 'fetch', async () => { networkCalls++; throw new Error('Unexpected network access'); });
+    await assert.rejects(
+        generateSong({ baseUrl: 'https://acemusic.ai', sessionFile: 'unused-review-session' }, { style: 'house', ...paid }),
+        (err) => err.code === 'GENERATION_AUTHORIZATION_REQUIRED' && err.submission_unknown === false,
+    );
+    assert.equal(sessionReads, 0);
+    assert.equal(networkCalls, 0);
 });
 
 test('Unicode limits count trimmed code points and follow tighter live model limits', async (t) => {
@@ -159,13 +179,13 @@ test('accepted response without IDs is unresolved and never replayed internally'
     assert.equal(calls.filter((c) => c.method === 'POST').length, 1);
 });
 
-test('lost, malformed and server-error POST responses are uncertain with no retry or body echo', async (t) => {
-    for (const scenario of ['disconnect', 'malformed', 'server-error']) {
+test('lost, malformed, timed-out and server-error POST responses are uncertain with no retry or body echo', async (t) => {
+    for (const scenario of ['disconnect', 'malformed', 'request-timeout', 'server-error']) {
         const { cfg, calls, cookie } = await fixture(t, { handler: (req, res) => {
             if (req.method !== 'POST') return false;
             if (scenario === 'disconnect') req.socket.destroy();
             else if (scenario === 'malformed') res.end('private@example.test ' + cookie);
-            else { res.statusCode = 500; res.end('private@example.test ' + cookie); }
+            else { res.statusCode = scenario === 'request-timeout' ? 408 : 500; res.end('private@example.test ' + cookie); }
             return true;
         } });
         await assert.rejects(generateSong(cfg, { style: 'house', ...paid }), (err) => err.code === 'GENERATION_SUBMISSION_UNKNOWN' && err.submission_unknown === true && !err.message.includes(cookie) && !err.message.includes('private@'));
@@ -233,4 +253,30 @@ test('status separates playable audio completion from verified v1.1 completion',
     assert.equal(corrected.model_verified, true);
     assert.equal(corrected.v11_complete, true);
     assert.equal(corrected.model, 'acemusic-v1.1');
+});
+
+test('conflicting duplicate statuses remain pending while consistent duplicates share one terminal ID', async (t) => {
+    const songs = { items: [
+        { task_id: 'so_same', status: 'failed', model: 'acemusic-v1.1' },
+        { task_id: 'so_same', status: 'succeeded', model: 'acemusic-v1.1', local_audio: '/data/same.mp3' },
+    ] };
+    const { cfg, calls } = await fixture(t, { songs });
+    for (const status of ['failed', 'queued']) {
+        songs.items[0].status = status;
+        const result = await generationStatus(cfg, { task_ids: ['so_same'] });
+        assert.deepEqual(result.conflicting_task_ids, ['so_same']);
+        assert.deepEqual(result.pending_task_ids, ['so_same']);
+        assert.deepEqual(result.succeeded_task_ids, []);
+        assert.deepEqual(result.failed_task_ids, []);
+        assert.equal(result.complete, false);
+        assert.equal(result.audio_complete, false);
+        assert.equal(result.v11_complete, false);
+    }
+    songs.items[0] = { ...songs.items[1] };
+    const consistent = await generationStatus(cfg, { task_ids: ['so_same'] });
+    assert.deepEqual(consistent.conflicting_task_ids, []);
+    assert.deepEqual(consistent.succeeded_task_ids, ['so_same']);
+    assert.deepEqual(consistent.pending_task_ids, []);
+    assert.equal(consistent.v11_complete, true);
+    assert.equal(calls.filter((call) => call.method === 'POST').length, 0);
 });

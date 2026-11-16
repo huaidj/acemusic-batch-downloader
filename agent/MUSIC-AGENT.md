@@ -56,7 +56,7 @@ MCP 沿用 `node agent/mcp.mjs` stdio；設定 `ACE_HUB_URL` 即可。新增工�
 
 ## 真實生成與尚未驗收
 
-`music_generation_submit` 固定回 `unsupported`。供應商 adapter 接通、實際模型/成本回讀、使用者明確預算及素材範圍、累計預留與未知結果對帳完成前，不開啟此路徑。另一分支的 v1.1 提交 adapter 是可復用候選，並不代表已具實際付費生成驗收。
+`music_generation_submit` 固定回 `unsupported`，尚未將方向、API 任務與實際產物串為閉環。另一分支的 v1.1 提交 adapter 已復用並修正邊界；新 [完整 Create API](CREATE-API.md) 已接三模型參數、獨立有限授權、額度預留與未知結果收據。真站尚未啟用：缺使用者預算與素材範圍批准，沒有獨立授權檔。
 
 完整真實任務仍需：遠端 task ID → 對應音檔 → 下載大小/SHA-256/解碼 → 人類試聽 → 下一輪計畫。這些目前沒有 real pass。DeepSeek 研究、持續循環、REA 與演出另有後續 gate。
 

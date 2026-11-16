@@ -98,3 +98,9 @@ npm run pack                 # 產生 dist/ store 與完整包
 
 
 
+# 此分支：HuaiDJ 音樂 Agent
+
+復用既有 Hub 的自然語言工作台與完整 Create API 參數契約，三模型／Idea／Custom／Step／HD 控件均有條件驗證。預設只本機準備與唯讀報價，真實生成需獨立有限授權，未作音樂或演出驗收。
+
+[開啟工作台與上手](agent/MUSIC-AGENT.md) · [API 全參數與門禁](agent/CREATE-API.md)。沒有修改宿主 MCP 或部署原有服務。
+

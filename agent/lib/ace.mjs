@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { config, readJson, writeJson, exists, toWin, sleep, appendLog, cacheRead, cacheWrite, cacheClear, cachePeek } from './config.mjs';
 import { loadShared } from './shared.mjs';
+import { assertDirectGenerationPermission } from './provider-policy.mjs';
 
 const { N, P, PR } = loadShared();
 const SNAPSHOT_NAME = 'library-snapshot';
@@ -185,9 +186,9 @@ async function generationFetch(cfg, session, route, options = {}) {
 async function generationJson(response, { submitting = false } = {}) {
     if (!response.ok) {
         const status = response.status;
-        const uncertain = submitting && status >= 500;
+        const uncertain = submitting && (status === 408 || status >= 500);
         const code = status === 401 ? 'GENERATION_AUTH' : status === 402 ? 'GENERATION_CREDITS' : status === 429 ? 'GENERATION_RATE_LIMIT' : uncertain ? 'GENERATION_SUBMISSION_UNKNOWN' : 'GENERATION_HTTP';
-        throw generationError(code, status === 401 ? '登入已過期，請在 ACE Music 面板重新同步登入狀態。' : `ACE Music 回應 HTTP ${status}；請檢查登入、方案與額度後再處理。`, { http_status: status, submission_unknown: uncertain });
+        throw generationError(code, uncertain ? `生成請求回應 HTTP ${status}，站點是否已建立任務尚未確認；請核對原請求，勿重新提交。` : status === 401 ? '登入已過期，請在 ACE Music 面板重新同步登入狀態。' : `ACE Music 回應 HTTP ${status}；請檢查登入、方案與額度後再處理。`, { http_status: status, submission_unknown: uncertain });
     }
     let data;
     try { data = await response.json(); } catch {
@@ -247,6 +248,7 @@ function generationModelInfo(taskIds, songs) {
 /** Preview reads live cost/model/limits; actual submission is exactly one POST. */
 export async function generateSong(cfg = config(), opts = {}) {
     const normalized = normalizeGeneration(opts);
+    assertDirectGenerationPermission(cfg, opts);
     generationBase(cfg);
     const session = await loadSession(cfg);
     const status = await generationJson(await generationFetch(cfg, session, '/api/status'));
@@ -306,13 +308,25 @@ export async function generationStatus(cfg = config(), opts = {}) {
     const wanted = new Set(taskIds);
     const songs = data.items.filter((song) => wanted.has(song?.task_id)).map((song) => generationSong(song, cfg)).filter(Boolean);
     const found = new Set(songs.map((song) => song.task_id));
-    const failed = songs.filter((song) => ['failed', 'interrupted', 'cancelled', 'canceled'].includes(song.status)).map((song) => song.task_id);
-    const succeeded = songs.filter((song) => song.status === 'succeeded' && !!song.local_audio).map((song) => song.task_id);
+    const statusesById = new Map();
+    for (const song of songs) {
+        if (typeof song.status !== 'string') continue;
+        const statuses = statusesById.get(song.task_id) || new Set();
+        statuses.add(song.status);
+        statusesById.set(song.task_id, statuses);
+    }
+    // Contradictory duplicate rows cannot establish a terminal result.
+    const conflicting = taskIds.filter((id) => (statusesById.get(id)?.size || 0) > 1);
+    const conflictingSet = new Set(conflicting);
+    const coherentSongs = songs.filter((song) => !conflictingSet.has(song.task_id));
+    const failed = [...new Set(coherentSongs.filter((song) => ['failed', 'interrupted', 'cancelled', 'canceled'].includes(song.status)).map((song) => song.task_id))];
+    const succeeded = [...new Set(coherentSongs.filter((song) => song.status === 'succeeded' && !!song.local_audio).map((song) => song.task_id))];
     const terminal = new Set([...failed, ...succeeded]);
     const modelInfo = generationModelInfo(taskIds, songs);
     return {
         ok: true, ...modelInfo, task_ids: taskIds, songs,
         missing_task_ids: taskIds.filter((id) => !found.has(id)),
+        conflicting_task_ids: conflicting,
         succeeded_task_ids: succeeded, failed_task_ids: failed,
         pending_task_ids: taskIds.filter((id) => !terminal.has(id)),
         complete: taskIds.every((id) => terminal.has(id)), failed: failed.length > 0,

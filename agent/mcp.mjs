@@ -5,6 +5,7 @@ import * as ACE from './lib/ace.mjs';
 import { config, readJson, exists } from './lib/config.mjs';
 import { hubJson, hubRequest, HUB_URL } from './lib/hubclient.mjs';
 import { MUSIC_CONTRACT, MUSIC_TOOLS, validateMusicInput } from './lib/music-contract.mjs';
+import { CREATE_CONTRACT, CREATE_TOOLS } from './lib/create-tools.mjs';
 
 const SERVER = { name: 'ace-music-downloader', version: '1.7.3' };
 const jobs = new Map();
@@ -35,6 +36,7 @@ async function hubWaitJob(jobId, timeoutMs = 20000) {
 }
 
 const TOOLS = [
+    ...CREATE_TOOLS,
     ...MUSIC_TOOLS,
     {
         name: 'ace_session_status',
@@ -290,6 +292,11 @@ function textContent(value) {
 }
 
 async function callTool(name, args) {
+    const create = CREATE_CONTRACT.find(item => item.name === name);
+    if (create) {
+        try { const { data } = await hubRequest(create.path, { method: create.method, body: create.method === 'POST' ? args : undefined, timeoutMs: ['preview', 'submit', 'tasks'].includes(create.action) ? 50000 : 5000 }); return data || { ok: false, status: 'unsupported', error: '此 Hub 未支援完整 Create API。' }; }
+        catch { return { ok: false, status: 'hub_required', error: '需要完整 Create API 分支的 Hub；不會建立另一個寫入者。' }; }
+    }
     const music = MUSIC_CONTRACT.find(item => item.name === name);
     if (music) {
         const error = validateMusicInput(args, music.inputSchema);
@@ -654,7 +661,7 @@ async function handleMessage(message) {
         const args = (params && params.arguments) || {};
         try {
             const value = await callTool(name, args);
-            return result(id, { content: textContent(value), isError: name?.startsWith('music_') && value?.ok === false });
+            return result(id, { content: textContent(value), isError: (name?.startsWith('music_') || name?.startsWith('ace_create_')) && value?.ok === false });
         } catch (err) {
             return result(id, { content: textContent('錯誤：' + ((err && err.message) || err)), isError: true });
         }

@@ -2,6 +2,33 @@
 
 給 AI agent（Claude Code、Codex、DSH、Cursor…）用的無頭介面。agent 可以直接：
 
+此隔離分支新增音樂準備與完整 Create API，沿用此 MCP／CLI 與 Hub。預設不提交生成；權限、單輪及整批預算由伺服器的獨立有限授權檔控制。[創作工作台](MUSIC-AGENT.md) · [完整 Create 參數](CREATE-API.md)。
+
+| 工具 | 用途 |
+|---|---|
+| `music_capabilities` | 創作詞典與三模型文件能力 |
+| `music_dictionary_query` | 版本化中英詞條 |
+| `music_reference_register` | 本機連結登記，Spotify AI 路徑關閉 |
+| `music_intent_prepare` | 音樂方向／來源檢查 |
+| `music_prompt_compile` | 可重現提示詞與版本快照 |
+| `music_session_create` | 有限本機準備批次 |
+| `music_generation_prepare` | 審閱後登記待授權任務 |
+| `music_generation_submit` | 產物閉環未串接，固定 unsupported |
+| `music_job_status` | 準備任務狀態 |
+| `music_events` | 持久事件與游標 |
+| `music_session_stop` | 停止本機批次 |
+| `music_assets_query` | 本流程已核驗的音訊產物 |
+| `music_feedback_record` | 無實際產物則拒絕人類試聽評分 |
+| `music_state` | 共用本機狀態 |
+| `ace_create_capabilities` | 完整前端參數與條件契約 |
+| `ace_create_prepare` | 純本機組裝 HTTP 請求 |
+| `ace_create_preview` | 只 GET 即時模型、限制、報價 |
+| `ace_create_submit` | 伺服器有限授權及預留後單次提交 |
+| `ace_create_authority` | 授權／預留／支出摘要 |
+| `ace_create_task_status` | 三模型通用遠端狀態，非產物驗收 |
+| `ace_create_receipt` | 持久幂等收據 |
+| `ace_create_stop` | 停止新提交，保留未知結果預留 |
+
 - 列出使用者 ACE Music 帳號裡「已完成」的歌曲
 - 一次下載整首歌的分軌（stems）、MIDI、MusicXML、MP3、封面圖
 - 下載前自動比對本機檔案與 Chrome 下載紀錄，已下載過的不會重複下載

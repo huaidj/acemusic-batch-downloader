@@ -10,6 +10,9 @@ import { config, cachePeek } from './lib/config.mjs';
 import * as ACE from './lib/ace.mjs';
 import { musicHttp } from './lib/music-http.mjs';
 import { MUSIC_CONTRACT } from './lib/music-contract.mjs';
+import { directGenerationPermission } from './lib/provider-policy.mjs';
+import { createHttp } from './lib/create-http.mjs';
+import { CREATE_CONTRACT } from './lib/create-tools.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT = path.resolve(HERE, '..');
@@ -469,8 +472,9 @@ function capabilities() {
     name: 'ace-agent-hub',
     apiVersion: API_VERSION,
     version: VERSION,
-    endpoints: [...ENDPOINTS, ...MUSIC_CONTRACT.map(({ method, path, description }) => ({ method, path, desc: description }))],
+    endpoints: [...ENDPOINTS, ...MUSIC_CONTRACT, ...CREATE_CONTRACT].map(({ method, path, description, ...entry }) => ({ ...entry, method, path, ...(description ? { desc: description } : {}) })),
     musicAgent: { mode: 'local_prepare_only', ui: '/music', externalCalls: false, realGeneration: false },
+    directGeneration: { adapter: 'site_internal_http', model: 'acemusic-v1.1', enabled: directGenerationPermission(cfg), public_api_contract: false, real_verified: false },
     events: { types: EVENT_TYPES, shape: '{ type, at(ms), seq, source:"page"|"hub", task_id?, task_ids?, title?, ... }' },
     sse: ['job', 'progress', 'snapshot', 'page', 'event', 'music'],
     fileTypes: [...ACE.FILE_TYPES, 'all'],
@@ -509,6 +513,7 @@ function filterSongs(rows, url) {
  * Router
  * ------------------------------------------------------------------ */
 const handleMusic = musicHttp({ stateDir: path.join(cfg.stateDir, 'music-agent'), onEvent: e => broadcast('music', e) });
+const handleCreate = createHttp({ cfg, addJob, enqueue });
 const server = http.createServer(async (req, res) => {
   const origin = req.headers.origin ? String(req.headers.origin) : '';
   if (!originAllowed(origin)) return json(res, 403, { ok: false, error: 'origin not allowed: ' + origin });
@@ -531,6 +536,7 @@ const server = http.createServer(async (req, res) => {
     const pathname = url.pathname;
 
     if (await handleMusic(req, res, url, { readBody, json })) return;
+    if (await handleCreate(req, res, url, { readBody, json })) return;
 
     if (pathname === '/capabilities' && req.method === 'GET') return json(res, 200, capabilities());
 
@@ -640,6 +646,7 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/generate' && req.method === 'POST') {
       const body = await readBody(req);
+      if (body?.dry_run === false && !directGenerationPermission(cfg)) return json(res, 403, { ok: false, status: 'awaiting_authorization', error_code: 'GENERATION_AUTHORIZATION_REQUIRED', error: '真實生成未啟用；請求中的 confirm/max 不能替代批次預算及平台範圍授權。', submission_unknown: false });
       const allowed = new Set(['mode', 'model', 'prompt', 'style', 'lyrics', 'title', 'style_influence', 'dry_run', 'confirm_credit_spend', 'max_credits', 'idempotency_key']);
       if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => !allowed.has(key))) return json(res, 400, { ok: false, error: '生成請求包含不支援的欄位。' });
       // 先以純函式比對收據。扣完最後一筆額度或登入失效後仍能查原結果。

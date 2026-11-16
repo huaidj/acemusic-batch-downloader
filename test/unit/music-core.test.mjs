@@ -155,3 +155,18 @@ test('music core validates ordinary malformed values without exceptions', () => 
   plan.id = `plan_${plan.hash.slice(0, 20)}`;
   assert.equal(prepareGeneration({ plan, reviewed: true, session }).status, 'unsupported');
 });
+
+test('model field limits reject oversized compiled plans without truncating the direction', () => {
+  const direction = 'slowly evolving texture '.repeat(40);
+  const idea = compilePrompt({ natural_language: direction, model: 'ace-step-1.5-xl', mode: 'idea', seed: 11 });
+  assert.equal(idea.ok, true);
+  const custom = compilePrompt({ natural_language: direction, model: 'ace-step-1.5-xl', mode: 'custom', seed: 11 });
+  assert.equal(custom.code, 'TEXT_LIMIT');
+  assert.equal(custom.field, 'style');
+  assert.equal(custom.limit, 512);
+  assert.ok(custom.characters > custom.limit);
+  assert.ok(custom.prompt_fields.style.includes(direction.trim()), 'the review retains the complete original English direction');
+  const lyrics = compilePrompt({ ...base, model: 'ace-step-1.5-xl', mode: 'custom', natural_language: 'micro swing', lyrics: 'a'.repeat(2001) });
+  assert.equal(lyrics.code, 'TEXT_LIMIT');
+  assert.equal(lyrics.field, 'lyrics');
+});
