@@ -210,6 +210,24 @@ test('fingerprints：已驗證音檔的 sha256 同步更新，不讓索引誤判
     const proofs = JSON.parse(fs.readFileSync(proofFile, 'utf8'));
     assert.equal(proofs.files[0].sha256, sha(fs.readFileSync(file)), 'sha256 要是改過後的真實內容');
     assert.equal(proofs.files[0].bytes, bytes);
+    assert.ok(proofs.files[0].sourceSha256 && proofs.files[0].sourceSha256 !== proofs.files[0].sha256, '清除前的來源 sha256 要保留');
+    assert.equal(proofs.files[0].sourceBytes, bytes);
+    assert.ok(!fs.existsSync(path.join(s.stateDir, 'verified-audio.lock')), '更新完要釋放 proof 鎖');
+});
+
+test('fingerprints：proof 鎖被別的工作持有時不改 proof，回報待補', async () => {
+    const s = sandbox();
+    const file = s.write('成品MP3/Locked.mp3', mp3File([textFrame('TSSE', 'ACE Music'), textFrame('TIT2', 'Locked')]));
+    const original = sha(fs.readFileSync(file));
+    const proofFile = path.join(s.stateDir, 'verified-audio.json');
+    fs.writeFileSync(proofFile, JSON.stringify({ schema: 'ace_verified_audio_v1', files: [{ task_id: 'so_lock', kind: 'mp3', absolute: file, bytes: fs.statSync(file).size, sha256: original, verifiedAt: '2026-11-16T10:00:00.000Z' }] }));
+    const lockFile = path.join(s.stateDir, 'verified-audio.lock');
+    fs.writeFileSync(lockFile, JSON.stringify({ pid: 1, purpose: 'other writer' }));
+    const result = await stripFingerprints({ cfg: s.cfg });
+    assert.equal(result.proofsUpdated, 0);
+    assert.equal(result.proofsUpdatePending, true);
+    assert.equal(JSON.parse(fs.readFileSync(proofFile, 'utf8')).files[0].sha256, original, '別人持鎖時 proof 原封不動');
+    assert.ok(fs.existsSync(lockFile), '不刪別人的鎖');
 });
 
 test('fingerprints：下載時用等長緩衝區清除，audio bytes 與長度都不變', async () => {

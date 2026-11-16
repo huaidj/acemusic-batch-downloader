@@ -10,7 +10,7 @@
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-music-preview.ps1
 ```
 
-開啟 <http://127.0.0.1:18788/music>。啟動器使用 F 槽的獨立 state/downloads，ACE 網路目的地限制為 loopback，不讀取原登入或真實曲庫，也不重啟原 8788 Hub。
+開啟 <http://127.0.0.1:18788/music>。啟動器使用獨立的 state/downloads（`HUAIDJ_DEV_ROOT`；開發機預設 `F:\DevData\Runtime`），ACE 網路目的地限制為 loopback，不讀取原登入或真實曲庫，也不重啟原 8788 Hub。
 
 1. 輸入方向，選擇三個模型之一及 Idea/Custom。
 2. 必要時調整詞條權重、鎖定項與探索種子，再產生預覽。

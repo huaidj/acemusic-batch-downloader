@@ -356,27 +356,44 @@ export async function stripFingerprints({ root = 'ai音樂', dryRun = false, cfg
     }
     // 已驗證音檔的 sha256 是「整檔內容」證據；就地改過就誠實更新，不讓索引誤判成待核對
     if (changedInodes.size) {
+        // 與 WAV 修復、索引 proof 修復共用 verified-audio.lock；拿不到鎖就不改，避免兩個寫者互相蓋掉 proof。
         const proofFile = path.join(cfg.stateDir, 'verified-audio.json');
-        const proofs = await readJson(proofFile, null);
-        if (proofs && Array.isArray(proofs.files)) {
-            const changed = new Map();
-            for (const paths of changedInodes.values()) for (const p of paths) changed.set(path.resolve(p).toLowerCase(), true);
-            const hashed = new Map();
-            for (const entry of proofs.files) {
-                if (!entry || !entry.absolute) continue;
-                const key = path.resolve(entry.absolute).toLowerCase();
-                if (!changed.has(key)) continue;
-                try {
-                    if (!hashed.has(key)) hashed.set(key, await sha256(entry.absolute));
-                    const stat = await fsp.stat(entry.absolute);
-                    entry.sha256 = hashed.get(key);
-                    entry.bytes = stat.size;
-                    entry.verifiedAt = new Date().toISOString();
-                    entry.fingerprintStripAt = new Date().toISOString();
-                    report.proofsUpdated += 1;
-                } catch { /* 檔案不見了：留給索引自己回報 */ }
+        const lockFile = path.join(cfg.stateDir, 'verified-audio.lock');
+        let lock = null;
+        try { lock = await fsp.open(lockFile, 'wx'); } catch (err) {
+            if (err.code !== 'EEXIST') throw err;
+            report.proofsUpdatePending = true;
+            report.proofsUpdateReason = 'verified-audio.lock 由另一個工作持有；proof 未更新，下次整理會再補';
+        }
+        if (lock) try {
+            await lock.writeFile(JSON.stringify({ pid: process.pid, purpose: 'fingerprint strip proof update', startedAt: new Date().toISOString() }));
+            const proofs = await readJson(proofFile, null);
+            if (proofs && Array.isArray(proofs.files)) {
+                const changed = new Map();
+                for (const paths of changedInodes.values()) for (const p of paths) changed.set(path.resolve(p).toLowerCase(), true);
+                const hashed = new Map();
+                for (const entry of proofs.files) {
+                    if (!entry || !entry.absolute) continue;
+                    const key = path.resolve(entry.absolute).toLowerCase();
+                    if (!changed.has(key)) continue;
+                    try {
+                        if (!hashed.has(key)) hashed.set(key, await sha256(entry.absolute));
+                        const stat = await fsp.stat(entry.absolute);
+                        const now = new Date().toISOString();
+                        // 保留清除前的來源證據：之後仍可證明這份檔案原本就是站點給的那一份（原 bytes 在 fingerprint-backups）。
+                        if (!entry.sourceSha256 && entry.sha256 && entry.sha256 !== hashed.get(key)) { entry.sourceSha256 = entry.sha256; entry.sourceBytes = entry.bytes; }
+                        entry.sha256 = hashed.get(key);
+                        entry.bytes = stat.size;
+                        entry.verifiedAt = now;
+                        entry.fingerprintStripAt = now;
+                        report.proofsUpdated += 1;
+                    } catch { /* 檔案不見了：留給索引自己回報 */ }
+                }
+                if (report.proofsUpdated) await writeJson(proofFile, proofs);
             }
-            if (report.proofsUpdated) await writeJson(proofFile, proofs);
+        } finally {
+            await lock.close().catch(() => {});
+            await fsp.unlink(lockFile).catch(() => {});
         }
     }
     report.ok = report.failed.length === 0;

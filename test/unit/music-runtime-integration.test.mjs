@@ -14,7 +14,7 @@ import { createApiController, createHttp } from '../../agent/lib/create-http.mjs
 import { hubRequest } from '../../agent/lib/hubclient.mjs';
 
 const PROJECT = fileURLToPath(new URL('../../', import.meta.url));
-const TEMP_ROOT = process.platform === 'win32' ? 'F:\\DevData\\Temp\\HuaiDJ-ACE-Agent-20261116-phase2-artifacts' : path.join(os.tmpdir(), 'HuaiDJ-ACE-Agent-phase2-artifacts');
+const TEMP_ROOT = path.join(process.env.ACE_TEST_TEMP || os.tmpdir(), 'HuaiDJ-ACE-phase2-artifacts');
 fs.mkdirSync(TEMP_ROOT, { recursive: true });
 const root = label => fs.mkdtempSync(path.join(TEMP_ROOT, label + '-'));
 const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value)); return file; };

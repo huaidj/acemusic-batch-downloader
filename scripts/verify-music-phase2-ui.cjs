@@ -10,7 +10,7 @@ const { createHash, randomUUID } = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { chromium } = require(process.env.PLAYWRIGHT_PATH || 'playwright');
 const project = path.resolve(__dirname, '..');
-const tempRoot = 'F:\\DevData\\Temp\\HuaiDJ-ACE-Agent-20261116-phase2-ui';
+const tempRoot = path.join(process.env.ACE_TEST_TEMP || require('os').tmpdir(), 'HuaiDJ-ACE-phase2-ui');
 const base = path.join(tempRoot, randomUUID());
 const out = path.join(base, 'evidence');
 fs.mkdirSync(out, { recursive: true });

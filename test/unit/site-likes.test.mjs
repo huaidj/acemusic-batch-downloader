@@ -23,7 +23,7 @@ function pager(pages) {
 }
 
 function sandbox(t) {
-  const base = process.platform === 'win32' && fs.existsSync('F:\\DevData\\Temp') ? 'F:\\DevData\\Temp' : os.tmpdir();
+  const base = (process.env.ACE_TEST_TEMP || os.tmpdir());
   const dir = fs.mkdtempSync(path.join(base, 'site-likes-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return { stateDir: dir };

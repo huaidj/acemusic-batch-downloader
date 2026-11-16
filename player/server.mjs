@@ -11,6 +11,8 @@ import { buildAudioLibrary } from '../agent/lib/audio-library.mjs';
 import { readSiteLikes, siteLikesView } from '../agent/lib/site-likes.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+// 版本只有一個來源：manifest.json（原始碼與本機安裝副本都有）；讀不到時回報 unknown，不寫死舊版號。
+const APP_VERSION = (() => { try { return JSON.parse(fs.readFileSync(path.join(HERE, '..', 'manifest.json'), 'utf8')).version || 'unknown'; } catch { return 'unknown'; } })();
 const BODY_LIMIT = 256 * 1024;
 const STATE_FIELDS = new Set(['revision', 'queue', 'playlists', 'favorites', 'history', 'volume', 'repeat', 'shuffle', 'currentFileId', 'currentTime']);
 const STATIC_FILES = new Map([
@@ -291,7 +293,7 @@ export function createPlayerServer(options = {}) {
       if (![`127.0.0.1:${port}`, `localhost:${port}`].includes(host) || (req.headers.origin && req.headers.origin !== `http://${host}`) || req.headers['sec-fetch-site'] === 'cross-site') throw failure(403, '只允許播放器本機視窗存取', 'LOCAL_ORIGIN_REQUIRED');
       const url = new URL(req.url, `http://${host}`);
       const method = req.method || 'GET';
-      if (url.pathname === '/api/health' && method === 'GET') { const current = codeFingerprint(); return json(res, 200, { ok: true, service: 'huaidj-player', version: '1.8.0', pid: process.pid, build: STARTED_FINGERPRINT, stale: current !== STARTED_FINGERPRINT }); }
+      if (url.pathname === '/api/health' && method === 'GET') { const current = codeFingerprint(); return json(res, 200, { ok: true, service: 'huaidj-player', version: APP_VERSION, pid: process.pid, build: STARTED_FINGERPRINT, stale: current !== STARTED_FINGERPRINT }); }
       if (url.pathname === '/api/restart' && method === 'POST') {
         // 升級後讓舊程序換成磁碟上的新版；只由使用者在播放器視窗按下，不會自動打斷播放。
         if (typeof options.onRestart !== 'function') throw failure(501, '這個播放器服務不支援自動重新啟動', 'RESTART_UNAVAILABLE');
@@ -420,5 +422,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   };
   const server = createPlayerServer({ autoSyncSiteLikes: process.env.ACE_PLAYER_SITE_LIKES !== '0', onRestart });
   server.once('error', (err) => { console.error('播放器無法啟動：', err.code || err.name); process.exitCode = 1; });
-  server.listen(port, '127.0.0.1', () => console.log(`HuaiDJ Player 1.8.0 http://127.0.0.1:${port}`));
+  server.listen(port, '127.0.0.1', () => console.log(`HuaiDJ Player ${APP_VERSION} http://127.0.0.1:${port}`));
 }

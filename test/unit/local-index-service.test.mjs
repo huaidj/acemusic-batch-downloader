@@ -29,7 +29,7 @@ function wav() {
 }
 
 async function fixture(t, { createRoot = true } = {}) {
-  const base = process.platform === 'win32' ? 'F:\\DevData\\Temp' : os.tmpdir();
+  const base = (process.env.ACE_TEST_TEMP || os.tmpdir());
   const directory = await fs.mkdtemp(path.join(base, 'ace-index-service-'));
   const cfg = { stateDir: path.join(directory, 'state'), downloadDir: path.join(directory, 'downloads'), baseUrl: 'https://fixture.invalid' };
   cfg.stateFile = path.join(cfg.stateDir, 'agent-state.json'); cfg.historyFile = path.join(cfg.stateDir, 'history.json');

@@ -15,7 +15,7 @@ function wav(fill = 1, dataLength = 140000, truncated = false) {
 }
 
 async function fixture(t, { broken = false } = {}) {
-  const base = process.platform === 'win32' ? 'F:\\DevData\\Temp' : os.tmpdir();
+  const base = process.env.ACE_TEST_TEMP || os.tmpdir();
   const temporary = await fs.mkdtemp(path.join(base, 'ace-wav-repair-test-'));
   const cfg = { stateDir: path.join(temporary, 'state'), downloadDir: path.join(temporary, 'downloads'), ua: 'Repair-fixture' };
   cfg.sessionFile = path.join(cfg.stateDir, 'session.json');
@@ -122,4 +122,41 @@ test('WAV repair dry run does not download files or acquire a lock; another proc
   await fs.writeFile(lock, 'another-process-lock');
   await assert.rejects(repairWavs({ cfg: f.cfg, workDir: f.workDir, useRayburst: false, dryRun: false }), { code: 'LOCKED' });
   assert.equal(await fs.readFile(lock, 'utf8'), 'another-process-lock');
+});
+
+test('WAV repair reuses a verified WAV whose fingerprints were stripped in place, but still replaces an unexplained change', async (t) => {
+  const f = await fixture(t);
+  const first = await repairWavs({ cfg: f.cfg, workDir: f.workDir, useRayburst: false, dryRun: false });
+  assert.equal(first.downloaded, 2);
+  const proofFile = path.join(f.cfg.stateDir, 'verified-audio.json');
+  const manifest = JSON.parse(await fs.readFile(proofFile, 'utf8'));
+  // 模擬 1.8.3 指紋清除：同長度改寫檔首 metadata，proof 更新 sha256 並標記 fingerprintStripAt
+  for (const [index, entry] of manifest.files.entries()) {
+    const bytes = await fs.readFile(entry.absolute);
+    bytes[60] ^= 0xff;
+    await fs.writeFile(entry.absolute, bytes);
+    if (index === 0) {
+      entry.sourceSha256 = entry.sha256;
+      entry.sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+      entry.fingerprintStripAt = new Date().toISOString();
+    }
+  }
+  await fs.writeFile(proofFile, JSON.stringify(manifest));
+  const before = f.fullDownloads.length;
+  const again = await repairWavs({ cfg: f.cfg, workDir: f.workDir, useRayburst: false, dryRun: false });
+  assert.equal(again.failed, 0);
+  assert.equal(again.reused, 1, 'the stripped, re-proven WAV is reused');
+  assert.equal(again.downloaded, 1, 'the WAV changed without a strip record is replaced from the source');
+  assert.equal(f.fullDownloads.length, before + 1);
+  const after = JSON.parse(await fs.readFile(proofFile, 'utf8'));
+  const kept = after.files.find((entry) => entry.task_id === manifest.files[0].task_id);
+  assert.equal(kept.absolute, manifest.files[0].absolute, 'the stripped file stays the proven copy');
+});
+
+test('WAV repair work folder must be absolute and outside the download folder, on any drive', async (t) => {
+  const f = await fixture(t);
+  await assert.rejects(repairWavs({ cfg: f.cfg, workDir: 'relative/work', useRayburst: false, dryRun: false }), { code: 'WORK_DIR_REQUIRED' });
+  await assert.rejects(repairWavs({ cfg: f.cfg, workDir: path.join(f.cfg.downloadDir, 'ai音樂', 'work'), useRayburst: false, dryRun: false }), { code: 'WORK_DIR_REQUIRED' });
+  const ok = await repairWavs({ cfg: f.cfg, workDir: f.workDir, useRayburst: false, dryRun: false });
+  assert.equal(ok.failed, 0);
 });

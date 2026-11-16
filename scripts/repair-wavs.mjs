@@ -219,7 +219,9 @@ export async function repairWavs({ cfg = config(), workDir, concurrency = 2, onP
     emit({ type: 'plan', eligible: report.eligible, modelUnavailable: report.modelUnavailable, dryRun: true });
     return report;
   }
-  if (!workDir || !path.isAbsolute(workDir) || (process.platform === 'win32' && !/^F:\\/i.test(path.resolve(workDir)))) throw problem('WORK_DIR_REQUIRED', '實際修復必須指定 F 槽的絕對工作目錄');
+  // 工作目錄要明確指定的絕對路徑，且不能在下載資料夾內（半成品不得落進曲庫）；不再限定特定磁碟代號。
+  if (!workDir || !path.isAbsolute(workDir)) throw problem('WORK_DIR_REQUIRED', '實際修復必須指定絕對路徑的工作目錄');
+  if (inside(cfg.downloadDir, path.resolve(workDir))) throw problem('WORK_DIR_REQUIRED', '工作目錄不能放在下載資料夾內');
   const work = path.resolve(workDir);
   await fsp.mkdir(work, { recursive: true });
   await fsp.mkdir(cfg.stateDir, { recursive: true });
@@ -262,8 +264,10 @@ export async function repairWavs({ cfg = config(), workDir, concurrency = 2, onP
             try {
               await validWav(candidate.absolute, first.total);
               const [head, tail, hash] = await Promise.all([readSlice(candidate.absolute, 0, first.bytes.length), readSlice(candidate.absolute, tailStart, last.bytes.length), sha256(candidate.absolute)]);
-              if (!head.equals(first.bytes) || !tail.equals(last.bytes) || (candidate.sha256 && candidate.sha256 !== hash)) continue;
-              verified = { absolute: candidate.absolute, sha256: hash, verification: 'source_ranges_and_riff', reused: true };
+              // 指紋清除是就地等長改寫：首段 metadata 與來源不同，但整檔 sha256 仍等於已更新的 proof，長度也等於來源 → 視為同一份，不重下載。
+              const strippedProof = !!candidate.fingerprintStripAt && !!candidate.sha256 && candidate.sha256 === hash;
+              if (!strippedProof && (!head.equals(first.bytes) || !tail.equals(last.bytes) || (candidate.sha256 && candidate.sha256 !== hash))) continue;
+              verified = { absolute: candidate.absolute, sha256: hash, verification: strippedProof ? 'proof_sha_after_fingerprint_strip' : 'source_ranges_and_riff', reused: true };
               break;
             } catch { /* A mismatched old file is preserved and replaced by a new, distinct file. */ }
           }

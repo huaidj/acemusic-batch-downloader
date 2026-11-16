@@ -32,7 +32,7 @@ fs.writeFileSync(path.join(out, 'MCP-config.example.json'), JSON.stringify({ mcp
   command: '<absolute-package-folder>/runtime/node.exe', args: ['<absolute-package-folder>/agent/mcp.mjs'],
   env: { ACE_HUB_URL: 'http://127.0.0.1:18792', ACE_MUSIC_CONTROLLED_RUN: 'true' },
 } } }, null, 2));
-fs.writeFileSync(path.join(out, '開始使用.md'), `# HuaiDJ 音樂中樞便攜包\n\n雙擊 Start-HuaiDJ.cmd，開啟 http://127.0.0.1:18792/music。Node 與 FFmpeg 已附，不需要 npm 安裝。資料預設在 F:\\DevData\\Runtime\\HuaiDJ-ACE-Portable；停止按 Stop-HuaiDJ.cmd，紀錄保留。\n\n預設為隔離預覽，不讀登入、不生成、不啟用研究費用。連真帳戶與付費授權由操作者另行設定；不把提示詞審閱當費用批准。參數及接線見 agent/MUSIC-AGENT.md、agent/CREATE-API.md。完整源碼提交 ${commit}。\n\n這是 Windows 便攜資料夾，不修改系統、宿主 MCP 或既有 ACE 服務；換機的硬體與聽感仍需驗收。Node/FFmpeg 第三方授權在 licenses。不要把 Cookie、API key 或真實曲庫放進此套件。\n`);
+fs.writeFileSync(path.join(out, '開始使用.md'), `# HuaiDJ 音樂中樞便攜包\n\n雙擊 Start-HuaiDJ.cmd，開啟 http://127.0.0.1:18792/music。Node 與 FFmpeg 已附，不需要 npm 安裝。資料預設在 %LOCALAPPDATA%\\HuaiDJ-ACE-Portable（可用 HUAIDJ_DATA_ROOT 指定）；停止按 Stop-HuaiDJ.cmd，紀錄保留。\n\n預設為隔離預覽，不讀登入、不生成、不啟用研究費用。連真帳戶與付費授權由操作者另行設定；不把提示詞審閱當費用批准。參數及接線見 agent/MUSIC-AGENT.md、agent/CREATE-API.md。完整源碼提交 ${commit}。\n\n這是 Windows 便攜資料夾，不修改系統、宿主 MCP 或既有 ACE 服務；換機的硬體與聽感仍需驗收。Node/FFmpeg 第三方授權在 licenses。不要把 Cookie、API key 或真實曲庫放進此套件。\n`);
 const rows = [];
 function walk(dir) {
   for (const item of fs.readdirSync(dir, { withFileTypes: true })) {

@@ -15,7 +15,7 @@ function tinyWav({ truncated = false } = {}) {
 }
 
 async function sandbox(t) {
-  const base = process.platform === 'win32' ? 'F:\\DevData\\Temp' : os.tmpdir();
+  const base = (process.env.ACE_TEST_TEMP || os.tmpdir());
   const directory = await fs.mkdtemp(path.join(base, 'ace-integrity-test-'));
   const stateDir = path.join(directory, 'state');
   const downloadDir = path.join(directory, 'downloads');

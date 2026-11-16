@@ -10,7 +10,7 @@ import { createPlayerServer } from '../player/server.mjs';
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_PATH || 'playwright');
 const PROJECT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const TEMP = process.platform === 'win32' ? 'F:\\DevData\\Temp' : os.tmpdir();
+const TEMP = (process.env.ACE_TEST_TEMP || os.tmpdir());
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const assert = (value, message) => { if (!value) throw new Error(message); };
 

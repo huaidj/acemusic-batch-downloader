@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8.6 — 2026-11-17（證據保全與可攜性）
+
+- 指紋清除更新 `verified-audio.json` 時改為取得 `verified-audio.lock`（與 WAV 修復、索引 proof 修復同一把鎖）；被別的工作持有時不改 proof、回報 `proofsUpdatePending`，避免兩個寫者互相蓋掉證據。
+- 指紋清除保留清除前的 `sourceSha256`／`sourceBytes`，仍可證明檔案原本就是站點提供的那一份。
+- WAV 修復：已清除指紋、proof 已更新（`fingerprintStripAt` 且整檔 sha256 相符）的 WAV 直接沿用，不再因檔首 metadata 不同而重新下載；沒有清除紀錄的改動仍照舊換成來源檔。
+- WAV 修復工作目錄不再限定 F 槽：只要求絕對路徑且不在下載資料夾內。
+- 測試不再假設 `F:DevDataTemp` 存在：一律用 `ACE_TEST_TEMP` 或系統暫存；單元 517/517 在系統暫存下通過。
+- 驗收測試補上 SUB RITUAL #11／#12／#15（填入讀回、Cover／純器樂欄位、雙曲分別驗收）。
+
 ## 1.8.5 — 2026-11-17（成品WAV 分類後複製整理輸出）
 
 - 一鍵整理新增 `wavnames` 步驟：`成品WAV` 分類後，把乾淨名字**複製**到 `ai音樂/整理輸出/成品WAV/`；**來源檔永不移動、不改名**，插件與索引照樣讀得到原本路徑。

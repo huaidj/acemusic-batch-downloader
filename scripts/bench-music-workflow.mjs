@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const PROJECT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const ROOT = 'F:\\DevData\\Temp\\HuaiDJ-ACE-Agent-20261116-bench';
+const ROOT = path.join(process.env.ACE_TEST_TEMP || os.tmpdir(), 'HuaiDJ-ACE-bench');
 const JOBS = 5, SAMPLES = 50, GENERATION_DELAY_MS = 1200, AUDIO_DELAY_MS = 1500;
 const forbidden = new Set([8777, 8788, 18788, 18789, 18791]);
 fs.mkdirSync(ROOT, { recursive: true });

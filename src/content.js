@@ -596,7 +596,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     const closeBtn = el('button', { class: 'iconbtn', type: 'button', 'data-act': 'close', title: '收起' }, ['✕']);
     const refreshBtn = el('button', { class: 'iconbtn', type: 'button', 'data-act': 'refresh', title: '重新整理歌單' }, ['↻']);
     const titleBox = el('div', { class: 'title', text: 'ACE 批量下載' });
-    const subBox = el('div', { class: 'sub', text: 'v1.8.0 · 分軌 · MIDI · WAV' });
+    const extVersion = (() => { try { return chrome.runtime.getManifest().version; } catch (_) { return ''; } })();
+    const subBox = el('div', { class: 'sub', text: `${extVersion ? 'v' + extVersion + ' · ' : ''}分軌 · MIDI · WAV` });
     const alphaInput = el('input', { type: 'range', min: '40', max: '100', step: '5', 'data-ui': 'alpha', 'aria-label': '面板不透明度' });
     const alphaBox = el('label', { class: 'alpha', title: '面板不透明度（拖曳標題列可移動面板，雙擊標題列回到預設位置）' }, ['透明', alphaInput]);
     const header = el('header', { title: '拖曳移動；雙擊回到預設位置' }, [titleBox, subBox, alphaBox, refreshBtn, closeBtn]);

@@ -184,18 +184,18 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { $('toast').hidden = true; }, 4200);
   }
-  // 這個頁面本身的版本；與服務版本不同代表升級後舊服務仍在執行。
-  const PLAYER_BUILD = '1.8.0';
+  // 服務以程式碼指紋判斷自己是否落後於磁碟上的程式（health.stale）；不再比對手寫版本字串。
+  // 不支援指紋的舊服務沒有 build 欄位，也視為需要重啟。
   let versionWarned = false;
+  const serviceOutdated = (health) => !!health && (health.stale === true || typeof health.build !== 'string');
   async function checkServiceVersion() {
     try {
       const health = await request('/api/health', { signal: AbortSignal.timeout(3000) });
-      // 版本號相同但磁碟上的程式已更新（stale）也算舊服務。
-      if (!health?.version || (health.version === PLAYER_BUILD && !health.stale)) { if (versionWarned) { versionWarned = false; notice(''); } return; }
+      if (!serviceOutdated(health)) { if (versionWarned) { versionWarned = false; notice(''); } return; }
       versionWarned = true;
       const node = $('notice');
       node.hidden = false;
-      node.innerHTML = `${health.stale ? '播放器程式已更新，但服務仍在執行更新前的程式。' : `播放器服務仍是舊版 ${esc(health.version)}（頁面是 ${PLAYER_BUILD}），網站點讚等新功能需要新版服務。`}<button id="restart-service">重新啟動播放器服務</button><span class="muted"> 約 2 秒，會中斷目前播放。</span>`;
+      node.innerHTML = `${health.stale ? '播放器程式已更新，但服務仍在執行更新前的程式。' : `播放器服務是較舊的版本（${esc(health.version || '未知')}），網站點讚等新功能需要新版服務。`}<button id="restart-service">重新啟動播放器服務</button><span class="muted"> 約 2 秒，會中斷目前播放。</span>`;
       $('restart-service').addEventListener('click', restartService);
     } catch (_) { /* 服務暫時無回應時不打擾。 */ }
   }
@@ -206,7 +206,7 @@
       await request('/api/restart', { method: 'POST', body: '{}' });
     } catch (error) {
       notice(error.status === 404 || error.status === 501
-        ? '這個舊版服務不支援自動重新啟動。請在命令列執行：node "%LOCALAPPDATA%\AceMusicDL\agent\cli.mjs" player --restart'
+        ? String.raw`這個舊版服務不支援自動重新啟動。請在命令列執行：node "%LOCALAPPDATA%\AceMusicDL\agent\cli.mjs" player --restart --force`
         : `重新啟動失敗：${error.message}`);
       return;
     }
@@ -214,7 +214,7 @@
       await new Promise((resolve) => setTimeout(resolve, 250));
       try {
         const health = await request('/api/health', { signal: AbortSignal.timeout(1500) });
-        if (health?.version === PLAYER_BUILD && !health.stale) { versionWarned = false; notice(''); await loadSiteLikes(); await loadLibrary(true); toast('播放器服務已更新'); return; }
+        if (health && !serviceOutdated(health)) { versionWarned = false; notice(''); await loadSiteLikes(); await loadLibrary(true); toast('播放器服務已更新'); return; }
       } catch (_) { /* 重新啟動期間連不上是正常的 */ }
     }
     notice('播放器服務沒有在 10 秒內回來；請重新開啟播放器。');
