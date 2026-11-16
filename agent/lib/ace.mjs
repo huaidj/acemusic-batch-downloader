@@ -1281,6 +1281,66 @@ export async function applyLocalSkips(cfg = config(), plan, state = {}) {
 }
 
 
+/** 只補「免費」檔案類型：MP3、WAV、封面。MIDI／MusicXML 可能觸發站點樂譜生成（扣額度），一律不在這裡處理。 */
+export const FILL_TYPES = Object.freeze(['mp3', 'wav', 'cover']);
+
+/**
+ * 依可信本機索引找出缺檔的歌，只補免費類型。預設 dryRun：列出計畫，不下載。
+ * 找缺口只看索引（task 自己的證據），不靠同名檔；實際下載仍走 runDownload 的既有跳過規則，已存在的不重下。
+ */
+export async function fillMissing(cfg = config(), { types = FILL_TYPES, root = 'ai音樂', dryRun = true, concurrency = 3, onProgress = null, indexImpl = null, songsImpl = null } = {}) {
+    const wanted = [...new Set((Array.isArray(types) ? types : String(types || '').split(',')).map((t) => String(t).trim()).filter(Boolean))];
+    const refused = wanted.filter((t) => !FILL_TYPES.includes(t));
+    if (refused.length) throw Object.assign(new Error('補齊只處理 mp3、wav、cover；' + refused.join(',') + ' 可能扣額度，請用一般下載並自行確認'), { code: 'FILL_TYPE_REFUSED' });
+    if (!wanted.length) throw Object.assign(new Error('請指定要補齊的類型'), { code: 'FILL_TYPE_REFUSED' });
+    const { localDownloadIndex: buildIndex } = await import('./local-index-service.mjs');
+    const index = await (indexImpl || ((c, o) => buildIndex(c, o)))(cfg, { root, refresh: true });
+    const songs = await (songsImpl || ((c) => listSongs(c, { refresh: true })))(cfg);
+    const missingKinds = (row) => wanted.filter((kind) => {
+        if (!row) return true;
+        if (kind === 'wav') return row.wavSupported !== false && !row.downloaded?.wav;
+        return !row.downloaded?.[kind];
+    });
+    const gaps = [];
+    for (const song of songs) {
+        if (!song || !song.task_id || !P.isDone(song)) continue;
+        const kinds = missingKinds(index.byTask?.[song.task_id]);
+        if (kinds.length) gaps.push({ song, kinds });
+    }
+    const report = { ok: true, dryRun: !!dryRun, types: wanted, songsScanned: songs.length, songsWithGaps: gaps.length, gaps: gaps.map((g) => ({ task_id: g.song.task_id, title: g.song.meta?.title || '', missing: g.kinds })) };
+    if (!gaps.length) return { ...report, toDownload: 0, files: [], noSource: [] };
+    // 每首只計畫「它自己缺的」類型：同一組缺口的歌合成一批，不讓別首的類型連帶重下已證實存在的檔。
+    const groups = new Map();
+    for (const gap of gaps) {
+        const key = [...gap.kinds].sort().join(',');
+        if (!groups.has(key)) groups.set(key, { types: gap.kinds, songs: [] });
+        groups.get(key).songs.push(gap.song);
+    }
+    const taskIdOf = (task) => task.task_id || task.taskId || null;
+    const planned = new Set();
+    report.files = [];
+    for (const group of groups.values()) {
+        const { plan, state } = await buildPlanForSongs(cfg, group.songs, { types: group.types, root });
+        await applyLocalSkips(cfg, plan, state);
+        for (const task of plan.tasks) for (const file of task.files) {
+            if (file.skip) continue;
+            report.files.push({ task_id: taskIdOf(task), kind: file.kind, path: file.path });
+            planned.add(taskIdOf(task));
+        }
+    }
+    report.toDownload = report.files.length;
+    // 有缺口但站點沒有可下載來源（例如原始 WAV 上傳的 MP3）：如實回報，不當成失敗。
+    report.noSource = gaps.filter((g) => !planned.has(g.song.task_id)).map((g) => g.song.task_id);
+    if (dryRun || !report.toDownload) return report;
+    const totals = { done: 0, skipped: 0, failed: 0, failedList: [] };
+    for (const group of groups.values()) {
+        const result = await runDownload({ songs: group.songs, options: { types: group.types, root }, concurrency, onProgress, cfg });
+        totals.done += result.done || 0; totals.skipped += result.skipped || 0; totals.failed += result.failed || 0;
+        totals.failedList.push(...(result.failedList || []));
+    }
+    return { ...report, dryRun: false, ...totals, ok: !totals.failed };
+}
+
 export async function runDownload({ songs, options = {}, concurrency = 4, onProgress = null, isCancelled = null, cfg = config() }) {
     if (!hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => runDownload(...arguments), { isCancelled });
     const notifyProgress = (value) => { try { onProgress?.(value); } catch { /* Display failures do not undo completed file writes. */ } };

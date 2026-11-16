@@ -210,11 +210,15 @@ export function createPlayerServer(options = {}) {
   let writeChain = Promise.resolve();
   let selection = { serial: 0, songId: null };
 
-  const library = async (refresh = false) => {
-    if (refresh) libraryGeneration += 1;
-    if (!refresh && snapshot && indexedGeneration === libraryGeneration && Date.now() - indexedAt < (libraryWatchers.length ? 30000 : 3000)) return snapshot;
+  // 曲庫快取（stale-while-revalidate）：有快照時一律先回快照，過期或檔案變動就在背景重建；
+  // 只有明確的「刷新曲庫」才等新結果。這樣 5 秒一次的輕量輪詢永遠不會卡在重建上。
+  // 有檔案監看時，變動會立刻讓快照過期；固定的安全重建間隔因此可以拉長。
+  const libraryTtlMs = options.libraryTtlMs ?? (libraryWatchers.length ? 5 * 60 * 1000 : 3000);
+  let libraryBuilds = 0;
+  const rebuildLibrary = () => {
     if (!indexing) {
       const generation = libraryGeneration;
+      libraryBuilds += 1;
       indexing = Promise.resolve(buildLibrary({ cfg, root })).then((value) => {
         if (!value || !object(value.library) || !(value.filesById instanceof Map)) throw new Error('曲庫索引回應格式不正確');
         snapshot = value;
@@ -224,6 +228,22 @@ export function createPlayerServer(options = {}) {
       }).finally(() => { indexing = null; });
     }
     return indexing;
+  };
+  const library = async (refresh = false) => {
+    if (refresh) {
+      // 明確刷新：已在跑的重建可能早於這次請求，等它結束後若還沒涵蓋本次就再建一次。
+      libraryGeneration += 1;
+      const target = libraryGeneration;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await rebuildLibrary();
+        if (indexedGeneration >= target) return snapshot;
+      }
+      return snapshot;
+    }
+    if (!snapshot) return rebuildLibrary();
+    const fresh = indexedGeneration === libraryGeneration && Date.now() - indexedAt < libraryTtlMs;
+    if (!fresh) rebuildLibrary().catch(() => { /* 背景重建失敗時保留舊快照，下次請求再試 */ });
+    return snapshot;
   };
 
   const loadState = async () => {
@@ -406,6 +426,7 @@ export function createPlayerServer(options = {}) {
     for (const watcher of libraryWatchers) watcher.close();
   });
   server.playerStateFile = stateFile;
+  server.libraryStats = () => ({ builds: libraryBuilds, rebuilding: !!indexing, indexedAt });
   return server;
 }
 

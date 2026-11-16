@@ -300,3 +300,29 @@ test('player health exposes a code fingerprint and is not stale right after star
   assert.match(health.json.build, /^[0-9a-f]{16}$/);
   assert.equal(health.json.stale, false);
 });
+
+test('library cache serves the last snapshot instantly while one background rebuild runs; explicit refresh waits', async (t) => {
+  const f = await fixture(t);
+  let version = 1, builds = 0;
+  const slowBuild = async () => {
+    builds += 1;
+    const current = version;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    return { library: { ...f.library, revision: 'rev-' + current }, filesById: new Map() };
+  };
+  const { port, server } = await f.start({ buildLibrary: slowBuild, libraryTtlMs: 0 });
+  const first = await request(port, '/api/library/revision');
+  assert.equal(first.json.revision, 'rev-1', 'the first request waits for a real build');
+  version = 2;
+  const started = Date.now();
+  const stale = await Promise.all([request(port, '/api/library/revision'), request(port, '/api/library/revision'), request(port, '/api/library/revision')]);
+  assert.ok(Date.now() - started < 250, 'stale requests do not wait for the rebuild');
+  assert.ok(stale.every((r) => r.json.revision === 'rev-1'), 'they answer from the last snapshot');
+  assert.equal(server.libraryStats().rebuilding, true);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.equal(builds, 2, 'concurrent stale requests share one background rebuild');
+  assert.equal((await request(port, '/api/library/revision')).json.revision, 'rev-2', 'the next poll sees the rebuilt library');
+  version = 3;
+  const refreshed = await request(port, '/api/library?refresh=1');
+  assert.equal(refreshed.json.revision, 'rev-3', 'an explicit refresh waits for fresh data');
+});

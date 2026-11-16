@@ -22,7 +22,7 @@ async function hubTry(pathname, { method = 'GET', body, timeoutMs = 1200 } = {})
     }
 }
 function usage() {
-    console.log(`ACE Music 批量下載器 CLI  v1.8.6
+    console.log(`ACE Music 批量下載器 CLI  v1.8.7
 
 用法：
   node cli.mjs create capabilities            Create 頁面完整 API 參數契約
@@ -49,6 +49,7 @@ function usage() {
   node cli.mjs backups [--keep-days 7] [--keep-last 1] [--max-mb N] [--prune --commit]  整理備份清單／清理（預設只預覽）
   node cli.mjs masters                         母帶清單（俱樂部版／舊版對照，唯讀）
   node cli.mjs list [--query 關鍵字] [--undownloaded] [--json] 列出可下載歌曲
+  node cli.mjs fill-missing [--types mp3,wav,cover] [--commit]  依索引補齊缺的免費檔（預設預覽；不碰 MIDI／MusicXML）
   node cli.mjs download --all [選項]           下載全部歌曲
   node cli.mjs download --song <task_id> ...   下載指定歌曲（可重複）
   node cli.mjs download --latest N [--types all] 下載最新 N 首（types 可用 all）
@@ -857,6 +858,22 @@ async function main() {
             const status = d.allDone ? '已下載' : d.any ? `部分 ${d.have}/${d.total}` : '未下載';
             console.log(`     下載：${status}${detail ? '（' + detail + '）' : ''}`);
         }
+        return;
+    }
+
+    if (cmd === 'fill-missing') {
+        const result = await ACE.fillMissing(cfg, {
+            types: args.flags.types ? String(args.flags.types) : ACE.FILL_TYPES,
+            root: args.flags.root || 'ai音樂',
+            dryRun: !args.flags.commit,
+            onProgress: (p) => { if (!args.flags.json) process.stderr.write(`\r補齊中 ${p.done + p.failed}/${p.total}            `); },
+        });
+        if (!args.flags.json && !result.dryRun) process.stderr.write('\n');
+        if (args.flags.json) return printJson(result);
+        console.log(`補齊（${result.types.join('、')}）：${result.dryRun ? '預覽（加 --commit 才下載）' : '實際下載'}`);
+        console.log(`  掃描 ${result.songsScanned} 首；有缺口 ${result.songsWithGaps} 首；需下載 ${result.toDownload} 個檔${result.noSource?.length ? '；站點沒有來源 ' + result.noSource.length + ' 首（不算失敗）' : ''}`);
+        for (const file of (result.files || []).slice(0, 20)) console.log(`  [${result.dryRun ? '將下載' : '下載'}] ${file.path}`);
+        if (!result.dryRun) console.log(`完成：下載 ${result.done}、跳過 ${result.skipped}、失敗 ${result.failed}`);
         return;
     }
 

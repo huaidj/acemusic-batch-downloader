@@ -161,8 +161,10 @@ export async function buildLocalDownloadIndex({ cfg = config(), root = 'ai音樂
             const extension = path.extname(entry.name).slice(1).toLowerCase();
             if (!entry.isFile() || !INDEXED.has(extension)) continue;
             try {
+                // 掃描只沿非連結的目錄往下（上面已跳過 symlink／junction），根目錄也驗過不是連結，
+                // 所以這裡的檔案一定在曲庫內；不再逐檔 realpath（每層路徑都要 stat，曾占建索引 2/3 時間）。
                 const stat = fs.lstatSync(absolutePath, { bigint: true });
-                if (!stat.isFile() || stat.isSymbolicLink() || !within(libraryRoot, fs.realpathSync(absolutePath))) continue;
+                if (!stat.isFile() || stat.isSymbolicLink()) continue;
                 const file = { absolutePath, path: slash(path.relative(libraryRoot, absolutePath)), name: entry.name, extension, bytes: Number(stat.size), mtimeMs: Number(stat.mtimeNs) / 1e6, ctimeMs: Number(stat.ctimeNs) / 1e6, mtimeNs: String(stat.mtimeNs), ctimeNs: String(stat.ctimeNs), inode: physicalFileKey(stat, absolutePath), physicalId: fileIdFromStat(stat, absolutePath) };
                 rawFiles.push(file);
                 if (!groups.has(file.inode)) groups.set(file.inode, []);

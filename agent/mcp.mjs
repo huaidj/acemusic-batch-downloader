@@ -8,7 +8,7 @@ import { hubJson, hubRequest, canFallbackHubWrite, HUB_URL } from './lib/hubclie
 import { MUSIC_CONTRACT, MUSIC_TOOLS, validateMusicInput } from './lib/music-contract.mjs';
 import { CREATE_CONTRACT, CREATE_TOOLS } from './lib/create-tools.mjs';
 
-const SERVER = { name: 'ace-music-downloader', version: '1.8.6' };
+const SERVER = { name: 'ace-music-downloader', version: '1.8.7' };
 const jobs = new Map();
 let jobSeq = 0;
 const hubJobs = new Set();
@@ -382,6 +382,7 @@ async function callTool(name, args) {
             catch { return ACE.localDownloadIndex(config(), options); }
         }
         case 'ace_site_likes': return args.sync ? ACE.syncSiteLikesFromSite(config()) : ACE.siteLikes(config());
+        case 'ace_fill_missing': return ACE.fillMissing(config(), { types: args.types || ACE.FILL_TYPES, dryRun: args.dry_run !== false });
         case 'ace_player': return ACE.startPlayer(config(), { songId: args.song_id || '' });
         case 'ace_session_status': {
             const [status, page] = await Promise.all([ACE.sessionStatus(), ACE.pageChannelStatus()]);

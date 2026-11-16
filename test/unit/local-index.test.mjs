@@ -360,3 +360,19 @@ test('audio library: MP3 duration comes from the analysis cache only when path a
   assert.equal(library.files.find((x) => x.name === 'Twin.mp3').duration, 183.5);
   assert.equal(library.files.find((x) => x.name === 'Loose - Drums.mp3').duration, null, 'size mismatch means a stale cache entry is ignored');
 });
+
+test('local index: a junction or symlink inside the library that points outside is never indexed', async (t) => {
+  const f = fixture([song('so_safe')]);
+  const outside = path.join(f.base, 'outside-private');
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(outside, 'secret.mp3'), mp3());
+  const link = path.join(f.root, 'Linked');
+  try { fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir'); } catch (err) { t.skip('cannot create a directory link here: ' + err.code); return; }
+  f.write(path.join(f.root, 'Real', 'real.mp3'), mp3());
+  const { library } = await buildAudioLibrary({ cfg: f.cfg });
+  const paths = library.files.map((file) => file.relativePath);
+  assert.ok(paths.some((p) => p.endsWith('real.mp3')));
+  assert.ok(!paths.some((p) => /secret\.mp3$/.test(p)), 'files behind a link are not indexed: ' + JSON.stringify(paths));
+  const index = await buildLocalDownloadIndex({ cfg: f.cfg });
+  assert.ok(index.problems.some((p) => p.code === 'SYMLINK_SKIPPED'), 'the skipped link is reported');
+});
