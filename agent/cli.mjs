@@ -19,13 +19,15 @@ async function hubTry(pathname, { method = 'GET', body, timeoutMs = 1200 } = {})
     }
 }
 function usage() {
-    console.log(`ACE Music 批量下載器 CLI  v1.7.4
+    console.log(`ACE Music 批量下載器 CLI  v1.7.5
 
 用法：
   node cli.mjs doctor                         檢查登入狀態與環境
   node cli.mjs locate [--latest N|--query 字|--song id] [--views] [--json]  歌曲 → 本機真實目錄（預設最新一首）
   node cli.mjs prompt [--model id] [--mode idea|custom] [--seed N] [--lock-a A07] [--lock-b B03] [--count 6]  隨機提示詞（依模型＋模式選詞典）
   node cli.mjs library [--sizes] [--json]      曲庫分類總覽（成品MP3/WAV、採樣包各樂器、MIDI…）
+  node cli.mjs local-index [--root 名稱] [--full] [--json] 按歌曲ID核對真實檔案，不猜同名
+  node cli.mjs player [--background] [--json] 啟動獨立本機播放器
   node cli.mjs events [--since seq] [--type t]  中樞事件（新歌、自動下載、下載完成）
   node cli.mjs wait [--timeout 秒]             等待下一首新歌（需 Hub＋開著站點分頁）
   node cli.mjs probe                           站點健康（唯讀）
@@ -111,6 +113,22 @@ async function main() {
     const cmd = argv[0];
     const args = parseArgs(argv.slice(1));
     const cfg = config();
+    if (cmd === 'local-index') {
+        try {
+            if (args.flags.native && args.flags.full) throw new Error('native 模式只提供 compact 索引；完整資料請使用 Hub API');
+            const root = args.flags.root ? String(args.flags.root) : 'ai音樂';
+            const cached = await hubTry('/download-index?root=' + encodeURIComponent(root) + (args.flags.full ? '&full=1' : ''));
+            const index = cached || await ACE.localDownloadIndex(cfg, { root, full: !!args.flags.full, refresh: !!args.flags.refresh });
+            if (!args.flags.native) return printJson(index);
+            const { nativeIndexPayload } = await import('./lib/local-index-service.mjs');
+            return printJson(nativeIndexPayload(index));
+        } catch (err) {
+            if (!args.flags.native) throw err;
+            process.exitCode = 1;
+            return printJson({ ok: false, code: err.code || 'LOCAL_INDEX_ERROR', error: err.message || '本機索引未就緒' });
+        }
+    }
+    if (cmd === 'player') return printJson(await ACE.startPlayer(cfg, { songId: args.flags['focus-id'] ? decodeURIComponent(String(args.flags['focus-id'])) : '' }));
 
     if (!cmd || cmd === 'help' || cmd === '--help') return usage();
 
@@ -575,11 +593,11 @@ async function main() {
         }
         if (args.flags.stop) {
             const data = await readJson(statusFile, null);
-            if (data && data.pid) {
-                const { spawnSync } = await import('node:child_process');
-                spawnSync('taskkill', ['/PID', String(data.pid), '/T', '/F'], { stdio: 'ignore' });
+            if (data?.pid && pidAlive(data.pid)) {
+                await writeJson(path.join(cfg.stateDir, 'watch-stop.json'), { pid: data.pid, requestedAt: new Date().toISOString(), reason: 'cli-stop' });
+                return printJson({ ok: true, stopRequested: true, stopped: false, pid: data.pid, message: '正在等本輪整理完成，不會強停檔案寫入' });
             }
-            await writeJson(statusFile, { phase: 'stopped', stoppedAt: new Date().toISOString(), reason: 'cli-stop' }).catch(() => {});
+            await writeJson(statusFile, { ...data, phase: 'stopped', stoppedAt: new Date().toISOString(), reason: 'cli-stop' }).catch(() => {});
             return printJson({ ok: true, stopped: true });
         }
         if (args.flags.background) {

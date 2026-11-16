@@ -100,7 +100,7 @@ test('collectSamples：WAV 分軌放 採樣包WAV，不混進 採樣包', async 
 });
 
 
-test('applyLocalSkips：採樣包已有同名分軌時跳過，不再重複下載', async () => {
+test('applyLocalSkips：只有同名採樣包檔而無task/track key證據時不得跳過', async () => {
   const root = path.join(process.env.ACE_DOWNLOAD_DIR, 'ai音樂');
   makeFile(path.join(root, '採樣包', 'Vocals', 'Skip Test - Vocals.mp3'), 'stem-bytes');
   await ACE.collectDownloadIndex(undefined, { refresh: true });
@@ -117,8 +117,8 @@ test('applyLocalSkips：採樣包已有同名分軌時跳過，不再重複下�
     skipped: 0,
   };
   const skipped = await ACE.applyLocalSkips(undefined, plan, { aliases: {}, removedPaths: {} });
-  assert.equal(skipped, 1);
-  assert.equal(plan.tasks[0].files[0].skip, true);
+  assert.equal(skipped, 0);
+  assert.equal(plan.tasks[0].files[0].skip, undefined);
   assert.equal(plan.tasks[0].files[1].skip, undefined);
 });
 

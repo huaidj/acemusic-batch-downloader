@@ -6,15 +6,16 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Web.Script.Serialization;
 
 internal static class Program
 {
-    private const string VERSION = "1.1.0";
+    private const string VERSION = "1.2.0";
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
     private static readonly string DownloadsRoot =
-        Path.GetFullPath(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"));
+        Path.GetFullPath(Environment.GetEnvironmentVariable("ACE_DOWNLOAD_DIR") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"));
 
     private static void Main()
     {
@@ -47,6 +48,15 @@ internal static class Program
                 response = Error(ex.Message);
             }
             byte[] payload = Encoding.UTF8.GetBytes(Json.Serialize(response));
+            if (payload.Length > 1000000)
+            {
+                object reqId;
+                bool hasReqId = response.TryGetValue("reqId", out reqId);
+                response = Error("本機回應超過傳輸上限；完整索引請使用 Hub HTTP API");
+                response["code"] = "NATIVE_FRAME_TOO_LARGE";
+                if (hasReqId) response["reqId"] = reqId;
+                payload = Encoding.UTF8.GetBytes(Json.Serialize(response));
+            }
             byte[] outLen = BitConverter.GetBytes(payload.Length);
             output.Write(outLen, 0, 4);
             output.Write(payload, 0, payload.Length);
@@ -79,6 +89,8 @@ internal static class Program
                 case "list": return List(request);
                 case "export": return Export(request);
                 case "read": return ReadExport(request);
+                case "local-index": return RunLocalIndex(request);
+                case "player-start": return RunPlayer(request);
                 case "organize": return RunOrganize(request);
                 case "tidy": return RunCli("tidy-all --background --json", 30000, "一鍵整理");
                 case "dedupe-custom": return RunCli("dedupe-content --commit --include-custom --json", 120000, "清理自訂重複");
@@ -103,10 +115,32 @@ internal static class Program
         return result;
     }
 
+    private static Dictionary<string, object> RunLocalIndex(Dictionary<string, object> request)
+    {
+        string root = request.ContainsKey("root") ? Convert.ToString(request["root"]) : "ai音樂";
+        if (String.IsNullOrWhiteSpace(root) || root.Length > 40 || root == "." || root == ".." || root.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            return Error("曲庫資料夾名稱不正確");
+        return RunCli("local-index --native --json --root \"" + root + "\"", 120000, "核對本機檔案");
+    }
+
+    private static Dictionary<string, object> RunPlayer(Dictionary<string, object> request)
+    {
+        string song = request.ContainsKey("songId") ? Convert.ToString(request["songId"]) : "";
+        if (song.Length > 256) return Error("歌曲 ID 過長");
+        return RunCli("player --background --json" + (song.Length == 0 ? "" : " --focus-id " + Uri.EscapeDataString(song)), 30000, "啟動播放器");
+    }
+
     private static bool UnderDownloads(string fullPath)
     {
         string root = DownloadsRoot.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
-        return fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase);
+        if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return false;
+        string current = fullPath;
+        while (!String.IsNullOrEmpty(current) && !current.Equals(root.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+        {
+            if ((File.Exists(current) || Directory.Exists(current)) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) return false;
+            current = Path.GetDirectoryName(current);
+        }
+        return true;
     }
 
     private static Dictionary<string, object> Move(Dictionary<string, object> request)
@@ -149,10 +183,10 @@ internal static class Program
                 {
                     long a = new FileInfo(from).Length;
                     long b = new FileInfo(target).Length;
-                    if (a == b)
+                    if (a == b && SameContent(from, target))
                     {
-                        File.Delete(from);
-                        deduped.Add(new Dictionary<string, object> { { "from", from }, { "to", target }, { "note", "duplicate-removed" } });
+                        string backup = ArchiveDuplicate(from, target);
+                        deduped.Add(new Dictionary<string, object> { { "from", from }, { "to", target }, { "backup", backup }, { "note", "identical-original-archived" } });
                         continue;
                     }
                     target = UniquePath(target);
@@ -163,7 +197,8 @@ internal static class Program
                 }
                 catch (IOException)
                 {
-                    File.Copy(from, target, true);
+                    File.Copy(from, target, false);
+                    if (!SameContent(from, target)) throw new IOException("複製校驗失敗，原檔已保留");
                     File.Delete(from);
                 }
                 moved.Add(new Dictionary<string, object> { { "from", from }, { "to", target } });
@@ -185,6 +220,42 @@ internal static class Program
         result["missing"] = missing;
         result["failed"] = failed;
         return result;
+    }
+
+    private static bool SameContent(string first, string second)
+    {
+        if (new FileInfo(first).Length != new FileInfo(second).Length) return false;
+        byte[] a;
+        byte[] b;
+        using (SHA256 sha = SHA256.Create())
+        using (FileStream stream = File.OpenRead(first)) a = sha.ComputeHash(stream);
+        using (SHA256 sha = SHA256.Create())
+        using (FileStream stream = File.OpenRead(second)) b = sha.ComputeHash(stream);
+        for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
+        return true;
+    }
+
+    private static string ArchiveDuplicate(string from, string keeper)
+    {
+        string batch = Path.Combine(StateDir, "organize-backups", "native-" + DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ") + "-" + Guid.NewGuid().ToString("N"));
+        string relative = from.Substring(DownloadsRoot.TrimEnd('\\', '/').Length).TrimStart('\\', '/');
+        string backup = Path.Combine(batch, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(backup));
+        string hash;
+        using (SHA256 sha = SHA256.Create())
+        using (FileStream stream = File.OpenRead(from)) hash = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
+        File.WriteAllText(Path.Combine(batch, "_operation.json"), Json.Serialize(new Dictionary<string, object> {
+            { "purpose", "Preserve an identical original during native rename" }, { "from", from }, { "keeper", keeper }, { "backup", backup },
+            { "sha256", hash }, { "owner", "ACE Music native host" }, { "at", DateTime.UtcNow.ToString("o") },
+            { "retention", "Keep for rollback until user acceptance; do not delete automatically" }
+        }), new UTF8Encoding(false));
+        try { File.Move(from, backup); }
+        catch (IOException) {
+            File.Copy(from, backup, false);
+            if (!SameContent(from, backup)) throw new IOException("備份校驗失敗，原檔已保留");
+            File.Delete(from);
+        }
+        return backup;
     }
 
     private static string UniquePath(string path)
@@ -237,6 +308,7 @@ internal static class Program
                 if (extensions.Count > 0 && !extensions.Contains(ext)) continue;
                 try
                 {
+                    if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) continue;
                     var info = new FileInfo(path);
                     files.Add(new Dictionary<string, object> {
                         { "path", path },
@@ -255,6 +327,7 @@ internal static class Program
             foreach (string sub in Directory.EnumerateDirectories(dir))
             {
                 if (files.Count >= limit) return;
+                if ((File.GetAttributes(sub) & FileAttributes.ReparsePoint) != 0) continue;
                 dirs.Add(sub);
                 Walk(sub, depth + 1, maxDepth, extensions, limit, files, dirs);
             }
@@ -262,7 +335,7 @@ internal static class Program
         catch { }
     }
 
-    private static readonly string StateDir = Path.Combine(
+    private static readonly string StateDir = Environment.GetEnvironmentVariable("ACE_STATE_DIR") ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AceMusicDL");
 
     // export { name:"session"|"history", data:object } → %LOCALAPPDATA%\AceMusicDL\<name>.json
@@ -274,13 +347,66 @@ internal static class Program
         if (!request.ContainsKey("data")) return Error("data missing");
         Directory.CreateDirectory(StateDir);
         string path = Path.Combine(StateDir, name + ".json");
-        string json = Json.Serialize(request["data"]);
-        File.WriteAllText(path, json, new UTF8Encoding(false));
+        using (FileStream exportLock = AcquireExportLock(path + ".lock"))
+        {
+            object data = request["data"];
+            if (name == "history") data = MergeDownloadHistory(path, data);
+            string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(temporary, Json.Serialize(data), new UTF8Encoding(false));
+                if (File.Exists(path)) File.Replace(temporary, path, null);
+                else File.Move(temporary, path);
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
         var result = new Dictionary<string, object>();
         result["ok"] = true;
         result["path"] = path;
         result["bytes"] = new FileInfo(path).Length;
         return result;
+    }
+
+    private static FileStream AcquireExportLock(string path)
+    {
+        for (int attempt = 0; attempt < 80; attempt++)
+        {
+            try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException) { System.Threading.Thread.Sleep(100); }
+        }
+        throw new IOException("本機紀錄仍在更新，原檔已保留");
+    }
+
+    private static object MergeDownloadHistory(string path, object incomingData)
+    {
+        var incoming = incomingData as Dictionary<string, object>;
+        if (incoming == null || !incoming.ContainsKey("items") || !(incoming["items"] is object[]))
+            throw new IOException("下載紀錄格式不正確，原檔已保留");
+        var previous = new Dictionary<string, object>();
+        if (File.Exists(path))
+        {
+            previous = Json.DeserializeObject(File.ReadAllText(path, Encoding.UTF8)) as Dictionary<string, object>;
+            if (previous == null) throw new IOException("舊下載紀錄無法核對，原檔已保留");
+        }
+        var entries = new Dictionary<string, Dictionary<string, object>>(StringComparer.Ordinal);
+        foreach (var source in new[] { previous, incoming })
+        {
+            var items = source.ContainsKey("items") ? source["items"] as object[] : null;
+            foreach (var value in items ?? new object[0])
+            {
+                var item = value as Dictionary<string, object>;
+                if (item == null || !item.ContainsKey("id")) continue;
+                string key = Convert.ToString(item["id"]) + "|" + (item.ContainsKey("startTime") ? Convert.ToString(item["startTime"]) : "") + "|" + (item.ContainsKey("url") ? Convert.ToString(item["url"]) : "");
+                entries[key] = item;
+            }
+        }
+        foreach (var pair in incoming) previous[pair.Key] = pair.Value;
+        var sorted = new List<KeyValuePair<string, Dictionary<string, object>>>(entries);
+        sorted.Sort((a, b) => StringComparer.Ordinal.Compare(a.Key, b.Key));
+        var merged = new List<object>();
+        foreach (var item in sorted) merged.Add(item.Value);
+        previous["items"] = merged.ToArray();
+        return previous;
     }
 
     // read { name:"history"|"agent-state" } → %LOCALAPPDATA%\AceMusicDL\<name>.json 的內容
@@ -326,6 +452,20 @@ internal static class Program
     }
 
     // organize { commit:false } → 執行 %LOCALAPPDATA%\AceMusicDL\agent\cli.mjs organize --json [--commit]
+    private static int CommandTimeout(int fallback)
+    {
+        int configured;
+        return Int32.TryParse(Environment.GetEnvironmentVariable("ACE_NATIVE_TIMEOUT_MS"), out configured) && configured > 0 ? configured : fallback;
+    }
+
+    private static Dictionary<string, object> SubmissionUnknown(string label, int pid)
+    {
+        var result = Error(label + "回應逾時；程序已保留，可能仍在執行，請勿直接重送");
+        result["code"] = "SUBMISSION_UNKNOWN";
+        result["pid"] = pid;
+        return result;
+    }
+
     private static Dictionary<string, object> RunOrganize(Dictionary<string, object> request)
     {
         string node = FindNode();
@@ -348,10 +488,9 @@ internal static class Program
             {
                 var stdoutTask = proc.StandardOutput.ReadToEndAsync();
                 var stderrTask = proc.StandardError.ReadToEndAsync();
-                if (!proc.WaitForExit(190000))
+                if (!proc.WaitForExit(CommandTimeout(190000)))
                 {
-                    try { proc.Kill(); } catch { }
-                    return Error("整理逾時（超過 190 秒）");
+                    return SubmissionUnknown("整理", proc.Id);
                 }
                 string stdout = stdoutTask.Result;
                 string stderr = stderrTask.Result;
@@ -394,10 +533,9 @@ internal static class Program
             {
                 var stdoutTask = proc.StandardOutput.ReadToEndAsync();
                 var stderrTask = proc.StandardError.ReadToEndAsync();
-                if (!proc.WaitForExit(timeoutMs))
+                if (!proc.WaitForExit(CommandTimeout(timeoutMs)))
                 {
-                    try { proc.Kill(); } catch { }
-                    return Error(label + "逾時");
+                    return SubmissionUnknown(label, proc.Id);
                 }
                 string stdout = stdoutTask.Result;
                 string stderr = stderrTask.Result;

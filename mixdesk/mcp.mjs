@@ -1,27 +1,43 @@
 #!/usr/bin/env node
 // mixdesk/mcp.mjs — ACE MIX DESK MCP server（stdio）：讓任何 agent 讀電台狀態、取預先監聽任務、回傳決策/提示詞
 import http from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const BASE = process.env.ACE_MIX_URL || 'http://127.0.0.1:8777';
 const VERSION = '1.1.0';
 
-function request(method, pathname, payload) {
+export function request(method, pathname, payload, { base = BASE, timeoutMs = 120000 } = {}) {
   return new Promise((resolve, reject) => {
     const body = payload == null ? null : JSON.stringify(payload);
-    const req = http.request(BASE + pathname, {
+    let settled = false;
+    const finish = (fn, value) => { if (settled) return; settled = true; clearTimeout(timer); fn(value); };
+    const req = http.request(base + pathname, {
       method,
       headers: body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } : {},
-      timeout: 120000,
     }, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        try { resolve(JSON.parse(data || '{}')); }
-        catch { reject(new Error('非 JSON 回應：' + data.slice(0, 200))); }
+      const chunks = [];
+      let bytes = 0;
+      res.on('data', (chunk) => {
+        bytes += chunk.length;
+        if (bytes > 8 * 1024 * 1024) { req.destroy(new Error('mixdesk 回應過大')); return; }
+        chunks.push(chunk);
       });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+          if (res.statusCode < 200 || res.statusCode >= 300 || !parsed || parsed.ok === false) {
+            const detail = typeof parsed?.error === 'string' ? parsed.error : parsed?.error?.message;
+            throw Object.assign(new Error(detail || 'mixdesk HTTP ' + res.statusCode), { status: res.statusCode });
+          }
+          finish(resolve, parsed);
+        } catch (error) { finish(reject, error); }
+      });
+      res.on('aborted', () => finish(reject, new Error('mixdesk 回應中途斷線；動作狀態待查，不自動重送')));
+      res.on('error', (error) => finish(reject, error));
     });
-    req.on('error', reject);
-    req.on('timeout', () => req.destroy(new Error('mixdesk 連線逾時（伺服器未啟動？）')));
+    const timer = setTimeout(() => req.destroy(new Error('mixdesk 連線逾時；動作狀態待查，不自動重送')), timeoutMs);
+    req.on('error', (error) => finish(reject, error));
     if (body) req.write(body);
     req.end();
   });
@@ -148,6 +164,7 @@ function send(message) {
   process.stdout.write(JSON.stringify(message) + '\n');
 }
 
+function startStdio() {
 let buffer = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
@@ -165,6 +182,7 @@ process.stdin.on('data', (chunk) => {
     });
   }
 });
+}
 
 async function handle(message) {
   const { id, method, params } = message;
@@ -193,3 +211,5 @@ async function handle(message) {
   }
   if (id != null) send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found: ' + method } });
 }
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) startStdio();

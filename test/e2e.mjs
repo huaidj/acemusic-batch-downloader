@@ -366,12 +366,14 @@ scenario('S4_force_redownload', async () => {
 scenario('S5_type_folders_and_audio', async () => {
   await freshPanel(page, mock.base);
   await applyOptions(page, { stems: true, midi: true, mp3: true, wav: true, cover: true, typeFolders: true, force: false });
+  // 既有 exact-ID 檔案現在會跨分類位置重用；用空白測試根目錄驗證新下載的分層。
+  await setRootFolder(page, 'type-folder-test');
   await selectSongs(page, ['song-a']);
   await clickDownload(page);
   const progress = await waitJobDone(page);
   assertEqual(progress.counts, { done: 7, failed: 0, skipped: 0, total: 7 }, 'S5 typeFolders 進度統計');
-  assertFileMap(ROOT, S5_FILES, 'S5');
-  const stemsDir = relFiles(ROOT, 'ai音樂/Neon Drive/Stems');
+  assertFileMap(ROOT, Object.fromEntries(Object.entries(S5_FILES).map(([name, bytes]) => [name.replace(/^ai音樂\//, 'type-folder-test/'), bytes])), 'S5');
+  const stemsDir = relFiles(ROOT, 'type-folder-test/Neon Drive/Stems');
   assertEqual(stemsDir.sort(), ['Neon Drive - Bass.mp3', 'Neon Drive - Drums.mp3', 'Neon Drive - Vocals.mp3'], 'S5 Stems 子資料夾');
 });
 
@@ -452,6 +454,11 @@ scenario('S10_per_song_download_button', async () => {
 scenario('S11_fallback_blob_success', async () => {
   // 驗證 Lead 的備援成功路徑：直連下載第一次被站點 500 拒絕 → content 用 fetch（帶 cookie）
   // 再抓一次成功 → blob URL 交給 SW 下載。mock 只讓「前 1 次請求」失敗。
+  const originalStems = structuredClone(mock.songs.find((song) => song.task_id === 'song-a').stems);
+  const scopedStems = structuredClone(originalStems);
+  for (const job of Object.values(scopedStems)) for (const track of job.tracks || []) if (track.local_audio) track.local_audio += '?e2e_scenario=S11';
+  mock.updateSong('song-a', { stems: scopedStems });
+  try {
   await freshPanel(page, mock.base);
   await applyOptions(page, { stems: true, midi: false, mp3: false, musicxml: false, force: false, typeFolders: false });
   await setRootFolder(page, 'fallback-test');
@@ -470,15 +477,20 @@ scenario('S11_fallback_blob_success', async () => {
     },
     'S11',
   );
-  const vocalReqs = mock.log.filter((e) => e.path === '/data/stems/song-a-vocal.mp3');
+  const vocalReqs = mock.log.filter((e) => e.path === '/data/stems/song-a-vocal.mp3?e2e_scenario=S11');
   assertEqual(vocalReqs.length, 2, 'S11 vocal 應被請求 2 次（直連失敗 + 備援 fetch）');
   assertEqual(
     vocalReqs.map((r) => r.status),
     [500, 200],
     'S11 第一次請求 500、第二次 200',
   );
-  const drumReqs = mock.log.filter((e) => e.path === '/data/stems/song-a-drums.mp3');
+  const drumReqs = mock.log.filter((e) => e.path === '/data/stems/song-a-drums.mp3?e2e_scenario=S11');
+  results.fallbackTrace = {
+    requests: mock.log.filter((entry) => entry.path.startsWith('/data/stems/')).map(({ at, path, status, range, destination, mode, hasReferer }) => ({ at, path, status, range, destination, mode, hasReferer })),
+    page: await page.evaluate(() => ({ downloads: Number(document.documentElement.dataset.acedlTestDownloads || 0), blobs: Number(document.documentElement.dataset.acedlTestBlobDownloads || 0), fallbackFetches: Number(document.documentElement.dataset.acedlTestFallbackFetches || 0), events: JSON.parse(sessionStorage.getItem('aceDownloadDiagnosticsV1') || '{}').events?.slice(-60) || [] })),
+  };
   assertEqual(drumReqs.length, 1, 'S11 drums 應直連成功只請求一次');
+  } finally { mock.updateSong('song-a', { stems: originalStems }); }
 });
 
 const liveSong = (id, title, tracks) => ({
@@ -643,43 +655,27 @@ scenario('S16_drag_and_opacity', async () => {
   await page.mouse.dblclick(h2.left + 40, h2.top + 14);
 });
 
-scenario('S17_radio_player_favorites', async () => {
-  // 電臺：播放請求站點音檔、收藏（愛心）存 aceFavorites、只看收藏過濾、隨機／來源設定持久化
+scenario('S17_independent_player_launcher_and_favorites', async () => {
   await freshPanel(page, mock.base);
-  const q = (sel) => page.locator(sel);
-  assertEqual(await q('[data-radio-player]').count(), 1, 'S17 應有播放器');
-  // 收藏 song-a、song-b
-  for (const id of ['song-a', 'song-b']) await q(`[data-song-id="${id}"] [data-fav]`).click();
-  await new Promise((r) => setTimeout(r, 250));
-  let storage = await readStorage(context);
-  assertEqual(Object.keys(storage.aceFavorites || {}).sort(), ['song-a', 'song-b'], 'S17 收藏應存入 aceFavorites');
-  // 只看收藏
-  await q('[data-act="filter-favorites"]').click();
-  assertEqual(await q('[data-song-id]').count(), 2, 'S17 只看收藏應只剩 2 首');
-  await q('[data-act="filter-favorites"]').click();
-  assertEqual(await q('[data-song-id]').count(), 5, 'S17 取消過濾應回到 5 首');
-  // 隨機、來源
-  await q('[data-radio="shuffle"]').click();
-  await q('[data-radio-source]').selectOption('fav');
-  // 播放：按 song-a 的播放鍵 → 站點應收到該音檔請求，標題顯示歌名
+  const q = (selector) => page.locator(selector);
+  const radioBefore = (await readStorage(context)).aceRadio || null;
+  assertEqual(await q('[data-radio-player]').count(), 0, 'S17 下載面板不再嵌入播放器');
+  assertEqual(await q('[data-act="open-player"]').count(), 1, 'S17 有可見獨立播放器入口');
+  assertEqual(await page.evaluate(() => JSON.parse(document.documentElement.dataset.acedlTestPlayerCalls || '[]')), [], 'S17 初載不自動開窗');
   mock.clearLog();
-  await q('[data-song-id="song-a"] [data-play]').click();
-  await new Promise((r) => setTimeout(r, 600));
-  assert(mock.log.some((e) => e.path.startsWith('/data/mock/song-a.mp3')), 'S17 播放應請求 song-a 的音檔');
-  const title = await q('[data-radio-title]').textContent();
-  assertEqual(title.trim(), 'Neon Drive', 'S17 播放器標題');
-  await new Promise((r) => setTimeout(r, 250));
-  storage = await readStorage(context);
-  assert(storage.aceRadio && storage.aceRadio.shuffle === true && storage.aceRadio.source === 'fav' && storage.aceRadio.lastId === 'song-a', `S17 aceRadio 應保存設定：${JSON.stringify(storage.aceRadio)}`);
-  // 取消收藏
-  await q('[data-song-id="song-a"] [data-fav]').click();
-  await new Promise((r) => setTimeout(r, 250));
-  storage = await readStorage(context);
-  assertEqual(Object.keys(storage.aceFavorites || {}), ['song-b'], 'S17 取消收藏');
-  // 還原設定，避免影響後續情境
-  await q('[data-radio="shuffle"]').click();
-  await q('[data-radio-source]').selectOption('all');
-  await q('[data-song-id="song-b"] [data-fav]').click();
+  await q('[data-act="open-player"]').click();
+  await q('[data-song-id="song-b"] [data-play]').click();
+  await q('[data-song-id="song-a"] .cover').click();
+  assertEqual(await page.evaluate(() => JSON.parse(document.documentElement.dataset.acedlTestPlayerCalls || '[]')), [null, 'song-b', 'song-a'], 'S17 主入口與可見封面／逐首入口傳 exact songId 給獨立視窗');
+  assertEqual(mock.log.filter((entry) => /\.(?:mp3|wav)(?:\?|$)/i.test(entry.path)).length, 0, 'S17 開視窗 RPC 不在隱藏音訊上播放或下載（封面 JPG 可正常載入）');
+  assertEqual((await readStorage(context)).aceRadio || null, radioBefore, 'S17 保留既有電臺偏好');
+  for (const id of ['song-a', 'song-b']) await q(`[data-song-id="${id}"] [data-fav]`).click();
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assertEqual(Object.keys((await readStorage(context)).aceFavorites || {}).sort(), ['song-a', 'song-b'], 'S17 收藏資料保留');
+  await q('[data-act="filter-favorites"]').click();
+  assertEqual(await q('[data-song-id]').count(), 2, 'S17 收藏篩選正常');
+  await q('[data-act="filter-favorites"]').click();
+  for (const id of ['song-a', 'song-b']) await q(`[data-song-id="${id}"] [data-fav]`).click();
 });
 
 scenario('S18_random_prompt_models_and_modes', async () => {
@@ -803,6 +799,7 @@ scenario('S21_missing_wav_filter_excludes_hidden_selection', async () => {
     await freshPanel(page, mock.base);
     await applyOptions(page, { mp3: true, wav: true });
     await setRootFolder(page, 'selected-missing');
+    await page.waitForFunction(() => /缺 WAV/.test(document.getElementById('acedl-host')?.shadowRoot?.querySelector('[data-song-id="song-a"] [data-download-status]')?.textContent || ''), null, { timeout: 3000 });
     const status = await page.locator('[data-song-id="song-a"] [data-download-status]').textContent();
     assert(/缺 WAV/.test(status), `S21 MP3 已有但 WAV 缺失必須列出 WAV：${status}`);
     const lossyStatus = await page.locator('[data-song-id="song-b"] [data-download-status]').getAttribute('title');
@@ -837,9 +834,7 @@ scenario('S22_local_verified_wav_updates_without_reload_or_site_refresh', async 
     await applyOptions(page, { wav: true });
     await setOption(page, 'autoRefresh', false);
     await setOption(page, 'autoNew', false);
-    await page.locator('[data-radio="repeat"]').click(); // all -> one，1 秒 mock 音檔不自動換曲。
     await page.locator('[data-song-id="song-a"] [data-play]').click();
-    await page.waitForFunction(() => document.getElementById('acedl-host')?.shadowRoot?.querySelector('[data-radio-player]')?.classList.contains('playing'));
     await page.locator('[data-act="filter-undownloaded"]').click();
     assertEqual(await page.locator('[data-song-id]').count(), 1, 'S22 起初只有 v1.1 song-a 缺 WAV');
     await page.locator('#prompt').fill('Keep this unfinished input');
@@ -850,7 +845,7 @@ scenario('S22_local_verified_wav_updates_without_reload_or_site_refresh', async 
     await new Promise((resolve) => setTimeout(resolve, 2400));
     const unchanged = await page.locator('[data-song-id="song-a"]').getAttribute('data-acedl-row-sentinel');
     assertEqual(unchanged, 'unchanged', 'S22 未變更的本機版本不可反覆重建歌曲列');
-    const nativeListsBefore = await page.evaluate(() => Number(document.documentElement.dataset.acedlTestNativeLists || 0));
+    const nativeListsBefore = await page.evaluate(() => Number(document.documentElement.dataset.acedlTestIndexBuilds || 0));
     mock.clearLog();
     // 模擬腳本完成一個已驗證本機 WAV：native 檔案清單與 manifest 同時更新。
     await page.evaluate((root) => {
@@ -865,10 +860,10 @@ scenario('S22_local_verified_wav_updates_without_reload_or_site_refresh', async 
     assertEqual(await page.locator('[data-song-id]').count(), 0, 'S22 修復完成後自動離開待補清單');
     assertEqual(await page.locator('#prompt').inputValue(), 'Keep this unfinished input', 'S22 本機刷新不改輸入內容');
     assertEqual(await page.evaluate(() => document.documentElement.dataset.acedlLocalPageSentinel), 'same-page', 'S22 不重新載入頁面');
-    assertEqual((await page.locator('[data-radio-title]').textContent()).trim(), 'Neon Drive', 'S22 本機刷新保留播放曲目');
-    assertEqual(await page.locator('[data-radio-player]').evaluate((node) => node.classList.contains('playing')), true, 'S22 播放不被本機索引刷新打斷');
+    assertEqual(await page.locator('[data-radio-player]').count(), 0, 'S22 本機刷新不重建隱藏的內嵌電臺');
+    assertEqual(await page.evaluate(() => JSON.parse(document.documentElement.dataset.acedlTestPlayerCalls || '[]')), ['song-a'], 'S22 本機刷新不重開播放器或觸發新播放');
     assertEqual(mock.log.filter((entry) => /^\/api\/(?:songs|status)/.test(entry.path)).length, 0, 'S22 本機版本輪詢不能打站點 API');
-    const nativeListsAfter = await page.evaluate(() => Number(document.documentElement.dataset.acedlTestNativeLists || 0));
+    const nativeListsAfter = await page.evaluate(() => Number(document.documentElement.dataset.acedlTestIndexBuilds || 0));
     assertEqual(nativeListsAfter - nativeListsBefore, 1, 'S22 一次本機版本改動只重掃一次');
     await page.locator('[data-act="filter-undownloaded"]').click();
     assertEqual((await page.locator('[data-song-id="song-a"] [data-download-status]').textContent()).trim(), '已下載', 'S22 該 task 顯示 WAV 已下載');
@@ -894,6 +889,302 @@ scenario('S23_wav_independent_from_requested_notation_scope', async () => {
     assertEqual(mock.log.filter((entry) => entry.method === 'POST').length, 0, 'S23 未請求分軌不送 MIDI／MusicXML 生成');
     assertFileMap(ROOT, { 'no-notation-request/No Requested Stems/No Requested Stems.wav': expectedBytes('AUDIO-WAV', 'song-no-notation') }, 'S23 WAV 獨立');
   } finally { mock.removeSong('song-no-notation'); }
+});
+
+scenario('S24_existing_song_ready_stems_auto_download_persist_and_preserve_versions', async () => {
+  const before = await readStorage(context);
+  const original = structuredClone(mock.songs.find((song) => song.task_id === 'song-c').stems);
+  const group = (prefix) => ({ '2': { status: 'done', tracks: ['drums', 'bass'].map((type) => ({ id: `${prefix}-${type}`, type, local_audio: `/data/stems/${prefix}-${type}.mp3` })) } });
+  mock.addSong({ ...liveSong('song-c-same-title', 'Rain: Loop? v2', ['vocal']), created_at: '2025-01-01T00:00:00Z' });
+  try {
+    await swEval(context, async () => chrome.storage.local.remove(['aceAutoStemsV1']));
+    await page.goto(mock.base + '/create/?native-fixture', { waitUntil: 'domcontentloaded' });
+    await openPanel(page);
+    await waitSongsLoaded(page, 6);
+    // 老歌完成分軌獨立於「新歌自動下載」與手動檔案勾選；自動樂譜仍關閉。
+    await applyOptions(page, { midi: true, musicxml: true });
+    await setOption(page, 'autoNew', false);
+    await setOption(page, 'autoNewScores', false);
+    await setOption(page, 'autoStems', true);
+    await setOption(page, 'autoOrganize', true);
+    await setRootFolder(page, 'auto-existing-stems');
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    const baseline = await readStorage(context);
+    assert(baseline.aceAutoStemsV1?.observed?.['song-c'], 'S24 首次載入必須持久化老歌基線');
+    mock.clearLog();
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    assertEqual(mock.log.filter((entry) => entry.path.startsWith('/data/stems/')).length, 0, 'S24 首次不批量抓舊有已完成分軌');
+    assertEqual(mock.log.filter((entry) => entry.method === 'POST').length, 0, 'S24 基線不提交生成');
+    mock.updateSong('song-c', { stems: group('song-c-auto-v1') });
+    const firstFiles = {
+      'auto-existing-stems/Rain Loop v2/Rain Loop v2 - Drums.mp3': stem('song-c-auto-v1-drums'),
+      'auto-existing-stems/Rain Loop v2/Rain Loop v2 - Bass.mp3': stem('song-c-auto-v1-bass'),
+    };
+    let deadline = Date.now() + 15000;
+    while (Date.now() < deadline && checkFileMap(ROOT, firstFiles, 'S24').length) await new Promise((resolve) => setTimeout(resolve, 100));
+    assertFileMap(ROOT, firstFiles, 'S24 老歌新分軌');
+    await waitJobDone(page, 10000);
+    await page.waitForFunction(() => Number(document.documentElement.dataset.acedlTestTidyCalls || 0) === 1, null, { timeout: 6000 });
+    assertEqual(mock.log.filter((entry) => entry.method === 'POST').length, 0, 'S24 autoNewScores 關閉，只抓已購買分軌不提交 MIDI/XML');
+    assertEqual(mock.log.filter((entry) => entry.path.startsWith('/data/stems/')).map((entry) => entry.path).sort(), ['/data/stems/song-c-auto-v1-bass.mp3', '/data/stems/song-c-auto-v1-drums.mp3'], 'S24 只下載這個 exact task 新完成的軌道');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const recorded = await readStorage(context);
+    assertEqual(Object.keys(recorded.aceAutoStemsV1.pending || {}), [], 'S24 成功工作不留下重複排程');
+    mock.clearLog();
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await openPanel(page);
+    await waitSongsLoaded(page, 6);
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+    assertEqual(mock.log.filter((entry) => entry.path.startsWith('/data/stems/')).length, 0, 'S24 重啟不重抓已處理分軌');
+    assertEqual(Number(await page.evaluate(() => document.documentElement.dataset.acedlTestTidyCalls || 0)), 0, 'S24 重啟不再次分類');
+    // 軌道數仍為 2，但 ID／來源換新版本；舊 count-only fingerprint 曾漏掉它。
+    mock.clearLog();
+    mock.updateSong('song-c', { stems: group('song-c-auto-v2') });
+    deadline = Date.now() + 15000;
+    const expectedNew = [stem('song-c-auto-v2-drums'), stem('song-c-auto-v2-bass')];
+    const hasNew = () => expectedNew.every((bytes) => listFiles(path.join(ROOT, 'auto-existing-stems')).some((entry) => fs.readFileSync(entry.abs).equals(bytes)));
+    while (Date.now() < deadline && !hasNew()) await new Promise((resolve) => setTimeout(resolve, 100));
+    assert(hasNew(), 'S24 相同軌道數的新分軌版本仍要下載');
+    await waitJobDone(page, 10000);
+    assertFileMap(ROOT, firstFiles, 'S24 舊版本原件保留');
+    assertEqual(relFiles(ROOT, 'auto-existing-stems').length, 4, 'S24 新舊版本各兩檔並存');
+    assertEqual(Number(await page.evaluate(() => document.documentElement.dataset.acedlTestMoveCalls || 0)), 0, 'S24 新版本不交給 size-only native move 去重');
+    await page.waitForFunction(() => Number(document.documentElement.dataset.acedlTestTidyCalls || 0) === 1, null, { timeout: 6000 });
+  } finally {
+    mock.removeSong('song-c-same-title');
+    mock.updateSong('song-c', { stems: original });
+    await swEval(context, async (saved) => chrome.storage.local.set({ aceSettings: saved.aceSettings || {}, aceAutoNew: saved.aceAutoNew || {}, aceAutoStemsV1: saved.aceAutoStemsV1 || {}, aceHistory: saved.aceHistory || {} }), before);
+  }
+});
+
+scenario('S25_auto_stems_disabled_does_not_download_existing_song_changes', async () => {
+  const before = await readStorage(context);
+  const original = structuredClone(mock.songs.find((song) => song.task_id === 'song-c').stems);
+  try {
+    await freshPanel(page, mock.base);
+    await setOption(page, 'autoNew', false);
+    await setOption(page, 'autoStems', false);
+    mock.clearLog();
+    mock.updateSong('song-c', { stems: { '2': { status: 'done', tracks: [{ id: 'song-c-disabled-drum', type: 'drums', local_audio: '/data/stems/song-c-disabled-drum.mp3' }] } } });
+    await page.waitForFunction(() => /分軌 1/.test(document.getElementById('acedl-host')?.shadowRoot?.querySelector('[data-song-id="song-c"]')?.textContent || ''), null, { timeout: 6000 });
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+    assertEqual(mock.log.filter((entry) => entry.path.startsWith('/data/stems/') || entry.method === 'POST').length, 0, 'S25 關閉後只同步 metadata，不下載或提交生成');
+  } finally {
+    mock.updateSong('song-c', { stems: original });
+    await swEval(context, async (saved) => chrome.storage.local.set({ aceSettings: saved.aceSettings || {}, aceAutoStemsV1: saved.aceAutoStemsV1 || {} }), before);
+  }
+});
+
+scenario('S26_notation_eligibility_rechecked_immediately_before_post', async () => {
+  const original = structuredClone(mock.songs.find((song) => song.task_id === 'song-c').stems);
+  try {
+    await freshPanel(page, mock.base);
+    await applyOptions(page, { midi: true, musicxml: true, force: true });
+    await setOption(page, 'autoNew', false);
+    await setOption(page, 'autoStems', false);
+    await page.locator('[data-act="select-none"]').click();
+    await selectSongs(page, ['song-c']);
+    mock.clearLog();
+    await clickDownload(page);
+    // 計畫已含 MIDI/XML，但準備等待期間該 task 已不再有分軌請求證據。
+    mock.updateSong('song-c', { stems: {} });
+    const result = await waitJobDone(page, 12000);
+    assertEqual(mock.log.filter((entry) => entry.method === 'POST').length, 0, 'S26 不能沿用舊計畫授權 POST');
+    assertEqual(result.counts, { done: 0, failed: 0, skipped: 2, total: 2 }, 'S26 過期資格略過，不能當作成功或失敗');
+  } finally { mock.updateSong('song-c', { stems: original }); }
+});
+
+scenario('S27_start_lease_blocks_double_click_and_auto_manual_reentry', async () => {
+  const starts = (after) => page.evaluate((since) => JSON.parse(sessionStorage.getItem('aceDownloadDiagnosticsV1') || '{}').events?.filter((entry) => entry.event === 'job_start' && Date.parse(entry.at) >= since).length || 0, after);
+  await freshPanel(page, mock.base);
+  await applyOptions(page, { midi: true });
+  await setOption(page, 'autoNew', false);
+  await setOption(page, 'autoNewScores', false);
+  await setRootFolder(page, 'lease-manual');
+  await page.locator('[data-act="select-none"]').click();
+  await selectSongs(page, ['song-a']);
+  const manualStartedAt = Date.now();
+  mock.clearLog();
+  const disabledImmediately = await page.evaluate(() => {
+    document.documentElement.dataset.acedlTestPingDelayMs = '450';
+    const shadow = document.getElementById('acedl-host').shadowRoot;
+    const button = shadow.querySelector('[data-act="download"]');
+    button.click();
+    const disabled = button.disabled && /準備下載/.test(button.textContent);
+    // per-song 入口仍可送事件，用它驗證不只靠 disabled 屬性防重入。
+    shadow.querySelector('[data-song-id="song-a"] [data-song-download]').click();
+    button.click();
+    return disabled;
+  });
+  assert(disabledImmediately, 'S27 第一個 await 前就要顯示準備中並禁用下載');
+  const manual = await waitJobDone(page, 15000);
+  assertEqual(manual.counts, { done: 1, failed: 0, skipped: 0, total: 1 }, 'S27 快速重入仍只有一個手動工作');
+  assertEqual(await starts(manualStartedAt), 1, 'S27 只建立一次手動 plan/job');
+  assertEqual(mock.log.filter((entry) => entry.method === 'POST' && entry.path === '/api/songs/song-a/download').length, 1, 'S27 同一 MIDI 只提交一次');
+  assertFileMap(ROOT, { 'lease-manual/Neon Drive/Neon Drive - MIDI.mid': mockData('/data/mock/song-a-full.mid') }, 'S27 手動完成');
+
+  await freshPanel(page, mock.base);
+  await applyOptions(page, { midi: true });
+  await setOption(page, 'autoNew', true);
+  await setOption(page, 'autoNewScores', true); // 僅 mock 站明確選擇，用來核對付費型 POST 次數。
+  await setRootFolder(page, 'lease-auto');
+  await page.evaluate(() => { document.documentElement.dataset.acedlTestPingDelayMs = '650'; });
+  const automaticStartedAt = Date.now();
+  mock.clearLog();
+  mock.addSong(liveSong('song-lease-automatic', 'Lease Automatic', ['drums']));
+  try {
+    await panelHasSong(page, 'song-lease-automatic');
+    await page.waitForFunction(() => /準備下載/.test(document.getElementById('acedl-host')?.shadowRoot?.querySelector('[data-act="download"]')?.textContent || ''), null, { timeout: 5000 });
+    await page.locator('[data-song-id="song-lease-automatic"] [data-song-download]').click();
+    const automatic = await waitJobDone(page, 16000);
+    assertEqual(automatic.counts, { done: 1, failed: 0, skipped: 0, total: 1 }, 'S27 AUTO 準備期間手動入口不能建立第二個工作');
+    assertEqual(await starts(automaticStartedAt), 1, 'S27 AUTO＋手動仍只有一個 plan/job');
+    assertEqual(mock.log.filter((entry) => entry.method === 'POST' && entry.path === '/api/songs/song-lease-automatic/download').length, 1, 'S27 AUTO＋手動不重複提交 notation');
+    assertFileMap(ROOT, { 'lease-auto/Lease Automatic/Lease Automatic - MIDI.mid': mockData('/data/mock/song-lease-automatic-full.mid') }, 'S27 AUTO 完成');
+  } finally {
+    await setOption(page, 'autoNew', false);
+    await setOption(page, 'autoNewScores', false);
+    mock.removeSong('song-lease-automatic');
+  }
+});
+
+scenario('S28_prompt_apply_revalidates_current_limits_and_dictionary_revision', async () => {
+  const before = await readStorage(context);
+  const customPage = () => page.evaluate(() => {
+    localStorage.setItem('aceModel', 'acemusic-v1.1');
+    localStorage.setItem('createMode', 'custom');
+    document.getElementById('modelBtn').textContent = 'ACE Music v1.1 Preview';
+    document.getElementById('ideaMode').style.display = 'none';
+    document.getElementById('customMode').style.display = 'block';
+    document.getElementById('caption').value = 'Keep the existing page draft';
+  });
+  const showRandom = async () => {
+    await customPage();
+    await page.locator('[data-rand-box] summary').click();
+    await page.waitForFunction(() => /Custom/.test(document.getElementById('acedl-host')?.shadowRoot?.querySelector('[data-rand-ctx]')?.textContent || ''), null, { timeout: 3000 });
+  };
+  const assertRetained = async (text, label) => {
+    assertEqual(await page.locator('[data-rand="apply"]').isDisabled(), true, label + ' 應禁用套用');
+    await page.locator('[data-rand="apply"]').dispatchEvent('click');
+    assertEqual(await page.locator('#caption').inputValue(), 'Keep the existing page draft', label + ' 不能改頁面原文');
+    assertEqual(await page.locator('[data-rand-text]').inputValue(), text, label + ' 保留完整舊草稿');
+  };
+  try {
+    await freshPanel(page, mock.base);
+    await showRandom();
+    await page.locator('[data-rand="roll"]').click();
+    const text = await page.locator('[data-rand-text]').inputValue();
+    assert(text.length > 512 && text.length < 1000, 'S28 初始草稿適合舊上限 1000');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const generated = (await readStorage(context)).aceRandom.history.find((item) => item.text === text);
+    assert(generated, 'S28 保存可追溯的原始草稿');
+    await page.evaluate(() => { document.getElementById('caption').maxLength = 512; });
+    await page.waitForFunction(() => /512/.test(document.getElementById('acedl-host')?.shadowRoot?.querySelector('[data-rand-ctx]')?.textContent || ''), null, { timeout: 3000 });
+    await assertRetained(text, 'S28 可見欄位上限降低');
+    await page.locator('[data-rand="roll"]').click();
+    assertEqual(await page.locator('[data-rand-text]').inputValue(), text, 'S28 新編譯放不下時也不清空或截短原草稿');
+
+    const historyDraft = async (patch) => {
+      await swEval(context, async (item) => chrome.storage.local.set({ aceRandom: { history: [item], lockA: false, lockB: false } }), { ...generated, ...patch });
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await openPanel(page);
+      await waitSongsLoaded(page, 5);
+      await showRandom();
+      await page.locator('[data-rand-history] button').click();
+    };
+    mock.setV11StyleLimit(512);
+    await historyDraft({});
+    assert(/512/.test(await page.locator('[data-rand-ctx]').textContent()), 'S28 讀取站點新模型上限 512');
+    await assertRetained(text, 'S28 同模型的現行 API 上限降低');
+    mock.setV11StyleLimit(1000);
+    await historyDraft({ dictionaryVersion: '0.0.0-old' });
+    await assertRetained(text, 'S28 舊詞典版本');
+    await historyDraft({ dictionary: 'old-dictionary-id' });
+    await assertRetained(text, 'S28 舊詞典 ID');
+    assertEqual(await page.evaluate(() => window.__gen), 0, 'S28 全程不按 Generate');
+  } finally {
+    mock.setV11StyleLimit(1000);
+    await swEval(context, async (saved) => chrome.storage.local.set({ aceRandom: saved.aceRandom || {} }), before);
+  }
+});
+
+scenario('S29_exact_local_index_handles_classified_files_uncertainty_and_old_hosts', async () => {
+  const before = await readStorage(context);
+  const original = Object.fromEntries(['song-e1', 'song-e2'].map((id) => {
+    const song = mock.songs.find((item) => item.task_id === id);
+    return [id, { model: song.model, capability: song.capability }];
+  }));
+  const row = (keys, uncertainKinds = []) => ({ downloaded: { mp3: keys.includes('mp3'), wav: keys.includes('wav'), midi: false, musicxml: false, stems: 2, cover: false }, completedKeys: keys, uncertainKinds, notationRequested: true, wavSupported: true, problemCodes: [] });
+  const byTask = { 'song-a': row(['mp3', 'wav']), 'song-b': row([], ['mp3']), 'song-c': row(['mp3']), 'song-e1': row(['mp3', 'wav']), 'song-e2': row([]) };
+  const setIndex = (revision, rows, unsupported = false) => page.evaluate(({ rev, tasks, oldHost }) => {
+    const flags = document.documentElement.dataset;
+    const fixture = JSON.parse(flags.acedlTestNative);
+    fixture.compact = { ok: true, apiVersion: 1, revision: rev, savedAt: new Date().toISOString(), summary: {}, byTask: tasks };
+    fixture.unsupportedIndex = oldHost;
+    flags.acedlTestNative = JSON.stringify(fixture);
+  }, { rev: revision, tasks: rows, oldHost: unsupported });
+  const waitStatus = (id, expected) => page.waitForFunction(({ task, text }) => (document.getElementById('acedl-host')?.shadowRoot?.querySelector('[data-song-id="' + task + '"] [data-download-status]')?.textContent || '').trim() === text, { task: id, text: expected }, { timeout: 6500 });
+  try {
+    for (const id of ['song-e1', 'song-e2']) mock.updateSong(id, { model: 'acemusic-v1.1', capability: 'music_generate' });
+    await swEval(context, async () => chrome.storage.local.set({ aceHistory: { 'song-e2': { folder: 'Where Am I (2)', files: { mp3: { path: 'indexed-classified/Where Am I (2)/Where Am I (2).mp3', absolute: 'F:/fixture-missing-old-path.mp3', at: 1 } } } } }));
+    await page.goto(mock.base + '/create/?native-fixture', { waitUntil: 'domcontentloaded' });
+    await openPanel(page);
+    await waitSongsLoaded(page, 5);
+    await applyOptions(page, { mp3: true, wav: true });
+    await setRootFolder(page, 'indexed-classified');
+    // 沒有可供 filename 猜測的 fs-list；只有 compact exact ID 的正向證據。
+    await setIndex('classified-1', byTask);
+    await waitStatus('song-e1', '已下載');
+    await waitStatus('song-b', '待核對 MP3');
+    const second = await page.locator('[data-song-id="song-e2"] [data-download-status]').textContent();
+    assert(/缺 MP3／WAV/.test(second), `S29 同名另 task 不繼承已分類檔案或舊失效 history：${second}`);
+    const counts = await page.locator('[data-count]').textContent();
+    assert(/所選類型待補 1/.test(counts) && /待核對 1/.test(counts), `S29 確定待補與來源待核對分開計數：${counts}`);
+    await page.locator('[data-act="filter-undownloaded"]').click();
+    assertEqual(await page.locator('[data-song-id]').getAttribute('data-song-id'), 'song-e2', 'S29 不確定來源不混進確定待補列表');
+    await page.locator('[data-act="select-all"]').click();
+    assertEqual((await page.locator('[data-count]').textContent()).includes('已選 1 / 顯示 1'), true, 'S29 全選只針對確定缺失');
+    await page.locator('[data-act="filter-undownloaded"]').click();
+    await page.locator('[data-act="select-none"]').click();
+    await selectSongs(page, ['song-e1']);
+    mock.clearLog();
+    await clickDownload(page);
+    const skipped = await waitJobDone(page, 10000);
+    assertEqual(skipped.counts, { done: 0, failed: 0, skipped: 2, total: 2 }, 'S29 分類搬移後仍按 exact completedKeys 跳過 MP3/WAV');
+    assertEqual(mock.log.filter((entry) => /\/api\/songs\/song-e1\/file|\/download/.test(entry.path)).length, 0, 'S29 已核對檔案不重抓，不觸發生成');
+
+    const missingRow = { ...byTask }; delete missingRow['song-e2'];
+    await setIndex('classified-2', missingRow);
+    await waitStatus('song-e2', '本機核對未就緒');
+    await page.locator('[data-act="filter-undownloaded"]').click();
+    assertEqual(await page.locator('[data-song-id]').count(), 0, 'S29 index 沒有該 task 時不能假定整首缺檔');
+    await page.locator('[data-act="filter-undownloaded"]').click();
+
+    await setIndex('classified-3', byTask);
+    await waitStatus('song-e1', '已下載');
+    await applyOptions(page, { stems: true });
+    await page.locator('[data-act="select-none"]').click();
+    await selectSongs(page, ['song-e1']);
+    mock.clearLog();
+    await clickDownload(page);
+    const stems = await waitJobDone(page, 10000);
+    assertEqual(stems.counts, { done: 2, failed: 0, skipped: 0, total: 2 }, 'S29 generic stems count 不能代替 stem:trackId 完成證據');
+    assertEqual(mock.log.filter((entry) => entry.path.startsWith('/data/stems/song-e1-')).length, 2, 'S29 只取得缺乏 exact key 的兩個分軌');
+
+    await applyOptions(page, { mp3: true, wav: true });
+    await setIndex('unsupported-host', byTask, true);
+    await waitStatus('song-e1', '本機核對未就緒');
+    assert(/所選類型待補 0/.test(await page.locator('[data-count]').textContent()), 'S29 舊 host 不支持 index 不能把整庫標成待補');
+    await page.locator('[data-act="filter-undownloaded"]').click();
+    assertEqual(await page.locator('[data-song-id]').count(), 0, 'S29 未就緒不是確定缺檔');
+    await page.locator('[data-act="filter-undownloaded"]').click();
+    await page.locator('[data-act="select-none"]').click();
+    await selectSongs(page, ['song-e2']);
+    assertEqual(await page.locator('[data-act="download"]').isEnabled(), true, 'S29 核對服務未就緒仍保留手動 API 下載入口');
+  } finally {
+    for (const [id, patch] of Object.entries(original)) mock.updateSong(id, patch);
+    await swEval(context, async (saved) => chrome.storage.local.set({ aceHistory: saved.aceHistory || {}, aceSettings: saved.aceSettings || {} }), before);
+  }
 });
 
 scenario('S7_logged_out_shows_login_hint', async () => {
@@ -953,7 +1244,9 @@ async function main() {
     extensionId: await launched.sw.evaluate(() => chrome.runtime.id),
     mockBase: mock.base,
     downloadDir: downloadsDir,
+    nativeIsolation: await launched.sw.evaluate(() => String(chrome.runtime.connectNative).includes('Native host disabled in isolated e2e')),
   };
+  assert(results.browser.nativeIsolation, '隔離測試副本必須拒絕所有真 native host 連線');
 
   page = context.pages()[0] || (await context.newPage());
   page.on('pageerror', (e) => results.pageErrors.push({ scenario: currentScenario, error: String(e) }));
@@ -966,7 +1259,11 @@ async function main() {
     results.consoleErrors.push({ scenario: currentScenario, text, url });
   });
 
-  for (const s of scenarios) {
+  const requestedScenario = process.env.ACE_E2E_SCENARIO || '';
+  const selectedScenarios = requestedScenario ? scenarios.filter((item) => item.name.startsWith(requestedScenario)) : scenarios;
+  if (!selectedScenarios.length) throw new Error('No matching isolated e2e scenario');
+  results.scope = requestedScenario || 'full';
+  for (const s of selectedScenarios) {
     const started = Date.now();
     currentScenario = s.name;
     try {
@@ -1024,10 +1321,11 @@ async function main() {
   await context.close().catch(() => {});
   await mock.close();
 
-  const outFile = path.join(TMP, 'e2e-result.json');
+  const outFile = path.join(TMP, requestedScenario ? 'e2e-result-' + requestedScenario.replace(/[^A-Za-z0-9_-]/g, '_') + '.json' : 'e2e-result.json');
   fs.writeFileSync(outFile, JSON.stringify(results, null, 2));
   const summary = {
     ok: results.ok,
+    scope: results.scope,
     scenarios: results.scenarios.map((s) => ({ name: s.name, ok: s.ok, error: s.error || undefined })),
     downloadDir: downloadsDir,
     finalFileCount: results.finalFiles.length,

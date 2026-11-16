@@ -2,6 +2,7 @@
 // agent/watch.mjs — 靜默背景整理 daemon：監看 ai音樂 變化 → 補齊成品MP3 → 採樣包 → 分類搬移 → 去重
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { config, writeJson, readJson, sleep } from './lib/config.mjs';
 import { extractFullMp3s, collectSamples, classifyByAttributes, dedupeSongCopies, classifyByAudio, listSongs } from './lib/ace.mjs';
 
@@ -9,17 +10,29 @@ const cfg = config();
 const ROOT_NAME = process.env.ACE_WATCH_ROOT || 'ai音樂';
 const ROOT = path.join(cfg.downloadDir, ROOT_NAME);
 const STATUS_FILE = path.join(cfg.stateDir, 'watch-status.json');
+const STOP_FILE = path.join(cfg.stateDir, 'watch-stop.json');
 const POLL_MS = Math.max(5000, Number(process.env.ACE_WATCH_INTERVAL || 20000));
 const STARTED_AT = new Date().toISOString();
 let stopped = false;
 let currentPhase = 'idle';
 
-function statusBase(extra = {}) {
-  return { pid: process.pid, startedAt: STARTED_AT, root: ROOT, pollMs: POLL_MS, phase: currentPhase, beatAt: new Date().toISOString(), ...extra };
+export function createWatchStatusWriter({ file, root, pollMs = POLL_MS, phase = () => currentPhase, now = () => new Date().toISOString() }) {
+  let snapshot;
+  let loaded;
+  return async (extra = {}) => {
+    if (!loaded) loaded = readJson(file, {}).then((previous) => {
+      snapshot = { ...(previous && typeof previous === 'object' ? previous : {}), pid: process.pid, daemonStartedAt: STARTED_AT, root, pollMs };
+    });
+    await loaded;
+    snapshot = { ...snapshot, phase: phase(), beatAt: now(), ...extra };
+    await writeJson(file, snapshot);
+    return snapshot;
+  };
 }
 
+const writeWatchStatus = createWatchStatusWriter({ file: STATUS_FILE, root: ROOT });
 async function setStatus(extra = {}) {
-  await writeJson(STATUS_FILE, statusBase(extra)).catch(() => {});
+  await writeWatchStatus(extra).catch(() => {});
 }
 
 function fingerprint() {
@@ -50,32 +63,36 @@ function fingerprint() {
   return result;
 }
 
-async function runPipeline() {
+const PIPELINE_SERVICES = { listSongs, extractFullMp3s, collectSamples, classifyByAttributes, dedupeSongCopies, classifyByAudio };
+export async function runPipeline({ cfg: runCfg = cfg, rootName = ROOT_NAME, services = PIPELINE_SERVICES, reportStatus } = {}) {
+  const runRoot = path.join(runCfg.downloadDir, rootName);
+  const report = reportStatus || (runCfg === cfg && rootName === ROOT_NAME ? setStatus : createWatchStatusWriter({ file: path.join(runCfg.stateDir, 'watch-status.json'), root: runRoot }));
   const startedAt = new Date().toISOString();
   currentPhase = 'running';
-  const status = { phase: 'running', pid: process.pid, startedAt, root: ROOT, steps: [], ok: false };
-  await writeJson(STATUS_FILE, status);
+  const status = { phase: 'running', pid: process.pid, startedAt, root: runRoot, steps: [], ok: false, error: null };
+  await report(status);
   try {
-    const songs = await listSongs(cfg, { refresh: true });
-    const mp3 = await extractFullMp3s({ songs, cfg, concurrency: 3 });
+    const songs = await services.listSongs(runCfg, { refresh: true });
+    const mp3 = await services.extractFullMp3s({ songs, root: rootName, cfg: runCfg, concurrency: 3 });
     status.steps.push({ name: 'mp3', total: mp3.total, downloaded: mp3.downloaded, copied: mp3.copied, skipped: mp3.skipped, failed: mp3.failed.length });
-    const samples = await collectSamples({ root: ROOT_NAME, cfg });
+    const samples = await services.collectSamples({ root: rootName, cfg: runCfg });
     status.steps.push({ name: 'samples', total: samples.total, copied: samples.copied, skipped: samples.skipped, migrated: samples.migrated, failed: samples.failed.length });
-    const classify = await classifyByAttributes({ root: ROOT_NAME, move: true, cfg });
+    const classify = await services.classifyByAttributes({ root: rootName, move: true, cfg: runCfg });
     status.steps.push({ name: 'classify', total: classify.total, moved: classify.moved, copied: classify.copied, skipped: classify.skipped, failed: classify.failed.length });
-    const dedupe = await dedupeSongCopies({ root: ROOT_NAME, cfg });
+    const dedupe = await services.dedupeSongCopies({ root: rootName, cfg: runCfg });
     status.steps.push({ name: 'dedupe', removed: dedupe.removed, savedMB: Math.round(dedupe.savedBytes / 1048576), failed: dedupe.failed.length });
-    const audio = await classifyByAudio({ root: ROOT_NAME, cfg });
+    const audio = await services.classifyByAudio({ root: rootName, cfg: runCfg });
     status.steps.push({ name: 'audio', total: audio.total, analyzed: audio.analyzed, linked: audio.linked, failed: audio.failed.length, unanalyzable: audio.unanalyzable ? audio.unanalyzable.length : 0 });
     status.ok = !status.steps.some((step) => step.failed > 0);
-    await setStatus({ phase: 'running', startedAt, steps: status.steps });
+    await report({ phase: 'running', startedAt, steps: status.steps });
   } catch (err) {
     status.error = String((err && err.message) || err);
   }
   status.phase = 'idle';
   status.finishedAt = new Date().toISOString();
   currentPhase = 'idle';
-  await writeJson(STATUS_FILE, { ...status, lastRunAt: status.finishedAt });
+  const finished = { ...status, lastRunAt: status.finishedAt };
+  await report({ ...finished, lastRun: finished });
   return status;
 }
 
@@ -85,6 +102,7 @@ async function main() {
   await setStatus({ startedAt: STARTED_AT });
   let last = null;
   while (!stopped) {
+    if ((await readJson(STOP_FILE, {})).pid === process.pid) { stopped = true; break; }
     const fp = fingerprint();
     if (!last || fp.files !== last.files || fp.bytes !== last.bytes || fp.latest !== last.latest) {
       console.log('[watch] 偵測到變化，自動整理開始（首次會補齊成品MP3）');
@@ -93,7 +111,10 @@ async function main() {
       console.log('[watch] 完成：' + JSON.stringify(result.steps.map((step) => step.name + ':' + (step.downloaded ?? step.copied ?? step.moved ?? step.removed ?? 0))));
     }
     const deadline = Date.now() + POLL_MS;
-    while (!stopped && Date.now() < deadline) await sleep(Math.min(1000, deadline - Date.now()));
+    while (!stopped && Date.now() < deadline) {
+      if ((await readJson(STOP_FILE, {})).pid === process.pid) { stopped = true; break; }
+      await sleep(Math.min(1000, deadline - Date.now()));
+    }
     if (!stopped) await setStatus({ lastFingerprint: { files: last ? last.files : 0, bytes: last ? last.bytes : 0 } });
   }
   currentPhase = 'stopped';
@@ -102,28 +123,29 @@ async function main() {
 
 async function shutdown(signal) {
   stopped = true;
-  currentPhase = 'stopped';
-  await setStatus({ stoppedAt: new Date().toISOString(), signal });
-  process.exit(0);
+  await setStatus({ stopRequestedAt: new Date().toISOString(), signal });
+  // Finish the current atomic file operation/pipeline before leaving main.
 }
 
-process.on('SIGINT', () => { shutdown('SIGINT'); });
-process.on('SIGTERM', () => { shutdown('SIGTERM'); });
-process.on('uncaughtException', async (err) => {
-  currentPhase = 'error';
-  await setStatus({ error: String((err && err.message) || err), crashedAt: new Date().toISOString() }).catch(() => {});
-  process.exit(1);
-});
-process.on('unhandledRejection', async (err) => {
-  currentPhase = 'error';
-  await setStatus({ error: String((err && err.message) || err), crashedAt: new Date().toISOString() }).catch(() => {});
-  process.exit(1);
-});
-if (process.argv.includes('--once')) {
-  await runPipeline().then((result) => {
-    console.log(JSON.stringify(result, null, 2));
-    process.exit(result.ok ? 0 : 1);
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.on('SIGINT', () => { shutdown('SIGINT'); });
+  process.on('SIGTERM', () => { shutdown('SIGTERM'); });
+  process.on('uncaughtException', async (err) => {
+    currentPhase = 'error';
+    await setStatus({ error: String((err && err.message) || err), crashedAt: new Date().toISOString() }).catch(() => {});
+    process.exit(1);
   });
-} else {
-  await main();
+  process.on('unhandledRejection', async (err) => {
+    currentPhase = 'error';
+    await setStatus({ error: String((err && err.message) || err), crashedAt: new Date().toISOString() }).catch(() => {});
+    process.exit(1);
+  });
+  if (process.argv.includes('--once')) {
+    await runPipeline().then((result) => {
+      console.log(JSON.stringify(result, null, 2));
+      process.exit(result.ok ? 0 : 1);
+    });
+  } else {
+    await main();
+  }
 }

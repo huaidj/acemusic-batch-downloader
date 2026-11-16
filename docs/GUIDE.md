@@ -42,7 +42,7 @@
 | 分軌（Vocals、Drums、Bass…） | 站點已分離的 stems（MP3 128 kbps） | 需該歌已做分軌；站點目前沒有 WAV 分軌 |
 | MIDI | 站點生成（`POST download`，等待後取得） | 部分歌站點回 `no_download`（沒有）；有速率限制；**生成可能扣 credit** |
 | MusicXML | 同上 | 同上 |
-| 完整 MP3 | 歌曲音檔 | 一定有 |
+| 完整 MP3 | 歌曲音檔 | 生成歌曲提供；原始上傳不是 MP3 時，不另改副檔名冒充 MP3 |
 | 完整 WAV | 站點 file API | 只有部分模型（如 `acemusic-v1.1`）提供；48 kHz／16-bit |
 | 封面 | 歌曲封面圖 | |
 
@@ -77,11 +77,13 @@
 
 | 顯示 | 意思 |
 |---|---|
-| `已下載` | 該歌所有應有項目都在（分軌每軌＋MIDI＋MusicXML＋封面） |
+| `已下載` | 目前勾選且適用的類型都在，包含 MP3／WAV；只按該歌曲自己的來源證據判斷 |
 | `部分 x/y` | y 項中有 x 項；滑過徽章看是哪項缺 |
-| `未下載` | 都還沒有 |
+| `缺 MP3／WAV…` | 已完成本機核對，缺少列出的類型 |
+| `待核對 MP3…` | 有候選檔案但來源對應不夠明確；不當作確定缺檔 |
+| `本機核對未就緒` | 本機工具尚未提供索引；未知不等於沒有檔案 |
 | `MIDI 不可用` | 站點對這首回 `no_download`，不計入 y，也不會再請求 |
-| `MP3`／`WAV` 徽章 | 獨立顯示，不計入 y |
+| `MP3`／`WAV` 徽章 | 分別顯示；目前有勾選時也計入 y |
 
 ## 5. 安裝
 
@@ -103,6 +105,10 @@
 
 **下載設定與範圍**：六種類型預設勾選，設定區預設收合，保留你後來手動儲存的選擇。MIDI/MusicXML 只排入這首歌已主動要求分軌的情況；沒有分軌紀錄的歌曲不會因缺樂譜被列為待補。WAV 與樂譜分開處理，可用 WAV 獨立下載，包含上傳的原始 WAV。
 
+**老歌新增分軌**：自動下載分軌開啟後，先建立現有曲庫基線；日後某首老歌的分軌就緒或版本更新，便自動下載可取得的軌道。此功能不替你購買分軌，重新整理頁面也不會重送已提交的樂譜生成。
+
+**獨立播放器**：按面板「獨立播放器」或歌曲播放鍵，開啟可拖動／調整大小的視窗。歌曲播放鍵先定位該歌，不立即出聲；在播放器按播放才開始。搜尋、本機檔案、佇列、播放清單、收藏、歷史及下載狀態見 [播放器說明](../player/README.md)。
+
 **新歌自動下載**（選項「新歌自動下載」，預設關）：
 - 只處理**開啟之後**完成的新歌，不會回頭掃舊歌。
 - 下載上方勾選的類型；分軌會等分離完成，之後才出現的分軌會再補抓（已存在的檔案自動跳過）。
@@ -110,6 +116,8 @@
 - 下完若開了「下載完自動整理」，會接著分類。需要開著 acemusic.ai/create 分頁。
 
 **卡住時複製診斷**：面板底部按「複製診斷」，取得最近最多 200 筆工作紀錄；包含 UTC 時間、工作階段、準備／下載數量及經清理的錯誤，不含完整網址、Cookie 或權杖。擴充功能重新載入後，舊 ACE 分頁必須刷新；連線失效時仍可複製診斷，剪貼簿不可用則會提供可選取的文字。紀錄先保存在同分頁的 `sessionStorage`；本機工具可用時，會節流寫入 `%LOCALAPPDATA%\AceMusicDL\download-log.json`，下載期間每 30 秒記一次心跳。此功能必須載入新版後才開始記錄，無法還原先前卡住工作的詳細日誌。
+
+CLI／Hub／MCP 的下載另外在 `%LOCALAPPDATA%\AceMusicDL\agent.log` 保存同一 run ID 的開始、逐檔完成／略過／錯誤代碼與結束計數；樂譜提交記 task ID／類型／次數，不記 Cookie 或完整檔案網址。音檔成功與狀態保存失敗分開回報。
 
 維護者手動核對（尚未驗收）：在隔離工作中確認開始／停止／錯誤及心跳有紀錄；重新載入擴充功能後確認舊頁會停止並仍能複製診斷；刷新原分頁後確認舊紀錄保留，且安裝本機工具時可寫入 `download-log.json`。不得為測試診斷觸發付費 MIDI／MusicXML 生成。
 
@@ -120,6 +128,8 @@
 | `doctor` | 登入、紀錄、頁面快照健康度 |
 | `status [--json]` | 曲庫摘要（<100 ms） |
 | `locate [--latest N\|--query 字\|--song id] [--views]` | **歌曲 → 本機真實目錄與檔案** |
+| `local-index [--root 名稱] [--full] [--json]` | 只讀本機下載證據索引，不連站點 |
+| `player [--background] [--json]` | 啟動獨立播放器服務；不提交生成或下載 |
 | `list [--query] [--undownloaded] [--json]` | 歌單＋下載進度 |
 | `download --all\|--song id [--types stems,midi,musicxml,mp3,wav,cover] [--dry-run] [--force]` | 下載 |
 | `tidy-all` | 一鍵整理 |
@@ -145,12 +155,14 @@
 | 最新那首歌的檔案在哪 | `ace_locate`（預設最新一首；`query`／`song_id`／`latest`） |
 | 等我做完下一首、下載好給我路徑 | `ace_wait_new_song { wait_download: true }` |
 | 最近發生什麼 | `ace_events` |
+| 核對歌曲下載證據 | `ace_download_index` |
+| 開啟播放器入口 | `ace_player` |
 | 曲庫每類有多少 | `ace_library` |
 | 把剛做好的歌全部抓下來 | `ace_download { latest: 1, types: ["all"] }` → `ace_job_status` → `ace_tidy { wait: true }` |
 | 下載／整理 | `ace_download`（`song_ids`／`query`／`latest`／`all`）→ `ace_job_status`；`ace_tidy`；`ace_organize` |
 | 維運 | `ace_backups`（只預覽）、`ace_masters`、`ace_probe`、`ace_hub_status` |
 
-Hub 在跑時自動走 Hub（p50：overview 1.2 ms、locate 2.7 ms、list 0.5 ms）；不在時回落本地。
+Hub 在跑時自動走 Hub。讀取可本地回落；寫入只在確認沒有建立連線時回落，提交後結果未知不會換一路重送，應查 job ID。
 
 ### 6.4 Hub API（`127.0.0.1:8788`）
 `GET /health /capabilities /overview /songs /locate /library /page /page/events /wait /jobs/:id /events(SSE)`；`POST /download /tidy /dedupe /organize /warm /jobs/:id/cancel /shutdown`。詳見 `agent/HUB.md`。

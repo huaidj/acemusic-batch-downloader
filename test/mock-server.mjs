@@ -222,6 +222,7 @@ const parseCursor = (cursor) => {
 export function startMockServer(options = {}) {
   const pageSize = Math.max(1, Number(options.pageSize) || 4);
   const pollsBeforeReady = Math.max(0, Number(options.pollsBeforeReady ?? 1));
+  let v11StyleLimit = 1000;
 
   const log = [];
   const polls = new Map(); // `${id}:${kind}` -> 已輪詢次數
@@ -250,6 +251,10 @@ export function startMockServer(options = {}) {
       cookie: req.headers.cookie || null,
       status: 0,
       at: Date.now(),
+      range: req.headers.range || null,
+      destination: req.headers['sec-fetch-dest'] || null,
+      mode: req.headers['sec-fetch-mode'] || null,
+      hasReferer: !!req.headers.referer,
     };
     log.push(entry);
     res.on('finish', () => {
@@ -303,7 +308,7 @@ export function startMockServer(options = {}) {
     if (url.pathname === '/api/status' && req.method === 'GET') {
       sendJson(200, { ok: true, upload: true, cover: true, models: [
           { id: 'acemusic-v1', name: 'ACE Music v1', limits: { prompt: 2000, style: 1000, lyrics: 5000 } },
-          { id: 'acemusic-v1.1', name: 'ACE Music v1.1 Preview', reads: true, limits: { prompt: 2000, style: 1000, lyrics: 5000 } },
+          { id: 'acemusic-v1.1', name: 'ACE Music v1.1 Preview', reads: true, limits: { prompt: 2000, style: v11StyleLimit, lyrics: 5000 } },
           { id: 'ace-step-1.5-xl', name: 'ACE-Step v1.5 XL', lossy: true, free: true, limits: { prompt: 2000, style: 512, lyrics: 2000 } },
           { id: 'ace-step-v2', lossy: true },
         ] });
@@ -465,6 +470,7 @@ export function startMockServer(options = {}) {
         },
         failPath: (pathname) => failing.add(pathname),
         clearFailures: () => failing.clear(),
+        setV11StyleLimit: (limit) => { v11StyleLimit = Math.max(1, Number(limit) || 1000); },
         failFirstRequests: (pathname, n = 1) => failFirst.set(pathname, n),
         /** 模擬「站點新完成一首歌」：加入歌單、ver+1、推 SSE */
         addSong: (song) => {

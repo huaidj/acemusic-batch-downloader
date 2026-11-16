@@ -67,7 +67,13 @@ test('appendLog：帶 cfg 時寫沙盒日誌，不污染真正的 agent.log', as
   if (fs.existsSync(real)) assert.ok(!/hello-sandbox/.test(fs.readFileSync(real, 'utf8')));
 });
 
-test('下載狀態標籤：直接說缺什麼（原始碼檢查）', () => {
-  const src = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..', 'src', 'content.js'), 'utf8');
-  assert.match(src, /' · 缺 ' \+ lack\.join/);
+test('下載狀態標籤：確定缺檔、待核對與未知分開說明', () => {
+  const base = { known: true, allDone: false, any: true, have: 1, total: 3, detail: [
+    { label: 'MP3', have: 1, total: 1, done: true }, { label: 'MIDI', have: 0, total: 1, done: false }, { label: 'WAV', have: 0, total: 1, done: false },
+  ] };
+  assert.match(P.downloadStatusLabel(base).text, /缺 MIDI／WAV/);
+  const uncertain = { ...base, detail: base.detail.map((item) => item.label === 'MIDI' ? { ...item, uncertain: true } : item) };
+  const label = P.downloadStatusLabel(uncertain).text;
+  assert.match(label, /待核對 MIDI/); assert.match(label, /缺 WAV/); assert.doesNotMatch(label, /缺 MIDI/);
+  assert.equal(P.downloadStatusLabel({ ...base, known: false }, 'host pending').text, '本機核對未就緒');
 });

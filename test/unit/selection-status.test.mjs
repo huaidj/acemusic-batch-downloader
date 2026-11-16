@@ -93,3 +93,14 @@ test('收藏與待補篩選取交集；零選定類型不會把整個曲庫列�
   });
   assert.equal(none.length, 0);
 });
+
+test('可信 index 將確定缺檔、待核對、服務未知分開；待補列表只列 missingCount 大於零', () => {
+  const songs = [song('missing'), song('uncertain'), song('offline'), song('done')];
+  const statuses = {
+    missing: { allDone: false, known: true, missingCount: 1, uncertainCount: 0 },
+    uncertain: { allDone: false, known: true, missingCount: 0, uncertainCount: 1 },
+    offline: { allDone: false, known: false, missingCount: 0, uncertainCount: 2 },
+    done: { allDone: true, known: true, missingCount: 0, uncertainCount: 0 },
+  };
+  assert.deepEqual(Array.from(P.filterDownloadSongs(songs, { onlyUndownloaded: true, statusForSong: (item) => statuses[item.task_id] }), (item) => item.task_id), ['missing']);
+});

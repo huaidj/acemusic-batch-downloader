@@ -47,7 +47,9 @@ test('dedupeFolders：預設只預覽，commit 才搬移並清空資料夾', asy
   const backupRoot = path.join(process.env.ACE_STATE_DIR, 'organize-backups');
   const backupDirs = fs.readdirSync(backupRoot);
   assert.equal(backupDirs.length, 1, '應留下 backup 目錄');
-  const backedUp = path.join(backupRoot, backupDirs[0], 'Song A', 'Song A.mp3');
+  const operation = JSON.parse(fs.readFileSync(path.join(backupRoot,backupDirs[0],'_operation.json'),'utf8'));
+  assert.equal(operation.from,duplicate);
+  const backedUp = operation.backup;
   assert.equal(fs.existsSync(backedUp), true, '副本應保留在 backup，可回溯');
 });
 
@@ -122,8 +124,11 @@ test('dedupeContent：跨分類相同內容只留一份，keeper 優先 成品MP
 
     const backupRoot = path.join(process.env.ACE_STATE_DIR, 'organize-backups');
     const dirs = fs.readdirSync(backupRoot);
-    assert.equal(dirs.length, 1);
-    assert.equal(fs.existsSync(path.join(backupRoot, dirs[0], '採樣包', 'Other', 'X.mp3')), true, '副本要留備份');
+    assert.equal(dirs.length, 2);
+    const operations = dirs.map(dir=>JSON.parse(fs.readFileSync(path.join(backupRoot,dir,'_operation.json'),'utf8')));
+    assert.equal(operations.every(op=>fs.existsSync(op.backup)&&op.sha256&&op.retention),true,'每份原件有可回溯備份和SHA');
+    assert.equal(done.bytesReclaimed,0,'原件仍保留，不能聲稱已釋放磁碟空間');
+    assert.equal(state.history.taskDup.files.mp3.absolute,path.join(root,'成品MP3','X.mp3'),'搬移後exact task history回寫keeper');
   } finally {
     ctx.restore();
   }
@@ -147,6 +152,7 @@ test('getLibrarySnapshot：命中本地快照快取，不重建', async () => {
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(path.join(cacheDir, 'library-snapshot.json'), JSON.stringify({
       cachedAt: Date.now(),
+      schema: 'ace-library-snapshot-v2-exact-task-index',
       builtAt: '2026-01-01T00:00:00.000Z',
       counts: { songs: 1, downloaded: 1, partial: 0, undownloaded: 0, midiAvailable: 0 },
       songs: [{ task_id: 't1', title: 'cached', downloaded: { have: 1, total: 1, allDone: true } }],

@@ -1,6 +1,6 @@
 # ACE Agent Hub — 快速響應中樞（設計）
 
-> 狀態：**v1.5.0 已實作並驗證**（2026-11-16）。目的：讓任何 agent（DSH／Claude Code／Codex／MCP 宿主）用**一個常駐本地服務**拿到 sub-10ms 的讀取、可追蹤的下載 job、以及跨宿主共用的單一狀態。
+> 狀態：**v1.7.5 本機審計修復版**。讓 CLI／MCP 宿主共用本機快照、下載 job 與事件；首次建立實體檔案索引需要掃描磁碟，不能套用熱快照的延遲數字。
 
 ## 1. 動機（現況缺口）
 
@@ -25,7 +25,7 @@ agent / CLI / MCP ──HTTP──► agent/hub.mjs (127.0.0.1:8788)
 - **單一寫入者**：`%LOCALAPPDATA%\AceMusicDL\hub.lock` 記錄 pid；已有活著的 hub 就拒絕啟動（exit 2）。
 - **讀取**：直接讀記憶體 snapshot，不碰磁碟、不打站點。
 - **寫入**：一律進佇列，序列執行；完成後 `clearFsCaches` 並刷新 snapshot。
-- **回落**：hub 不在時，CLI/MCP 完全照舊（本地 in-process），功能不減。
+- **回落**：讀取可回落本機。寫入只有在確認連線未建立時才允許回落；提交後逾時、斷線或 HTTP 拒絕都不走第二路重送，以 job ID／idempotency key 查結果。
 
 ## 3. API（全部 JSON；只綁 127.0.0.1）
 
@@ -34,6 +34,8 @@ agent / CLI / MCP ──HTTP──► agent/hub.mjs (127.0.0.1:8788)
 | GET | `/health` | 版本、`apiVersion`、pid、uptime、counts、jobs 統計 |
 | GET | `/capabilities` | 整合契約（機器可讀）：apiVersion、endpoints、events、sse、fileTypes、selector、pageFiles、auth（v1.7.1） |
 | GET | `/overview` | 快照摘要（歌曲數／已下載／未下載／MIDI 可用） |
+| GET | `/download-index?root=&full=1` | 依 task/source 與實存檔案建立索引；預設 compact，full 含證據；不請求站點 |
+| POST | `/player` | `{songId?}` 啟動獨立播放器服務並定位歌曲；不自動播放、生成或下載 |
 | GET | `/songs?undownloaded=1&q=&limit=50&compact=1` | 歌單（讀快照；`compact=0` 回完整） |
 | POST | `/download` | `{song_ids?, all?, query?, types?, root?, type_folders?, force?, concurrency?, dry_run?, idempotency_key?}` → `202 {jobId}` |
 | POST | `/tidy` | `{root?}` → job（`tidyAll`） |
@@ -87,7 +89,7 @@ agent / CLI / MCP ──HTTP──► agent/hub.mjs (127.0.0.1:8788)
 | 已有 hub | 新 hub 啟動失敗（exit 2），訊息含現有 pid/port |
 | port 被佔 | 啟動失敗（exit 3） |
 | 站點未登入 | job `failed`，error 帶 `NO_SESSION` 說明；讀取仍可用快取 |
-| hub 掛掉 | MCP/CLI 30s 內不再嘗試，直接本地模式；不影響下載 |
+| hub 掛掉 | 讀取可本地回落；寫入若已提交則回報結果未知，不重送 |
 | job 重送 | idempotency key 回同 job，不重複下載 |
 
 ## 7. 驗收（可重跑，v1.5.0 實測）

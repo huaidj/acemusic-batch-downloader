@@ -12,8 +12,16 @@ if (!file) {
 }
 const limitArg = process.argv.indexOf('--limit');
 const LIMIT = limitArg > 0 ? Number(process.argv[limitArg + 1]) : 1000;
+if (!Number.isSafeInteger(LIMIT) || LIMIT <= 0) {
+  console.error('--limit 必須是正整數，不能缺值或使用 NaN/Infinity');
+  process.exit(2);
+}
 const asJson = process.argv.includes('--json');
 const dict = JSON.parse(fs.readFileSync(file, 'utf8'));
+if (!dict || !Array.isArray(dict.axis_a) || !Array.isArray(dict.axis_b) || typeof dict.opening_en !== 'string' || typeof dict.closing_en !== 'string') {
+  console.error('詞典必須包含 axis_a、axis_b 陣列與 opening_en、closing_en 字串');
+  process.exit(2);
+}
 
 /** 固定約束：每一格輸出都必須包含（小寫比對） */
 const REQUIRED = [
@@ -33,6 +41,13 @@ const problems = [];
 const lengths = [];
 const seen = new Set();
 const cells = [];
+for (const [name, axis] of [['axis_a', dict.axis_a], ['axis_b', dict.axis_b]]) {
+  if (axis.length !== 12) problems.push({ id: name, problem: '每個軸必須恰有 12 個詞條' });
+  if (axis.some((item) => !item || typeof item.id !== 'string' || !item.id || typeof item.phrase_en !== 'string') || new Set(axis.map((item) => item && item.id)).size !== axis.length) {
+    console.error(name + ' 的詞條必須有唯一 id 與 phrase_en 字串');
+    process.exit(2);
+  }
+}
 for (const a of dict.axis_a) {
   for (const b of dict.axis_b) {
     const style = [dict.opening_en, a.phrase_en, b.phrase_en, dict.closing_en].join(' ');

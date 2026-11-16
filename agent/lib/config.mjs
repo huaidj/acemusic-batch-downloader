@@ -51,7 +51,7 @@ export async function cacheWrite(name, payload, cfg = config()) {
     const file = path.join(dir, name + '.json');
     const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
     await fsp.writeFile(tmp, JSON.stringify({ cachedAt: Date.now(), ...payload }, null, 2), 'utf8');
-    await fsp.rename(tmp, file);
+    await replaceFileAtomic(tmp, file);
     return file;
 }
 
@@ -78,15 +78,31 @@ export function cacheClear(name, cfg = config()) {
 
 let writeChain = Promise.resolve();
 
+// Windows readers and scanners can briefly deny replacement. Retry only the
+// rename of the already-written temp file; never remove the destination first.
+export async function replaceFileAtomic(from, to, { rename = fsp.rename } = {}) {
+    for (let attempt = 0; ; attempt++) {
+        try { return await rename(from, to); }
+        catch (error) {
+            if (!['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || attempt >= 6) throw error;
+            await sleep(Math.min(200, 10 * 2 ** attempt));
+        }
+    }
+}
+
 export function writeJson(file, value) {
     // 序列化寫入，避免多個並行 worker 同時寫同一個 state 檔造成 race
-    writeChain = writeChain.then(async () => {
+    const task = writeChain.then(async () => {
         await fsp.mkdir(path.dirname(file), { recursive: true });
         const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-        await fsp.writeFile(tmp, JSON.stringify(value, null, 2), 'utf8');
-        await fsp.rename(tmp, file);
+        try {
+            await fsp.writeFile(tmp, JSON.stringify(value, null, 2), {encoding:'utf8',flag:'wx'});
+            await replaceFileAtomic(tmp, file);
+        } finally { await fsp.unlink(tmp).catch((error) => { if (error.code !== 'ENOENT') throw error; }); }
     });
-    return writeChain;
+    // 呼叫者仍收到這次 I/O 錯誤；內部佇列恢復，不能把之後所有狀態寫入一起毒死。
+    writeChain = task.catch(() => {});
+    return task;
 }
 
 export function exists(file) {
@@ -109,9 +125,16 @@ export function sleep(ms) {
 export async function appendLog(line, cfgArg) {
     const cfg = cfgArg || config();
     try {
-        await fsp.mkdir(cfg.stateDir, { recursive: true });
+        const stateDir = path.resolve(cfg.stateDir);
+        const configured = cfg.logFile ? path.resolve(cfg.logFile) : path.join(stateDir, 'agent.log');
+        const parent = path.dirname(configured);
+        const sameDirectory = process.platform === 'win32' ? parent.toLowerCase() === stateDir.toLowerCase() : parent === stateDir;
+        // Spreading config() and overriding stateDir must never retain the old
+        // production log target outside that state directory.
+        const logFile = sameDirectory ? configured : path.join(stateDir, 'agent.log');
+        await fsp.mkdir(stateDir, { recursive: true });
         const stamp = new Date().toISOString();
-        await fsp.appendFile(cfg.logFile, `${stamp} ${line}\n`, 'utf8');
+        await fsp.appendFile(logFile, `${stamp} ${line}\n`, 'utf8');
     } catch {
         /* ignore */
     }

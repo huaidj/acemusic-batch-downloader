@@ -9,12 +9,15 @@
 ## 功能
 
 - **批次下載**：分軌、MIDI、MusicXML、MP3、WAV、封面；可全選或單曲下載
-- **自動命名／分資料夾**：`<歌名>/<歌名> - Vocals.mp3`、`<歌名> - MIDI.mid`、`<歌名> - MusicXML.musicxml`\n- **WAV**：僅部分模型提供（例如 `acemusic-v1.1`），下載後集中到 `成品WAV/`；模型不支援時不排入下載、自動跳過
+- **自動命名／分資料夾**：`<歌名>/<歌名> - Vocals.mp3`、`<歌名> - MIDI.mid`、`<歌名> - MusicXML.musicxml`
+- **WAV**：依站點模型能力與原始上傳音源判斷；有來源便獨立下載，不等 MIDI。原始 WAV 不冒充 MP3。
 - **一鍵整理**：舊檔整理 → 成品 MP3 → 成品 WAV → 採樣包（MP3 分軌）／採樣包WAV（WAV 分軌）→ 檔案分類 → 內容去重 → 空殼清理 → 音頻屬性分類（BPM／調性／能量）
 - **不重複下載**：比對本機檔案、下載紀錄、去重紀錄；已存在的自動跳過
-- **狀態顯示**：每首歌顯示已下載／部分／未下載；「只看未下載」過濾
+- **狀態顯示**：本機索引按歌曲 ID、來源與實存檔案判斷；分開顯示確定缺檔與待核對，整理搬移後自動刷新。同名歌曲互不繼承紀錄。
 - **即時同步＋新歌自動下載**：訂閱站點推送，新歌完成約 50 ms 出現；可選「新歌自動下載」（MIDI／MusicXML 需另勾，因可能扣 credit）
-- **Agent 中樞**：CLI、MCP（16 個工具，含 `ace_locate` 找最新歌曲真實路徑、`ace_wait_new_song` 等新歌）、常駐 Agent Hub（127.0.0.1:8788，熱路徑 <2 ms）
+- **老歌新增分軌**：已開啟自動分軌下載時，偵測既有歌曲新增或更新的就緒分軌並下載；不主動購買分軌。MIDI／MusicXML 僅用於該歌已主動要求分軌且已授權樂譜生成的情況。
+- **獨立播放器**：可拖動及調整大小的視窗；本機曲庫、搜尋、下載狀態、佇列、播放清單、收藏、歷史與系統媒體鍵。[播放器說明](player/README.md)
+- **Agent 中樞**：CLI、MCP（含 `ace_locate`、`ace_download_index`、`ace_player`）、常駐 Agent Hub（127.0.0.1:8788）。
 - 完整說明：[docs/GUIDE.md](docs/GUIDE.md)｜開發規範：[docs/CONVENTIONS.md](docs/CONVENTIONS.md)｜設計系統：[docs/DESIGN-SYSTEM.md](docs/DESIGN-SYSTEM.md)
 - **可選本機工具**：native messaging host 負責改名／搬檔／叫用 CLI（不裝也能下載）
 
@@ -33,6 +36,8 @@
 5. 開 <https://acemusic.ai/create/> 並登入；右下角會出現「批量下載」按鈕
 
 > 更新版本後到 `chrome://extensions` 按「重新載入」，並重新整理站點分頁。
+
+1.7.5 完整包可執行 `更新本機工具.cmd` 同步本機 Hub／Native／播放器。它先備份並驗證雜湊，不強停下載或覆寫正在執行的 Native EXE；仍需重新載入擴充功能及刷新 ACE 分頁。
 
 ## 使用
 

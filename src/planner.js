@@ -368,7 +368,26 @@
 
   /** 篩選與選擇共用同一範圍，隱藏歌曲不能被「全選」或舊勾選偷偷送出。 */
   function filterDownloadSongs(songs, { onlyUndownloaded = false, onlyFavorites = false, statusForSong = () => ({}), isFavorite = () => false } = {}) {
-    return (songs || []).filter((song) => (!onlyUndownloaded || !statusForSong(song).allDone) && (!onlyFavorites || isFavorite(song.task_id)));
+    return (songs || []).filter((song) => {
+      const status = onlyUndownloaded ? statusForSong(song) : null;
+      const missing = status && Number.isFinite(status.missingCount) ? status.missingCount > 0 : status?.known === false ? false : !status?.allDone;
+      return (!onlyUndownloaded || missing) && (!onlyFavorites || isFavorite(song.task_id));
+    });
+  }
+
+  function downloadStatusLabel(status, unknownMessage = '') {
+    const detail = status.detail.map((item) => item.na ? `${item.label} 不可用（${item.reason || '站點不提供'}）` : item.uncertain ? `${item.label} 待核對` : item.total > 1 ? `${item.label} ${item.have}/${item.total}` : `${item.label}${item.done ? '✓' : '✗'}`).join('、');
+    if (!status.detail.length) return { text: '所選類型不適用', cls: 'dim', title: '尚未選擇檔案類型，或這首沒有可下載的所選類型' };
+    if (!status.total) return { text: status.detail.map((item) => item.reason || `${item.label} 不可用`).join('／'), cls: 'dim', title: detail };
+    if (!status.known) return { text: '本機核對未就緒', cls: 'dim', title: unknownMessage || '尚未取得這首歌的本機核對結果；未知不等於缺檔，仍可手動下載。' };
+    if (status.allDone) return { text: '已下載', cls: 'ok', title: '已核對：' + detail };
+    const uncertain = status.detail.filter((item) => item.uncertain).map((item) => item.label);
+    const missing = status.detail.filter((item) => !item.done && !item.na && !item.uncertain).map((item) => item.label);
+    const parts = [];
+    if (status.any) parts.push(`部分 ${status.have}/${status.total}`);
+    if (uncertain.length) parts.push('待核對 ' + uncertain.join('／'));
+    if (missing.length) parts.push('缺 ' + missing.join('／'));
+    return { text: parts.join(' · ') || '未下載', cls: uncertain.length || status.any ? 'warn' : 'dim', title: detail };
   }
 
   function selectedDownloadSongs(visibleSongs, selectedIds) {
@@ -384,6 +403,7 @@
     mergeUnavailable,
     statusItem,
     downloadStatusForTypes,
+    downloadStatusLabel,
     filterDownloadSongs,
     selectedDownloadSongs,
     KIND_LABELS,

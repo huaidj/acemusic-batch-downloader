@@ -100,3 +100,42 @@ test('audio integrity: metadata seek still rejects truncated data and chunks ext
   fs.writeFileSync(badFile, badRiff);
   assert.equal((await inspectAudioFile(badFile)).validity, 'damaged');
 });
+
+function mp3WithLargeId3({ footer = false } = {}) {
+  const size = 70032, header = Buffer.alloc(10), tag = Buffer.alloc(size), frame = Buffer.alloc(417);
+  header.write('ID3'); header[3] = footer ? 4 : 3; header[5] = footer ? 0x10 : 0;
+  header[6] = (size >>> 21) & 0x7f; header[7] = (size >>> 14) & 0x7f; header[8] = (size >>> 7) & 0x7f; header[9] = size & 0x7f;
+  tag.write('APIC'); tag.writeUInt32BE(size - 10, 4); tag.write('image/jpeg\0', 11);
+  Buffer.from([0xff, 0xfb, 0x90, 0]).copy(frame);
+  const parts = [header, tag];
+  if (footer) { const tail = Buffer.from(header); tail.write('3DI'); parts.push(tail); }
+  parts.push(frame);
+  return { bytes: Buffer.concat(parts), audioOffset: 10 + size + (footer ? 10 : 0) };
+}
+
+test('audio integrity: large ID3 cover is skipped to a complete MPEG frame without loading the tag', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acedl-large-id3-'));
+  for (const footer of [false, true]) {
+    const fixture = mp3WithLargeId3({ footer }), file = path.join(dir, footer ? 'footer.mp3' : 'cover.mp3');
+    fs.writeFileSync(file, fixture.bytes);
+    const inspected = await inspectAudioFile(file);
+    assert.equal(inspected.validity, 'valid');
+    assert.equal(inspected.format, 'mp3');
+    assert.equal(inspected.bytes, fixture.bytes.length);
+    assert.equal(inspected.audioOffset, fixture.audioOffset);
+    assert.equal(fs.statSync(file).size, fixture.bytes.length);
+  }
+});
+
+test('audio integrity: truncated large ID3 tags, illegal synchsafe sizes and incomplete MPEG frames remain damaged', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acedl-large-id3-bad-')), fixture = mp3WithLargeId3();
+  const tagShort = path.join(dir, 'tag-short.mp3'), frameShort = path.join(dir, 'frame-short.mp3'), badSize = path.join(dir, 'bad-size.mp3');
+  fs.writeFileSync(tagShort, fixture.bytes.subarray(0, fixture.audioOffset - 10));
+  fs.writeFileSync(frameShort, fixture.bytes.subarray(0, fixture.audioOffset + 20));
+  const malformed = Buffer.from(fixture.bytes); malformed[6] |= 0x80; fs.writeFileSync(badSize, malformed);
+  assert.equal((await inspectAudioFile(tagShort)).validity, 'damaged');
+  const frame = await inspectAudioFile(frameShort);
+  assert.equal(frame.validity, 'damaged');
+  assert.equal(frame.expectedBytes, fixture.bytes.length);
+  assert.equal((await inspectAudioFile(badSize)).validity, 'damaged');
+});

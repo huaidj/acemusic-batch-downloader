@@ -23,6 +23,7 @@ except Exception:  # noqa: BLE001
 
 FFMPEG = os.environ.get("ACE_FFMPEG") or "ffmpeg"
 FFPROBE = os.environ.get("ACE_FFPROBE") or "ffprobe"
+ALGORITHM_VERSION = "huaidj-audio-v2-pitch-class-c"
 
 NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 MAJOR_PROFILE = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
@@ -100,6 +101,11 @@ def estimate_bpm(audio, sr):
     return float(bpm)
 
 
+def pitch_classes_for_frequencies(freqs):
+    """Map A440 to MIDI 69 so chroma index zero matches NOTES[0] == C."""
+    return np.round(69 + 12 * np.log2(freqs / 440.0)).astype(int) % 12
+
+
 def estimate_key(audio, sr):
     hop, win = 2048, 4096
     if len(audio) < win * 8:
@@ -113,7 +119,7 @@ def estimate_key(audio, sr):
         return None, None, 0.0
     freqs = freqs[mask]
     spectrum = spectrum[:, mask]
-    pitch_classes = np.round(12 * np.log2(freqs / 440.0)).astype(int) % 12
+    pitch_classes = pitch_classes_for_frequencies(freqs)
     chroma = np.zeros(12)
     for pc in range(12):
         idx = np.where(pitch_classes == pc)[0]
@@ -147,7 +153,7 @@ def energy_of(audio):
 
 
 def analyze(path, seconds):
-    out = {"path": path, "ok": False}
+    out = {"path": path, "ok": False, "algorithmVersion": ALGORITHM_VERSION}
     if not os.path.isfile(path):
         out["error"] = "not found"
         return out

@@ -1,6 +1,38 @@
 # register-mcp.ps1 — 把 ACE Music 批量下載器 MCP 註冊到本機各 AI 宿主
 # 用法：pwsh -File agent\register-mcp.ps1
 # 特性：可重複執行（已存在會跳過）、改檔前備份為 *.bak-<timestamp>
+[CmdletBinding()]
+param([switch]$FunctionsOnly)
+
+function Add-AceMcpJsonRegistration {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$ServerName, [Parameter(Mandatory)][string]$NodePath, [Parameter(Mandatory)][string]$ScriptPath)
+    $ErrorActionPreference = 'Stop'
+    $raw = [IO.File]::ReadAllText($Path)
+    $data = ConvertFrom-Json -InputObject $raw -AsHashtable -Depth 100
+    if ($null -eq $data -or $data -isnot [System.Collections.IDictionary]) { throw 'settings.json root must be an object; original file retained.' }
+    if (-not $data.Contains('mcpServers')) { $data['mcpServers'] = [ordered]@{} }
+    if ($data['mcpServers'] -isnot [System.Collections.IDictionary]) { throw 'mcpServers must be an object; original file retained.' }
+    if ($data['mcpServers'].Contains($ServerName)) { return [pscustomobject]@{ Changed = $false; BackupPath = $null } }
+    $data['mcpServers'][$ServerName] = [ordered]@{ command = $NodePath; args = @($ScriptPath) }
+    $candidate = ConvertTo-Json -InputObject $data -Depth 100
+    $null = ConvertFrom-Json -InputObject $candidate -AsHashtable -Depth 100
+    $backup = $Path + '.bak-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fffffff') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 6)
+    Copy-Item -LiteralPath $Path -Destination $backup -ErrorAction Stop
+    $temporary = $Path + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
+    try {
+        [IO.File]::WriteAllText($temporary, $candidate, [Text.UTF8Encoding]::new($false))
+        [IO.File]::Move($temporary, $Path, $true)
+        $verified = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($Path)) -AsHashtable -Depth 100
+        $entry = $verified['mcpServers'][$ServerName]
+        if ($entry['command'] -cne $NodePath -or @($entry['args']).Count -ne 1 -or $entry['args'][0] -cne $ScriptPath) { throw 'MCP configuration read-back did not match; backup retained.' }
+    } finally {
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+    }
+    return [pscustomobject]@{ Changed = $true; BackupPath = $backup }
+}
+
+if ($FunctionsOnly) { return }
 $ErrorActionPreference = 'Stop'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 # 專案根目錄＝本腳本的上層（agent/ 的上一層），不寫死本機路徑
@@ -68,28 +100,11 @@ tool_timeout_sec = 600
 try {
     $geminiConfig = Join-Path $env:USERPROFILE '.gemini\settings.json'
     if (Test-Path $geminiConfig) {
-        $raw = Get-Content $geminiConfig -Raw
-        if ($raw -match [regex]::Escape($serverName)) {
+        $registered = Add-AceMcpJsonRegistration -Path $geminiConfig -ServerName $serverName -NodePath $node -ScriptPath $mcpScript
+        if (-not $registered.Changed) {
             $results += "Gemini CLI：已存在，略過"
         } else {
-            Backup-File $geminiConfig
-            $entry = @"
-    "$serverName": {
-      "command": "$($node -replace '\\','\\')",
-      "args": ["$($mcpScript -replace '\\','\\')"]
-    },
-
-"@
-            $anchor = '"mcpServers": {'
-            $pos = $raw.IndexOf($anchor)
-            if ($pos -ge 0) {
-                $insertAt = $pos + $anchor.Length
-                $newRaw = $raw.Substring(0, $insertAt) + "`r`n" + $entry.TrimEnd() + $raw.Substring($insertAt)
-                Set-Content -Path $geminiConfig -Value $newRaw -Encoding UTF8
-                $results += "Gemini CLI：已寫入 settings.json"
-            } else {
-                $results += "Gemini CLI：settings.json 沒有 mcpServers 區塊，未修改"
-            }
+            $results += "Gemini CLI：已寫入 settings.json（備份及回讀驗證完成）"
         }
     } else { $results += "Gemini CLI：找不到 ~/.gemini/settings.json，略過" }
 } catch { $results += "Gemini CLI：錯誤 - $($_.Exception.Message)" }

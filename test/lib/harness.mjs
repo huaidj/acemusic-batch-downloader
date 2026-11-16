@@ -66,6 +66,9 @@ export function buildTestExtension({ tmpRoot, port, extraOrigins = [] }) {
     }
   }
   const manifest = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'manifest.json'), 'utf8'));
+  // 隔離背景副本也禁止 native 實寫；Chrome 下載 API 仍是真實流程。
+  const testBackground = path.join(extDir, 'src', 'background.js');
+  fs.writeFileSync(testBackground, "chrome.runtime.connectNative = () => { throw new Error('Native host disabled in isolated e2e'); };\n" + fs.readFileSync(testBackground, 'utf8'));
   // 測試隔離：content.js 看到 __ACEDL_TEST_MODE__ 就不採用真機 host 的 fs/agent-state 跳過邏輯
   fs.writeFileSync(path.join(extDir, 'src', 'testmode.js'), `
 globalThis.__ACEDL_TEST_MODE__ = true;
@@ -83,16 +86,74 @@ globalThis.__ACEDL_TEST_MODE__ = true;
       if (flags.acedlTestInvalidateAfter !== undefined && sent >= Number(flags.acedlTestInvalidateAfter)) flags.acedlTestInvalidated = '1';
     }
     if (flags.acedlTestInvalidated === '1') throw new Error('Extension context invalidated.');
+    if (msg.type === 'ACE_OPEN_PLAYER') {
+      const calls = JSON.parse(flags.acedlTestPlayerCalls || '[]');
+      calls.push(msg.songId || null);
+      flags.acedlTestPlayerCalls = JSON.stringify(calls);
+      const callback = args.find((value) => typeof value === 'function');
+      queueMicrotask(() => callback && callback({ ok: true }));
+      return;
+    }
+    if (msg.type === 'ACE_HOST_LOCAL_INDEX') {
+      flags.acedlTestIndexReads = String(Number(flags.acedlTestIndexReads || 0) + 1);
+      const fixture = nativeFixture ? JSON.parse(flags.acedlTestNative || '{}') : {};
+      const callback = args.find((value) => typeof value === 'function');
+      if (fixture.offline || fixture.unsupportedIndex) {
+        queueMicrotask(() => callback && callback({ ok: false, error: 'unknown cmd local-index' }));
+        return;
+      }
+      chrome.storage.local.get(['aceHistory'], (got) => {
+        let index = fixture.compact;
+        if (!index) {
+          const byTask = {};
+          const blank = () => ({ downloaded: { mp3: false, wav: false, midi: false, musicxml: false, stems: 0, cover: false }, completedKeys: [], uncertainKinds: [], notationRequested: true, wavSupported: true, problemCodes: [] });
+          for (const id of ['song-a', 'song-b', 'song-c', 'song-e1', 'song-e2']) byTask[id] = blank();
+          const prefix = String(msg.root || 'ai音樂') + '/';
+          for (const [id, entry] of Object.entries(got.aceHistory || {})) {
+            for (const [key, info] of Object.entries(entry.files || {})) {
+              if (!String(info.path || '').split(String.fromCharCode(92)).join('/').startsWith(prefix)) continue;
+              if (!byTask[id]) byTask[id] = blank();
+              byTask[id].completedKeys.push(key);
+            }
+          }
+          for (const proof of fixture.verified?.files || []) {
+            const physical = (fixture.files || []).find((file) => String(file.path).toLowerCase() === String(proof.absolute).toLowerCase() && Number(file.size) === Number(proof.bytes));
+            if (!physical || !proof.sha256 || !proof.verifiedAt) continue;
+            if (!byTask[proof.task_id]) byTask[proof.task_id] = blank();
+            byTask[proof.task_id].completedKeys.push(proof.kind);
+          }
+          for (const row of Object.values(byTask)) {
+            row.completedKeys = [...new Set(row.completedKeys)];
+            for (const kind of ['mp3', 'wav', 'midi', 'musicxml', 'cover']) row.downloaded[kind] = row.completedKeys.includes(kind);
+            row.downloaded.stems = row.completedKeys.filter((key) => key.startsWith('stem:')).length;
+          }
+          const revision = JSON.stringify([msg.root, byTask, fixture.verified?.savedAt || '']);
+          index = { ok: true, apiVersion: 1, revision, savedAt: new Date().toISOString(), byTask, summary: {} };
+        }
+        const prior = JSON.parse(flags.acedlTestIndexSnapshot || 'null');
+        if (prior && prior.revision === index.revision && prior.root === msg.root) index.savedAt = prior.savedAt;
+        else flags.acedlTestIndexBuilds = String(Number(flags.acedlTestIndexBuilds || 0) + 1);
+        flags.acedlTestIndexSnapshot = JSON.stringify({ revision: index.revision, savedAt: index.savedAt, root: msg.root });
+        callback && callback({ ok: true, index });
+      });
+      return;
+    }
+    if (msg.type === 'ACE_PING' && Number(flags.acedlTestPingDelayMs) > 0) {
+      setTimeout(() => realSend(msg, ...args), Math.min(2000, Number(flags.acedlTestPingDelayMs)));
+      return;
+    }
     if (nativeFixture && (msg.type === 'ACE_AGENT_STATUS' || msg.type.startsWith('ACE_HOST_'))) {
       const fixture = JSON.parse(flags.acedlTestNative || '{}');
       let reply = { ok: !fixture.offline };
+      if (msg.type === 'ACE_HOST_TIDY') flags.acedlTestTidyCalls = String(Number(flags.acedlTestTidyCalls || 0) + 1);
+      if (msg.type === 'ACE_HOST_MOVE') flags.acedlTestMoveCalls = String(Number(flags.acedlTestMoveCalls || 0) + 1);
       if (msg.type === 'ACE_AGENT_STATUS') reply = { ok: true, host: { ok: !fixture.offline, downloadsRoot: fixture.root || '' } };
       else if (msg.type === 'ACE_HOST_LIST') {
         flags.acedlTestNativeLists = String(Number(flags.acedlTestNativeLists || 0) + 1);
         reply = { ok: !fixture.offline, root: fixture.root, files: fixture.files || [] };
       } else if (msg.type === 'ACE_HOST_READ') {
         flags.acedlTestNativeReads = String(Number(flags.acedlTestNativeReads || 0) + 1);
-        reply = { ok: !fixture.offline, data: msg.name === 'verified-audio' ? fixture.verified || {} : msg.name === 'agent-state' ? fixture.agentState || {} : { items: [] } };
+        reply = { ok: !fixture.offline, data: msg.name === 'verified-audio' ? fixture.verified || {} : msg.name === 'agent-state' ? fixture.agentState || {} : msg.name === 'tidy-status' ? { phase: 'done', ok: true, steps: [] } : { items: [] } };
       }
       const callback = args.find((value) => typeof value === 'function');
       queueMicrotask(() => callback && callback(reply));

@@ -2,6 +2,9 @@
 
 給 AI agent（Claude Code、Codex、DSH、Cursor…）用的無頭介面。agent 可以直接：
 
+新增唯讀工具 `ace_download_index`：按歌曲 ID、下載來源及實存檔案核對，區分已下載、待核對、缺檔。
+新增 `ace_player`：啟動獨立本機播放器，回傳入口，不提交生成或新下載。CLI 對應 `local-index` 與 `player`。
+
 - 列出使用者 ACE Music 帳號裡「已完成」的歌曲
 - 一次下載整首歌的分軌（stems）、MIDI、MusicXML、MP3、封面圖
 - 下載前自動比對本機檔案與 Chrome 下載紀錄，已下載過的不會重複下載
@@ -55,7 +58,7 @@ node $cli organize --commit           # 實際整理
 
 | 參數 | 說明 |
 | --- | --- |
-| `--types stems,midi,musicxml,mp3,wav,cover` | 要下載的類型（預設 `stems,midi,cover,wav`）；MIDI/MusicXML 只排已要求分軌的歌；可用 WAV 獨立補齊 |
+| `--types stems,midi,musicxml,mp3,wav,cover` | 預設六種全選；MIDI/MusicXML 只排已要求分軌且獲授權提交的歌；可用 WAV 獨立補齊 |
 | `--root ai音樂` | 最上層資料夾 |
 | `--force` | 已下載過也重下 |
 | `--concurrency 1-6` | 並行數（預設 4，MIDI 生成會與分軌下載重疊） |

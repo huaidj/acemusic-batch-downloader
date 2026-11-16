@@ -30,6 +30,7 @@
     autoFix: true,
     autoOrganize: true,
     autoNew: false, // 新歌自動下載（只處理開啟之後完成的歌）
+    autoStems: true, // 已觀察到的歌曲，後來新增已購買/請求完成的分軌時自動補抓。
     autoNewScores: false, // 自動下載是否含 MIDI／MusicXML（站點生成，可能扣 credit）
     concurrency: 4,
   });
@@ -55,6 +56,7 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     ownerByFolder: {},
     history: {},
     running: false,
+    starting: null,
     cancelled: false,
     runtimeInvalidated: false,
     stopReason: '',
@@ -70,16 +72,16 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
     lastUpdated: '',
     jobStartedAt: 0,
     host: { ok: false, downloadsRoot: '' },
-    fsAbs: new Set(),
-    fsRel: new Set(),
-    fsNames: new Set(),
-    fsSizes: new Map(),
     fsAt: 0,
+    localIndexByTask: new Map(),
+    localIndexAvailable: false,
+    localIndexRevision: '',
+    localIndexRoot: '',
+    localIndexSavedAt: 0,
+    localIndexAttemptAt: 0,
+    localIndexMessage: '本機核對未就緒',
+    recentDownloads: new Map(),
     doneKinds: new Map(),
-    verifiedAudio: new Map(),
-    agentAliases: {},
-    removedPaths: {},
-    removedRel: new Map(),
     unavailable: {},
     agentUnavailable: {},
     onlyUndownloaded: false,
@@ -584,7 +586,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     const closeBtn = el('button', { class: 'iconbtn', type: 'button', 'data-act': 'close', title: '收起' }, ['✕']);
     const refreshBtn = el('button', { class: 'iconbtn', type: 'button', 'data-act': 'refresh', title: '重新整理歌單' }, ['↻']);
     const titleBox = el('div', { class: 'title', text: 'ACE 批量下載' });
-    const subBox = el('div', { class: 'sub', text: 'v1.7.4 · 分軌 · MIDI · WAV' });
+    const subBox = el('div', { class: 'sub', text: 'v1.7.5 · 分軌 · MIDI · WAV' });
     const alphaInput = el('input', { type: 'range', min: '40', max: '100', step: '5', 'data-ui': 'alpha', 'aria-label': '面板不透明度' });
     const alphaBox = el('label', { class: 'alpha', title: '面板不透明度（拖曳標題列可移動面板，雙擊標題列回到預設位置）' }, ['透明', alphaInput]);
     const header = el('header', { title: '拖曳移動；雙擊回到預設位置' }, [titleBox, subBox, alphaBox, refreshBtn, closeBtn]);
@@ -647,6 +649,21 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       if (S.options.autoNew) enableAutoNew();
     });
     automaticRows.append(el('label', { class: 'chk', title: '開啟之後新完成的歌，自動下載上方勾選的類型（分軌會等分離完成）；需開著這個分頁' }, [autoNewCb, '新歌自動下載']));
+    const autoStemsCb = el('input', { type: 'checkbox', 'data-opt': 'autoStems', checked: S.options.autoStems });
+    autoStemsCb.addEventListener('change', () => {
+      S.options.autoStems = autoStemsCb.checked;
+      saveSettings();
+      if (!S.options.autoStems) {
+        clearTimeout(AUTO_STEMS.timer);
+        AUTO_STEMS.queue = [];
+        AUTO_STEMS.pending = {};
+        saveAutoStemsState();
+      } else {
+        checkAutoStems();
+        startLive();
+      }
+    });
+    automaticRows.append(el('label', { class: 'chk', title: '只補觀察到後來完成或更新的分軌；首次載入不批量抓歷史分軌。不會發起分軌生成。關閉後停止後續排程，已開始的下載會保留。' }, [autoStemsCb, '分軌完成自動下載']));
     const autoScoresCb = el('input', { type: 'checkbox', 'data-opt': 'autoNewScores', checked: S.options.autoNewScores });
     autoScoresCb.addEventListener('change', () => {
       S.options.autoNewScores = autoScoresCb.checked;
@@ -666,6 +683,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       S.rootFolder = N.sanitizeComponent(rootInput.value, 40) || DEFAULT_ROOT;
       rootInput.value = S.rootFolder;
       saveSettings();
+      updateCounts();
+      refreshDownloadIndex(true).then(() => renderSongs());
     });
     destinationRows.append(el('label', { class: 'root' }, ['根資料夾', rootInput]));
 
@@ -742,9 +761,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     });
     const footer = el('div', { class: 'footer' }, [downloadBtn, cancelBtn, diagnosticsBtn, toast, tidyBar, footHint]);
 
-    const playerBar = buildPlayer();
+    buildPlayer(); // 保留舊偏好資料；實際播放改由獨立視窗負責。
+    const openPlayerBtn = el('button', { type: 'button', 'data-act': 'open-player', text: '獨立播放器' });
+    openPlayerBtn.addEventListener('click', () => openIndependentPlayer());
+    toolbar.prepend(openPlayerBtn);
     const randomBox = buildRandom();
-    panel.append(header, playerBar, randomBox, settings, toolbar, toolbar2, organizeBox, songsBox, progress, footer);
+    panel.append(header, randomBox, settings, toolbar, toolbar2, organizeBox, songsBox, progress, footer);
     shadow.append(fab, panel);
 
     Object.assign(S.els, {
@@ -909,6 +931,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   const isFav = (id) => !!R.favorites[id];
   const songById = (id) => S.songs.find((song) => song.task_id === id) || null;
   const songTitle = (song) => (song && song.meta && song.meta.title) || 'Untitled';
+  async function openIndependentPlayer(songId) {
+    try {
+      const result = await sendMessage({ type: 'ACE_OPEN_PLAYER', ...(songId ? { songId } : {}) });
+      if (!result?.ok) flash('獨立播放器尚未就緒，請先啟動播放器或更新本機工具');
+    } catch (_) { flash('無法開啟獨立播放器，請先啟動播放器或更新本機工具'); }
+  }
   const fmtTime = (sec) => {
     if (!Number.isFinite(sec) || sec < 0) return '0:00';
     const s = Math.floor(sec);
@@ -1275,7 +1303,23 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     return stored;
   }
   function randomContext() {
-    return P2.resolveContext({ modelId: pageModelId(), mode: pageMode(), siteModels: S.siteModels });
+    const ctx = P2.resolveContext({ modelId: pageModelId(), mode: pageMode(), siteModels: S.siteModels });
+    const node = ctx.field && document.querySelector(PAGE_FIELD_SELECTORS[ctx.field] || '');
+    const visibleLimit = node && Number(node.maxLength);
+    return visibleLimit > 0 ? { ...ctx, limit: ctx.limit > 0 ? Math.min(ctx.limit, visibleLimit) : visibleLimit } : ctx;
+  }
+
+  function randomResultError(cur, ctx) {
+    if (!cur?.ok || typeof cur.text !== 'string') return '尚無可套用的提示詞';
+    if (ctx.status !== 'ready') return ctx.reason || '目前模型沒有可用詞典';
+    if (ctx.modelId !== cur.model || ctx.mode !== cur.mode || ctx.field !== cur.field) return '模型或模式已改變，請重新隨機';
+    if (cur.dictionary !== ctx.dictionaryId || cur.dictionaryVersion !== ctx.dictionaryVersion) return '詞典版本已改變，請重新隨機；原草稿已保留';
+    if (!(ctx.limit > 0) || cur.text.length > ctx.limit) return `目前上限 ${ctx.limit || '?'} 字，這份草稿有 ${cur.text.length} 字；請重新隨機，原文不截斷`;
+    if (Number(cur.limit) !== ctx.limit) return '欄位字數上限已改變，請重新隨機；原草稿已保留';
+    const compiled = P2.compile(ctx.dictionary, cur.a?.id, cur.b?.id, ctx.limit);
+    if (!compiled.ok) return compiled.reason;
+    if (compiled.text !== cur.text) return '詞條內容已更新，請重新隨機；原草稿已保留';
+    return '';
   }
   function setNativeValue(node, value) {
     const proto = Object.getPrototypeOf(node);
@@ -1394,12 +1438,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     const cur = RND.current;
     const have = !!(cur && cur.ok);
     // 目前這組是為「別的模型／模式」產生的 → 不能套用
-    const stale = have && ready && (cur.model !== ctx.modelId || cur.mode !== ctx.mode);
+    const staleReason = have ? randomResultError(cur, ctx) : '';
+    const stale = have && !!staleReason;
     S.els.randApply.disabled = !have || !ready || stale;
     S.els.randCopy.disabled = !have;
     S.els.randText.value = have ? cur.text : '';
     S.els.randMeta.textContent = have
-      ? `${cur.a.id} ${cur.a.name_zh} × ${cur.b.id} ${cur.b.name_zh} · ${cur.length}/${cur.limit} 字 · seed ${cur.seed} · ${cur.modelName}／${cur.mode} · 詞典 v${cur.dictionaryVersion}${stale ? ' · ⚠ 模型或模式已改變，請重新隨機' : ''}`
+      ? `${cur.a.id} ${cur.a.name_zh} × ${cur.b.id} ${cur.b.name_zh} · ${cur.text.length}/${ctx.limit || cur.limit} 字 · seed ${cur.seed} · ${cur.modelName}／${cur.mode} · 詞典 v${cur.dictionaryVersion}${stale ? ' · ⚠ ' + staleReason : ''}`
       : '';
     S.els.randHistory.textContent = '';
     for (const item of RND.history) {
@@ -1416,7 +1461,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   function refreshRandomContext() {
     if (!S.els.randBox || !S.els.randBox.open || (S.els.panel && S.els.panel.hidden)) return;
     const ctx = randomContext();
-    const sig = [ctx.status, ctx.modelId, ctx.mode, ctx.limit].join('|');
+    const sig = [ctx.status, ctx.modelId, ctx.mode, ctx.limit, ctx.dictionaryId, ctx.dictionaryVersion].join('|');
     if (sig === randomSig) return;
     randomSig = sig;
     renderRandom();
@@ -1432,7 +1477,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       lockB: RND.lockB && cur ? cur.b.id : null,
     });
     if (!result.ok) {
-      RND.current = null;
       renderRandom();
       flash(result.reason || '無法產生');
       return;
@@ -1446,9 +1490,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     const cur = RND.current;
     if (!cur || !cur.ok) return;
     const ctx = randomContext();
-    if (ctx.status !== 'ready' || ctx.modelId !== cur.model || ctx.mode !== cur.mode) {
+    const invalid = randomResultError(cur, ctx);
+    if (invalid) {
       renderRandom();
-      return flash(`目前是「${ctx.modelName || ctx.modelId || '未知'} · ${ctx.mode || '未知模式'}」，這組是為「${cur.modelName} · ${cur.mode}」產生的，請重新隨機`);
+      return flash(invalid);
     }
     const res = fillPageField(cur.field, cur.text);
     flash(res.ok ? `已填入${cur.field === 'prompt' ? '自然語言框' : 'Style 框'}（${cur.length} 字）；確認後自行按 Generate` : res.reason);
@@ -1978,87 +2023,63 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   /* ------------------------------------------------------------------ *
    * 已下載狀態（檔案系統 + 下載紀錄）與防重複下載
    * ------------------------------------------------------------------ */
-  const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
   let downloadIndexPromise = null;
-  async function refreshDownloadIndex(force) {
-    if (!S.host.ok) return false;
-    if (!force && Date.now() - S.fsAt < 20000) return true;
+  async function refreshDownloadIndex(force = false) {
+    if (S.runtimeInvalidated) return false;
+    if (!force && S.localIndexRoot === S.rootFolder && Date.now() - S.localIndexAttemptAt < 1500) return S.localIndexAvailable;
     if (downloadIndexPromise) {
+      const requestedRoot = S.rootFolder;
       const current = await downloadIndexPromise;
-      return force ? refreshDownloadIndex(true) : current;
+      return requestedRoot === S.rootFolder && S.localIndexRoot !== requestedRoot ? refreshDownloadIndex(force) : current;
     }
-    downloadIndexPromise = readDownloadIndex();
-    try { return await downloadIndexPromise; } finally { downloadIndexPromise = null; }
+    const root = S.rootFolder;
+    S.localIndexAttemptAt = Date.now();
+    downloadIndexPromise = (async () => {
+      try {
+        const response = await withConnectionTimeout(sendMessage({ type: 'ACE_HOST_LOCAL_INDEX', root, refresh: !!force }), 12000, null);
+        const index = response?.index || response?.data?.index || response?.data;
+        if (!response?.ok || !index?.ok || index.apiVersion !== 1 || !index.byTask || typeof index.byTask !== 'object' || Array.isArray(index.byTask)) throw new Error('本機核對未就緒；請更新本機工具');
+        if (root !== S.rootFolder) return false;
+        if (S.localIndexRevision !== index.revision || S.localIndexRoot !== root || !S.localIndexAvailable) S.localIndexByTask = new Map(Object.entries(index.byTask));
+        S.localIndexRevision = String(index.revision || '');
+        S.localIndexSavedAt = Number(index.savedAt) || Date.parse(index.savedAt) || 0;
+        S.localIndexRoot = root;
+        S.localIndexAvailable = true;
+        S.localIndexMessage = '';
+        S.fsAt = Date.now();
+        await refreshDoneKinds();
+        return true;
+      } catch (err) {
+        S.localIndexAvailable = false;
+        S.localIndexMessage = S.runtimeInvalidated ? CONTEXT_INVALIDATED_MESSAGE : '本機核對未就緒；請更新本機工具或稍後再試。仍可手動下載。';
+        await refreshDoneKinds();
+        return false;
+      } finally { downloadIndexPromise = null; }
+    })();
+    return downloadIndexPromise;
   }
 
-  async function readDownloadIndex() {
-    let res = null;
-    try {
-      res = await sendMessage({
-        type: 'ACE_HOST_LIST',
-        maxDepth: 3,
-        extensions: ['mp3', 'wav', 'mid', 'midi', 'musicxml', 'pdf', 'jpg', 'jpeg', 'png', 'webp'],
-        limit: 8000,
-      });
-    } catch (err) {
-      return false;
-    }
-    if (!res || !res.ok || !Array.isArray(res.files)) return false;
-    const root = String(res.root || S.host.downloadsRoot || '').replace(/[\\/]+$/, '');
-    const rootPrefix = root ? root.toLowerCase() + '\\' : '';
-    const abs = new Set();
-    const rel = new Set();
-    const names = new Set();
-    const sizes = new Map();
-    for (const file of res.files) {
-      const absLow = String((file && file.path) || '').toLowerCase();
-      if (!absLow || Number(file.size) === 0) continue;
-      abs.add(absLow);
-      sizes.set(absLow, Number(file.size));
-      names.add(absLow.slice(absLow.lastIndexOf('\\') + 1));
-      if (rootPrefix && absLow.startsWith(rootPrefix)) rel.add(absLow.slice(rootPrefix.length).split('\\').join('/'));
-    }
-    S.fsAbs = abs;
-    S.fsRel = rel;
-    S.fsNames = names;
-    S.fsSizes = sizes;
-    S.fsAt = Date.now();
-    await refreshDoneKinds();
-    return true;
+  function indexedTask(taskId) {
+    return S.localIndexAvailable && S.localIndexRoot === S.rootFolder ? S.localIndexByTask.get(taskId) || null : null;
   }
 
-  function songForUrl(url) {
-    if (!url) return null;
-    return (
-      S.songs.find(
-        (song) =>
-          song &&
-          (url.includes(song.task_id) ||
-            (song.local_cover && (song.local_cover === url || url.endsWith(String(song.local_cover).split('?')[0])))),
-      ) || null
-    );
+  function completedKeysForTask(taskId) {
+    const row = indexedTask(taskId);
+    const keys = new Set(Array.isArray(row?.completedKeys) ? row.completedKeys.filter((key) => typeof key === 'string') : []);
+    const recent = S.recentDownloads.get(taskId);
+    for (const [key, proof] of recent || []) {
+      if (Date.now() - proof.at > 60000) { recent.delete(key); continue; }
+      if (proof.root === S.rootFolder && (!S.localIndexAvailable || proof.at > S.localIndexSavedAt)) keys.add(key);
+    }
+    return keys;
   }
 
   const LOCAL_SYNC = { timer: 0, debounce: 0, busy: false, pending: false, revision: null, lastHostCheck: 0, renderPending: false };
 
-  function localRevision(verified, agentState) {
-    let latestAt = 0;
-    let count = 0;
-    for (const entry of Object.values(agentState && agentState.history || {})) {
-      for (const info of Object.values(entry && entry.files || {})) {
-        count += 1;
-        latestAt = Math.max(latestAt, Number(info && info.at) || 0);
-      }
-    }
-    const files = verified && Array.isArray(verified.files) ? verified.files : [];
-    return [String(verified && verified.savedAt || ''), files.length, count, latestAt].join('|');
-  }
-
   function localStatusSignature() {
     return S.songs.map((song) => {
       const status = songDownloadStatus(song);
-      return [song.task_id, status.known, status.have, status.total, status.mp3, status.wav, status.detail.map((item) => [item.type || item.label, item.have, item.total, item.na])];
+      return [song.task_id, status.known, status.have, status.total, status.mp3, status.wav, status.missingCount, status.uncertainCount, status.detail.map((item) => [item.type || item.label, item.have, item.total, item.na, item.uncertain])];
     }).map((value) => JSON.stringify(value)).join('\n');
   }
 
@@ -2083,36 +2104,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     if (LOCAL_SYNC.busy) { LOCAL_SYNC.pending = LOCAL_SYNC.pending || force; return; }
     LOCAL_SYNC.busy = true;
     try {
-      if (!S.host.ok) {
-        if (Date.now() - LOCAL_SYNC.lastHostCheck < 10000) return;
-        LOCAL_SYNC.lastHostCheck = Date.now();
-        await refreshHostStatus();
-        if (!S.host.ok) return;
-      }
-      const [verified, agent] = await Promise.all([
-        sendMessage({ type: 'ACE_HOST_READ', name: 'verified-audio' }),
-        sendMessage({ type: 'ACE_HOST_READ', name: 'agent-state' }),
-      ]);
-      if (S.runtimeInvalidated) return;
-      if ((!verified || !verified.ok) && (!agent || !agent.ok)) {
-        await refreshHostStatus();
-        if (!S.host.ok) {
-          S.localSyncUnavailable = true;
-          renderLocalStatusChanges();
-          return;
-        }
-      }
-      const revision = localRevision(verified && verified.ok ? verified.data : {}, agent && agent.ok ? agent.data : {});
-      if (!force && revision === LOCAL_SYNC.revision) return;
-      if (!force && LOCAL_SYNC.revision === null && S.fsAt) { LOCAL_SYNC.revision = revision; return; }
       const before = localStatusSignature();
-      if (!await refreshDownloadIndex(true)) return;
-      S.localSyncUnavailable = false;
-      LOCAL_SYNC.revision = revision;
+      await refreshDownloadIndex(force);
       if (before !== localStatusSignature()) renderLocalStatusChanges();
-    } catch (err) {
-      if (isContextInvalidated(err)) stopLocalStateSync();
-      // 本機工具暫時離線不進站點刷新，也不妨礙原本的 API 直接下載。
     } finally {
       LOCAL_SYNC.busy = false;
       if (LOCAL_SYNC.pending && !S.runtimeInvalidated) {
@@ -2143,218 +2137,52 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
   async function refreshDoneKinds() {
     const done = new Map();
-    const add = (taskId, key) => {
-      if (!taskId) return;
-      if (!done.has(taskId)) done.set(taskId, new Set());
-      done.get(taskId).add(key);
-    };
-    const addKey = (taskId, key) => {
-      if (key === 'midi' || key === 'musicxml' || key === 'mp3' || key === 'cover' || key === 'wav') add(taskId, key);
-      else if (String(key).startsWith('stem:')) add(taskId, 'stem:' + String(key).slice(5));
-    };
-    for (const [taskId, entry] of Object.entries(S.history || {})) {
-      for (const [key, info] of Object.entries((entry && entry.files) || {})) {
-        if (historyFileExists(info)) addKey(taskId, key);
-      }
+    for (const id of new Set([...S.songs.map((song) => song.task_id), ...S.recentDownloads.keys(), ...S.localIndexByTask.keys()])) {
+      const keys = completedKeysForTask(id);
+      if (keys.size) done.set(id, keys);
     }
-    S.doneKinds = done;
-    if (!S.host.ok) return;
-    try {
-      const res = await sendMessage({ type: 'ACE_HOST_READ', name: 'history' });
-      const items = res && res.ok && res.data && Array.isArray(res.data.items) ? res.data.items : [];
-      for (const record of items) {
-        if (!record || record.state !== 'complete' || !record.filename) continue;
-        if (!S.fsAbs.has(String(record.filename).toLowerCase())) continue;
-        const url = String(record.finalUrl || record.url || '');
-        const song = songForUrl(url);
-        if (!song) continue;
-        if (song.local_cover && (song.local_cover === url || url.endsWith(String(song.local_cover).split('?')[0]))) {
-          add(song.task_id, 'cover');
-          continue;
-        }
-        const stem = url.match(/-stem\d+-([a-z_]+)\.mp3/i);
-        if (stem) add(song.task_id, 'stem:' + stem[1].toLowerCase());
-        else if (/-parts-dl\.mid/i.test(url)) add(song.task_id, 'midi');
-        else if (/score\.musicxml/i.test(url)) add(song.task_id, 'musicxml');
-        else if (/[?&]kind=mp3\b/i.test(url)) add(song.task_id, 'mp3');
-        else if (/[?&]kind=wav\b/i.test(url)) add(song.task_id, 'wav');
-      }
-    } catch (err) {
-      /* ignore */
-    }
-    try {
-      const res = await sendMessage({ type: 'ACE_HOST_READ', name: 'agent-state' });
-      const data = (res && res.ok && res.data) || {};
-      const hist = data.history || {};
-      for (const [taskId, entry] of Object.entries(hist)) {
-        for (const [key, info] of Object.entries((entry && entry.files) || {})) {
-          if (!historyFileExists(info)) continue;
-          addKey(taskId, key);
-        }
-      }
-      // 去重紀錄：removedPaths/aliases 讓面板知道「這個檔案/歌曲已由 keeper 代替」，不再重下
-      S.agentAliases = TEST_MODE ? {} : data.aliases || {};
-      S.removedPaths = TEST_MODE ? {} : data.removedPaths || {};
-      S.agentUnavailable = TEST_MODE ? {} : data.unavailable || {};
-      S.unavailable = P.mergeUnavailable(S.unavailable, S.agentUnavailable);
-      const downloadsRoot = String((S.host && S.host.downloadsRoot) || '').replace(/[\\/]+$/, '');
-      const toRel = (abs) => {
-        const value = String(abs || '');
-        if (!downloadsRoot || !value) return '';
-        if (!value.toLowerCase().startsWith(downloadsRoot.toLowerCase())) return '';
-        return value.slice(downloadsRoot.length).replace(/^[\\/]+/, '').split('\\').join('/').toLowerCase();
-      };
-      S.removedRel = new Map();
-      for (const [abs, keeper] of Object.entries(S.removedPaths)) {
-        const rel = toRel(abs);
-        const keeperRel = toRel(keeper);
-        if (rel && keeperRel) S.removedRel.set(rel, keeperRel);
-      }
-    } catch (err) {
-      /* ignore */
-    }
-    S.verifiedAudio = new Map();
-    try {
-      const res = await sendMessage({ type: 'ACE_HOST_READ', name: 'verified-audio' });
-      const files = res && res.ok && res.data && Array.isArray(res.data.files) ? res.data.files : [];
-      for (const file of files) {
-        const absolute = String((file && file.absolute) || '').toLowerCase();
-        if (!file.task_id || !['mp3', 'wav'].includes(file.kind) || !S.fsAbs.has(absolute)) continue;
-        if (S.fsSizes.get(absolute) !== Number(file.bytes) || !file.sha256 || !file.verifiedAt) continue;
-        addKey(file.task_id, file.kind);
-        S.verifiedAudio.set(file.task_id + '|' + file.kind, file);
-      }
-    } catch (_) { /* 修復腳本尚未跑過也能使用下載器 */ }
-    // 舊 alias 可能源於同名誤複製，不能把另一首歌的所有檔案當成本曲已下載。
     S.doneKinds = done;
   }
 
-  function historyFileExists(info) {
-    if (!info || !S.fsAt || TEST_MODE) return !!info;
-    const absolute = String(info.absolute || '').toLowerCase();
-    const relative = String(info.path || '').replace(/\\/g, '/').toLowerCase();
-    return absolute ? S.fsAbs.has(absolute) : !!relative && S.fsRel.has(relative);
+  function historyFileExists(info, taskId, key) {
+    return !!info && !!taskId && !!key && completedKeysForTask(taskId).has(key);
   }
 
   function existingDownloadHistory() {
-    if (!S.fsAt || TEST_MODE) return S.history;
     return Object.fromEntries(Object.entries(S.history || {}).map(([taskId, entry]) => [taskId, {
       ...entry,
-      files: Object.fromEntries(Object.entries((entry && entry.files) || {}).filter(([, info]) => historyFileExists(info))),
+      files: Object.fromEntries(Object.entries(entry?.files || {}).filter(([key, info]) => historyFileExists(info, taskId, key))),
     }]));
   }
 
-  /** 檔名索引（S.fsNames 換新集合才重建；每首歌查詢 O(1)，不再逐檔跑 regex） */
-  let nameIndexFor = null;
-  let nameIndexSize = -1;
-  let nameIndex = new Map();
-  function fsNameIndex() {
-    if (nameIndexFor !== S.fsNames || nameIndexSize !== S.fsNames.size) {
-      nameIndex = P.buildNameIndex(S.fsNames);
-      nameIndexFor = S.fsNames;
-      nameIndexSize = S.fsNames.size;
-    }
-    return nameIndex;
+  function noteOwnDownload(taskId, file) {
+    const info = S.history[taskId]?.files?.[file.key];
+    if (!info) return;
+    if (!S.recentDownloads.has(taskId)) S.recentDownloads.set(taskId, new Map());
+    S.recentDownloads.get(taskId).set(file.key, { at: Number(info.at) || Date.now(), root: String(file.path).split('/')[0] });
+    if (!S.doneKinds.has(taskId)) S.doneKinds.set(taskId, new Set());
+    S.doneKinds.get(taskId).add(file.key);
   }
 
-  let titleCountsFor = null;
-  let titleCounts = new Map();
-  function titleIsAmbiguous(title) {
-    if (titleCountsFor !== S.songs) {
-      titleCountsFor = S.songs;
-      titleCounts = new Map();
-      for (const other of S.songs) {
-        const key = N.songFolderLabel((other.meta && other.meta.title) || '').toLowerCase();
-        titleCounts.set(key, (titleCounts.get(key) || 0) + 1);
-      }
-    }
-    return (titleCounts.get(title.toLowerCase()) || 0) > 1;
-  }
-
-  /** 每首歌目前的下載進度：{have,total,allDone,any,known,detail,mp3} */
+  /** Status and skip use the same exact task/file-key proof, never a title or alias. */
   function songDownloadStatus(song) {
-    const rawTitle = (song.meta && song.meta.title) || '';
-    const title = N.songFolderLabel(rawTitle);
-    // 分軌檔名用「這首歌的資料夾名」開頭（同名多 take 也能精確歸屬）
-    const folderLabel = (S.folderByTask && S.folderByTask[song.task_id]) || title;
-    // 檔名可能用完整標題（songFolderLabel 會在 '[' 截斷），兩種都比對
-    const titleCandidates = [...new Set([title, N.sanitizeComponent(rawTitle, 120)].filter(Boolean))];
+    const row = indexedTask(song.task_id);
+    const done = completedKeysForTask(song.task_id);
     const group = P.pickStemGroup(song.stems);
-    const labels = new Map();
-    if (group) {
-      for (const track of group.tracks) labels.set(N.stemLabel(track.type).toLowerCase(), N.stemLabel(track.type));
-    }
-    const stemsFound = new Set();
-    let midi = false;
-    let musicxml = false;
-    let mp3 = false;
-    let wav = false;
-    let cover = false;
-    if (S.fsAt) {
-      for (const { name, suffix, ext } of P.lookupNames(fsNameIndex(), titleCandidates)) {
-        if (suffix === 'cover') cover = true;
-        else if (suffix === 'midi') midi = true;
-        else if (suffix === 'musicxml') musicxml = true;
-        else if (!suffix) {
-          if (ext === 'mp3') mp3 = true;
-          else if (ext === 'wav') wav = true;
-          else if (ext === 'mid' || ext === 'midi') midi = true;
-          else if (ext === 'musicxml') musicxml = true;
-        } else if (labels.has(suffix)) {
-          const prefix = name.replace(/\.[^.]+$/, '').split(' - ')[0].trim().toLowerCase();
-          if (!folderLabel || prefix === String(folderLabel).toLowerCase()) stemsFound.add(labels.get(suffix));
-        }
-      }
-    }
-    const done = S.doneKinds.get(song.task_id) || new Set();
-    for (const key of done) {
-      if (String(key).startsWith('stem:')) stemsFound.add(String(key).slice(5));
-      else if (key === 'midi') midi = true;
-      else if (key === 'musicxml') musicxml = true;
-      else if (key === 'mp3') mp3 = true;
-      else if (key === 'wav') wav = true;
-      else if (key === 'cover') cover = true;
-    }
-    // 同名歌曲（多個 take）：共用標題不是身分證據，所有類型只信這首歌自己的下載紀錄。
-    const ambiguous = titleIsAmbiguous(title);
-    if (ambiguous) {
-      stemsFound.clear();
-      for (const key of done) if (String(key).startsWith('stem:')) stemsFound.add(String(key).slice(5));
-      midi = done.has('midi');
-      musicxml = done.has('musicxml');
-      mp3 = done.has('mp3');
-      wav = done.has('wav');
-      cover = done.has('cover');
-    }
-    const status = P.downloadStatusForTypes(song, {
-      types: FILE_TYPES.filter((type) => S.options[type]),
-      downloaded: { stems: stemsFound.size, midi, musicxml, mp3, wav, cover },
-      unavailable: S.unavailable,
-      lossyModels: S.lossyModels,
-    });
-    return {
-      ...status,
-      mp3,
-      wav,
-      known: !S.localSyncUnavailable && (!!S.fsAt || S.doneKinds.size > 0),
-    };
+    const stems = (group?.tracks || []).filter((track) => done.has('stem:' + track.id)).length;
+    const downloaded = { stems };
+    for (const kind of ['mp3', 'wav', 'midi', 'musicxml', 'cover']) downloaded[kind] = done.has(kind);
+    const status = P.downloadStatusForTypes(song, { types: FILE_TYPES.filter((type) => S.options[type]), downloaded, unavailable: S.unavailable, lossyModels: S.lossyModels });
+    const uncertainKinds = new Set(Array.isArray(row?.uncertainKinds) ? row.uncertainKinds : []);
+    const known = !!row || status.have > 0;
+    const detail = status.detail.map((item) => ({ ...item, uncertain: !item.done && !item.na && (!row || uncertainKinds.has(item.type)) }));
+    const missingCount = detail.reduce((total, item) => total + (!item.done && !item.na && !item.uncertain ? Math.max(0, item.total - item.have) : 0), 0);
+    const uncertainCount = detail.reduce((total, item) => total + (item.uncertain ? Math.max(0, item.total - item.have) : 0), 0);
+    return { ...status, detail, known, missingCount, uncertainCount, allDone: status.allDone && uncertainCount === 0, mp3: downloaded.mp3, wav: downloaded.wav };
   }
 
   function downloadStatusLabel(status) {
-    const detail = status.detail
-      .map((item) => (item.na ? `${item.label} 不可用（${item.reason || '站點不提供'}）` : item.total > 1 ? `${item.label} ${item.have}/${item.total}` : `${item.label}${item.done ? '✓' : '✗'}`))
-      .join('、');
-    if (!status.known) return { text: '狀態未知', cls: 'dim', title: '本機整理工具未安裝，無法檢查已下載檔案' };
-    if (!status.detail.length) return { text: '所選類型不適用', cls: 'dim', title: '未勾選檔案類型，或這首歌沒有可下載的所選類型' };
-    if (!status.total) return { text: status.detail.map((item) => item.reason || `${item.label} 不可用`).join('／'), cls: 'dim', title: detail };
-    if (status.allDone) return { text: '已下載', cls: 'ok', title: '已下載：' + detail };
-    if (status.any) {
-      // 直接說缺什麼（「部分 2/3」看不出缺哪項）
-      const lack = status.detail.filter((item) => !item.done && !item.na).map((item) => item.label);
-      const brief = lack.length && lack.length <= 3 ? ' · 缺 ' + lack.join('／') : '';
-      return { text: `部分 ${status.have}/${status.total}${brief}`, cls: 'warn', title: '已下載：' + detail };
-    }
-    return { text: '未下載', cls: 'dim', title: '尚未下載：' + detail };
+    return P.downloadStatusLabel(status, S.localIndexMessage);
   }
 
   function updateFab() {
@@ -2501,7 +2329,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
    * 新歌自動下載：只處理「開啟之後」完成的歌；分軌等分離完成；同一首同一組分軌只自動一次
    * ------------------------------------------------------------------ */
   const KEY_AUTO = 'aceAutoNew';
-  const AUTO = { since: 0, done: {}, queue: [], timer: 0 };
+  const AUTO = { since: 0, done: {}, queue: [], timer: 0, busy: false };
   async function loadAutoState() {
     const got = await storageGet([KEY_AUTO]);
     const data = (got && got[KEY_AUTO]) || {};
@@ -2524,8 +2352,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     startLive();
   }
   function stemsKeyOf(song) {
-    const group = P.pickStemGroup(song.stems);
-    return group ? group.mode + ':' + group.tracks.length : 'none';
+    return readyStemsSnapshot(song).fingerprint;
   }
   function stemsRunning(song) {
     return Object.values(song.stems || {}).some((job) => job && (job.status === 'running' || job.status === 'pending' || job.status === 'queued'));
@@ -2554,7 +2381,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   function runAutoQueue() {
     clearTimeout(AUTO.timer);
     if (!AUTO.queue.length) return;
-    if (S.running) {
+    if (S.starting || S.running || AUTO.busy || AUTO_STEMS.busy) {
       AUTO.timer = setTimeout(runAutoQueue, 3000);
       return;
     }
@@ -2564,7 +2391,138 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     saveAutoState();
     if (!types.length) return;
     emitPageEvent({ type: 'auto_download', task_ids: songs.map((s) => s.task_id), types });
-    startJob(songs, { types, auto: true }).catch(() => {});
+    AUTO.busy = true;
+    startJob(songs, { types, auto: true }).catch(() => {}).finally(() => {
+      AUTO.busy = false;
+      runAutoStemsQueue();
+    });
+  }
+
+  const KEY_AUTO_STEMS = 'aceAutoStemsV1';
+  const AUTO_STEMS = { loaded: false, observed: {}, pending: {}, queue: [], timer: 0, busy: false, recover: true, saving: Promise.resolve() };
+
+  function readyStemsSnapshot(song) {
+    const tracks = {};
+    const objects = new Map();
+    const groups = [];
+    for (const mode of ['0', '2']) {
+      const job = song && song.stems && song.stems[mode];
+      if (!job || job.status !== 'done' || !Array.isArray(job.tracks)) continue;
+      const revision = String(job.version || job.job_id || job.finished_at || job.started_at || '');
+      const ready = job.tracks.filter((track) => track && track.id && !track.empty && track.local_audio);
+      if (!ready.length) continue;
+      const ids = [];
+      for (const track of ready) {
+        let source = '';
+        try { source = new URL(track.local_audio, location.origin).pathname; } catch { continue; }
+        const id = String(track.id);
+        tracks[id] = [String(track.type || ''), source, revision].join('|');
+        objects.set(id, track);
+        ids.push(id);
+      }
+      groups.push(mode + ':' + ids.sort().join(','));
+    }
+    return { tracks, objects, fingerprint: groups.sort().join(';') + '|' + JSON.stringify(Object.entries(tracks).sort(([a], [b]) => a.localeCompare(b))) };
+  }
+
+  async function loadAutoStemsState() {
+    const got = await storageGet([KEY_AUTO_STEMS]);
+    const data = got[KEY_AUTO_STEMS] || {};
+    AUTO_STEMS.observed = data.observed && typeof data.observed === 'object' ? data.observed : {};
+    AUTO_STEMS.pending = data.pending && typeof data.pending === 'object' ? data.pending : {};
+    AUTO_STEMS.loaded = true;
+  }
+
+  function saveAutoStemsState() {
+    const observed = Object.fromEntries(Object.entries(AUTO_STEMS.observed).sort((a, b) => Number(b[1].at || 0) - Number(a[1].at || 0)).slice(0, 3000));
+    AUTO_STEMS.observed = observed;
+    const snapshot = JSON.parse(JSON.stringify({ version: 1, observed, pending: AUTO_STEMS.pending }));
+    AUTO_STEMS.saving = AUTO_STEMS.saving.then(() => storageSet({ [KEY_AUTO_STEMS]: snapshot })).catch(() => {});
+    return AUTO_STEMS.saving;
+  }
+
+  function queueAutoStems(taskId) {
+    if (!AUTO_STEMS.queue.includes(taskId)) AUTO_STEMS.queue.push(taskId);
+  }
+
+  function checkAutoStems() {
+    if (!AUTO_STEMS.loaded || S.runtimeInvalidated) return;
+    let changed = false;
+    for (const song of S.songs) {
+      if (!song?.task_id || !P.isDone(song)) continue;
+      const id = song.task_id;
+      const current = readyStemsSnapshot(song);
+      const previous = AUTO_STEMS.observed[id];
+      if (!previous || previous.fingerprint !== current.fingerprint) {
+        // 第一次看見每個 task 只建立基線；以後的 ready track 變動才是自動下載事件。
+        AUTO_STEMS.observed[id] = { fingerprint: current.fingerprint, tracks: current.tracks, at: Date.now() };
+        changed = true;
+        if (previous && S.options.autoStems) {
+          const added = Object.keys(current.tracks).filter((trackId) => previous.tracks?.[trackId] !== current.tracks[trackId]);
+          if (added.length) {
+            const old = AUTO_STEMS.pending[id];
+            const ids = [...new Set([...(old?.trackIds || []), ...added])].filter((trackId) => current.objects.has(trackId));
+            AUTO_STEMS.pending[id] = { taskId: id, fingerprint: current.fingerprint, trackIds: ids, at: Date.now(), attempted: false };
+            queueAutoStems(id);
+          }
+        }
+      }
+      if (AUTO_STEMS.recover && S.options.autoStems && AUTO_STEMS.pending[id]) queueAutoStems(id);
+    }
+    AUTO_STEMS.recover = false;
+    if (!S.options.autoStems && Object.keys(AUTO_STEMS.pending).length) { AUTO_STEMS.pending = {}; changed = true; }
+    if (changed) saveAutoStemsState();
+    if (S.options.autoStems) runAutoStemsQueue();
+  }
+
+  function stemRecordedAfter(taskId, trackId, at) {
+    const info = S.history[taskId]?.files?.['stem:' + trackId];
+    // Chrome 的成功紀錄可能比下一輪 native 索引新，不能因舊索引漏檔而立刻重抓。
+    return !!info && Number(info.at || 0) >= at && (Number(info.at) > S.fsAt || historyFileExists(info, taskId, 'stem:' + trackId));
+  }
+
+  async function runAutoStemsQueue() {
+    clearTimeout(AUTO_STEMS.timer);
+    if (!S.options.autoStems || S.runtimeInvalidated || !AUTO_STEMS.queue.length) return;
+    if (AUTO_STEMS.busy || AUTO.busy || S.starting || S.running) {
+      AUTO_STEMS.timer = setTimeout(runAutoStemsQueue, 1500);
+      return;
+    }
+    const id = AUTO_STEMS.queue.shift();
+    const pending = AUTO_STEMS.pending[id];
+    const latest = S.songs.find((song) => song.task_id === id);
+    if (!pending || !latest) { runAutoStemsQueue(); return; }
+    const current = readyStemsSnapshot(latest);
+    const tracks = pending.trackIds.filter((trackId) => current.objects.has(trackId) && !stemRecordedAfter(id, trackId, pending.at)).map((trackId) => current.objects.get(trackId));
+    if (!tracks.length) {
+      delete AUTO_STEMS.pending[id];
+      saveAutoStemsState();
+      runAutoStemsQueue();
+      return;
+    }
+    const types = ['stems'];
+    // 恢復不明結果的舊工作只補 GET 檔案，避免重啟後重複付費提交樂譜。
+    if (!pending.attempted && S.options.autoNewScores && P.notationRequested(latest)) {
+      for (const kind of ['midi', 'musicxml']) if (S.options[kind]) types.push(kind);
+    }
+    AUTO_STEMS.busy = true;
+    AUTO_STEMS.pending[id] = { ...pending, attempted: true };
+    try {
+      await saveAutoStemsState();
+      if (!S.options.autoStems || S.runtimeInvalidated) return;
+      const selected = { ...latest, stems: { '2': { status: 'done', tracks } } };
+      emitPageEvent({ type: 'auto_download', source: 'stems_ready', task_ids: [id], types });
+      await startJob([selected], { types, auto: true, autoStems: true });
+      const stillCurrent = AUTO_STEMS.pending[id]?.fingerprint === pending.fingerprint;
+      if (stillCurrent && pending.trackIds.every((trackId) => stemRecordedAfter(id, trackId, pending.at))) delete AUTO_STEMS.pending[id];
+    } catch (err) {
+      DL.record('auto_stems_error', { taskId: id, errorCode: err?.code, error: err?.message || '自動補分軌未完成，保留待補' });
+    } finally {
+      AUTO_STEMS.busy = false;
+      await saveAutoStemsState();
+      runAutoQueue();
+      runAutoStemsQueue();
+    }
   }
 
   /* 頁面事件 → 本機（page-events.json，Hub 監看後經 SSE 推給 agent） */
@@ -2584,8 +2542,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   function songsSignature(songs) {
     return songs
       .map((song) => {
-        const group = P.pickStemGroup(song.stems);
-        const stemsKey = group ? group.mode + ':' + group.tracks.length : 'none';
+        const stemsKey = stemsKeyOf(song);
         return [song.task_id, song.status, (song.meta && song.meta.title) || '', stemsKey, song.local_audio ? 1 : 0].join('~');
       })
       .join('|');
@@ -2644,6 +2601,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     exportPageSongs(songs, sig);
     if (changed) R.order = [];
     checkAutoNew();
+    checkAutoStems();
   }
 
   async function fetchSongs() {
@@ -2660,7 +2618,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       } else {
         S.libVer = result.ver || S.libVer || 0;
         applySongs(result.songs);
-        if (S.host.ok || S.options.autoNew) startLive();
+        if (S.host.ok || S.options.autoNew || S.options.autoStems) startLive();
       }
     } catch (err) {
       S.loadError = '歌單載入失敗：' + ((err && err.message) || err);
@@ -2700,7 +2658,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       S.libVer = result.ver || S.libVer || 0;
       S.loaded = true;
       applySongs(result.songs);
-      if (S.host.ok || S.options.autoNew) startLive();
+      if (S.host.ok || S.options.autoNew || S.options.autoStems) startLive();
     } catch (err) {
       /* 背景刷新失敗不吵使用者，等下一次 */
     } finally {
@@ -2790,7 +2748,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     const list = visibleSongs();
     S.selected = new Set(selectedVisibleSongs(list).map((song) => song.task_id));
     if (!list.length) {
-      box.append(el('div', { class: 'hint', text: S.onlyFavorites ? '目前篩選沒有符合的收藏歌曲。' : S.onlyUndownloaded ? '目前勾選的檔案類型沒有待補項目；不支援的類型不列入缺失。' : '找不到已完成的歌曲。' }));
+      box.append(el('div', { class: 'hint', text: S.onlyFavorites ? '目前篩選沒有符合的收藏歌曲。' : S.onlyUndownloaded ? '目前沒有確定待補項目；待核對與本機核對未就緒的歌曲另列，不當作缺檔。' : '找不到已完成的歌曲。' }));
       updateCounts();
       return;
     }
@@ -2831,11 +2789,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       if (S.running) return flash('已有下載進行中');
       startJob([song]);
     });
-    const playBtn = el('button', { class: 'rowicon', type: 'button', 'data-play': '', title: '播放', 'aria-label': '播放' });
+    const playBtn = el('button', { class: 'rowicon', type: 'button', 'data-play': '', title: '在播放器開啟', 'aria-label': '在播放器開啟' });
     playBtn.append(icon('play'));
-    playBtn.disabled = !song.local_audio;
-    playBtn.addEventListener('click', () => (R.currentId === song.task_id && R.playing ? R.audio.pause() : R.currentId === song.task_id && R.audio && R.audio.src ? togglePlay() : playSong(song.task_id)));
-    cover.addEventListener('click', () => song.local_audio && playSong(song.task_id));
+    playBtn.addEventListener('click', () => openIndependentPlayer(song.task_id));
+    cover.title = '在播放器開啟';
+    cover.addEventListener('click', () => openIndependentPlayer(song.task_id));
     const favBtn = el('button', { class: 'rowicon', type: 'button', 'data-fav': '', 'aria-label': '收藏' });
     favBtn.append(icon('heart'));
     paintFav(favBtn, song.task_id);
@@ -2850,9 +2808,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     if (label) {
       const parts = [];
       if (S.songs.length) {
-        const pending = S.songs.filter((song) => !songDownloadStatus(song).allDone).length;
+        const states = S.songs.map(songDownloadStatus);
+        const pending = states.filter((status) => status.missingCount > 0).length;
+        const uncertain = states.filter((status) => status.uncertainCount > 0 || (!status.known && status.total > 0)).length;
         parts.push(`已選 ${selected.length} / 顯示 ${list.length} / 共 ${S.songs.length} 首`);
         parts.push(`所選類型待補 ${pending}`);
+        parts.push(`待核對 ${uncertain}`);
       }
       if (S.lastUpdated) parts.push(`更新 ${S.lastUpdated}`);
       label.textContent = parts.join(' · ');
@@ -2860,8 +2821,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     const btn = S.els.downloadBtn;
     if (btn) {
       const count = selected.length;
-      btn.textContent = S.runtimeInvalidated ? '請刷新 ACE 頁面' : S.running ? '下載中…' : `下載選中${count ? `（${count} 首）` : ''}`;
-      btn.disabled = S.runtimeInvalidated || S.running || count === 0;
+      btn.textContent = S.runtimeInvalidated ? '請刷新 ACE 頁面' : S.running ? '下載中…' : S.starting ? '準備下載中…' : `下載選中${count ? `（${count} 首）` : ''}`;
+      btn.disabled = S.runtimeInvalidated || !!S.starting || S.running || count === 0;
     }
     const cancel = S.els.cancelBtn;
     if (cancel) cancel.hidden = !S.running;
@@ -3096,6 +3057,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     for (let attempt = 0; attempt < 3; attempt += 1) {
       // 即使只生成 MIDI，也先確認下載端仍可用，避免失效頁面繼續消耗額度。
       await checkDownloadConnection(job);
+      const latest = S.songs.find((song) => song.task_id === songId);
+      if (!latest || !P.notationRequested(latest) || (job.auto && !S.options.autoNewScores)) {
+        const error = new Error('這個 task 已不在已請求分軌的樂譜範圍，未提交生成');
+        error.code = 'NOTATION_NOT_REQUESTED';
+        DL.record('notation_blocked', { taskId: songId, kind, errorCode: error.code });
+        throw error;
+      }
+      DL.record('notation_submit', { taskId: songId, kind, phase: 'api' });
       let response = await fetchDownloadApi(endpoint, {
         method: 'POST',
         credentials: 'same-origin',
@@ -3179,7 +3148,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
    * 下載
    * ------------------------------------------------------------------ */
   async function attemptDownload(url, filename, timeoutMs = 200000, job = S.activeJob) {
-    const conflictAction = S.options.force ? 'overwrite' : 'uniquify';
+    const conflictAction = job?.preserveFiles ? 'uniquify' : S.options.force ? 'overwrite' : 'uniquify';
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         assertJobActive(job);
@@ -3238,10 +3207,27 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     return siteModelsPromise;
   }
 
-  async function startJob(songs, jobOpts = {}) {    if (S.running) {
+  async function startJob(songs, jobOpts = {}) {
+    // 同步取得頁面寫入租約：preflight / storage / native 的首個 await 之前即拒絕重入。
+    if (S.starting || S.running) {
       flash('已有下載進行中');
       return;
     }
+    const lease = {};
+    S.starting = lease;
+    updateCounts();
+    try {
+      return await startOwnedJob(songs, jobOpts, lease);
+    } finally {
+      if (S.activeJob?.lease === lease && !S.running) S.activeJob = null;
+      if (S.starting === lease) {
+        S.starting = null;
+        updateCounts();
+      }
+    }
+  }
+
+  async function startOwnedJob(songs, jobOpts, lease) {
     const types = jobOpts.types || FILE_TYPES.filter((type) => S.options[type]);
     DL.record('job_start', { kind: types.join(','), counts: { songs: songs.length } });
     S.jobAuto = !!jobOpts.auto;
@@ -3261,14 +3247,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     }
     S.stopReason = '';
     await Promise.all([loadDownloadState(), ensureSiteModels()]);
-    if (S.host.ok && !S.options.force && !TEST_MODE) await refreshDownloadIndex(true).catch(() => {});
+    if (!S.options.force || jobOpts.autoStems) await refreshDownloadIndex(true).catch(() => {});
     const plan = P.buildDownloadPlan({
       songs,
       options: {
         types,
         root: S.rootFolder,
         typeFolders: S.options.typeFolders,
-        force: S.options.force,
+        force: jobOpts.autoStems ? false : S.options.force,
         origin: location.origin,
         lossyModels: S.lossyModels,
       },
@@ -3278,20 +3264,26 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     S.folderByTask = plan.folderByTask;
     S.ownerByFolder = plan.ownerByFolder;
     await saveFolders();
+    if (jobOpts.autoStems) {
+      // 這些是新增 track ID／新來源版本，舊同名檔或舊 history 不能代替它們。
+      for (const task of plan.tasks) {
+        for (const file of task.files) {
+          if (file.kind !== 'stems' || !file.skip) continue;
+          file.skip = false;
+          plan.skipped = Math.max(0, plan.skipped - 1);
+          plan.toDownload += 1;
+        }
+      }
+    }
 
     // 用實際檔案系統再跳過一次，避免重新下載之前（擴充功能／CLI／站點）已經抓過的檔案
-    if (S.host.ok && !S.options.force && !TEST_MODE) {
+    if (!S.options.force || jobOpts.autoStems) {
       let fsSkipped = 0;
       for (const task of plan.tasks) {
         for (const file of task.files) {
           if (file.skip) continue;
-          const rel = String(file.path).toLowerCase();
-          let skip = S.verifiedAudio.has(task.task_id + '|' + file.kind) || S.fsRel.has(rel);
-          const ambiguous = titleIsAmbiguous(N.songFolderLabel(task.title || ''));
-          // 跨資料夾的同名檔、舊 alias 都不證明是這個 take 的音檔。
-          if (!skip && !ambiguous && file.kind !== 'mp3' && file.kind !== 'wav') {
-            skip = S.fsNames.has(String(file.filename || '').toLowerCase());
-          }
+          if (jobOpts.autoStems && file.kind === 'stems') continue;
+          const skip = completedKeysForTask(task.task_id).has(file.key);
           if (skip) {
             file.skip = true;
             fsSkipped += 1;
@@ -3336,7 +3328,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
     if (S.runtimeInvalidated) return;
     // 每批有獨立身分；停止後仍在返回的網路請求不能加入下一批。
-    const job = {};
+    const job = { auto: !!jobOpts.auto, preserveFiles: !!jobOpts.autoStems, lease };
     S.activeJob = job;
     S.running = true;
     S.cancelled = false;
@@ -3415,7 +3407,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
               entry.rateLimited = true;
               continue;
             }
-            if (err && (err.code === 'WAV_UNSUPPORTED' || err.code === 'NOT_AVAILABLE')) {
+            if (err && (err.code === 'WAV_UNSUPPORTED' || err.code === 'NOT_AVAILABLE' || err.code === 'NOTATION_NOT_REQUESTED')) {
               entry.unsupported = true;
               if (err.code === 'NOT_AVAILABLE') {
                 // 記住「站點不提供」：下次不再請求，狀態顯示「不可用」而不是「部分」
@@ -3515,7 +3507,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
           done += 1;
           bytes += Number(result.bytes) || 0;
           // 若 Chrome 沒有採用我們指定的檔名（伺服器 Content-Disposition 蓋掉），用本機整理工具自動改名/搬到正確位置
-          if (result.mismatch && S.options.autoFix && S.host.ok && S.host.downloadsRoot && result.actualPath) {
+          if (result.mismatch && !job.preserveFiles && S.options.autoFix && S.host.ok && S.host.downloadsRoot && result.actualPath) {
             try {
               const target = S.host.downloadsRoot.replace(/[\\/]+$/, '') + '\\' + file.path.split('/').join('\\');
               const fix = await sendMessage({ type: 'ACE_HOST_MOVE', moves: [{ from: result.actualPath, to: target }] });
@@ -3528,6 +3520,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
             }
           }
           S.history = P.mergeHistory(S.history, task.task_id, task.folder, file, result.absolute);
+          noteOwnDownload(task.task_id, file);
           S.progress.done = done;
           saveHistorySoon();
         } catch (err) {
@@ -3562,9 +3555,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     try {
       await Promise.all(Array.from({ length: concurrency }, () => downloadWorker()));
     } finally {
+      if (S.activeJob !== job || S.starting !== lease) return;
       clearTimeout(S.renderTimer);
       S.renderTimer = 0;
       if (!S.cancelled) await prepPromise;
+      if (S.activeJob !== job || S.starting !== lease) return;
       S.running = false;
       S.progress.phase = S.cancelled ? 'cancelled' : 'done';
       S.progress.current = '';
@@ -3573,6 +3568,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
       S.progress.elapsedMs = Date.now() - S.jobStartedAt;
       DL.record('job_finalizing', diagnosticProgress());
       await flushHistory();
+      if (S.activeJob !== job || S.starting !== lease) return;
       DL.record('job_done', diagnosticProgress());
       renderProgress();
       updateCounts();
@@ -3624,13 +3620,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     .then(() => {
       syncOptionsToUi();
       startAutoRefresh();
-      return Promise.all([loadDownloadState(), loadAutoState(), loadRadio(), loadRandomPrefs(), ensureSiteModels()]);
+      return Promise.all([loadDownloadState(), loadAutoState(), loadAutoStemsState(), loadRadio(), loadRandomPrefs(), ensureSiteModels()]);
     })
     .then(() => refreshHostStatus())
     .then(() => {
       // 有本機中樞或開了新歌自動下載：面板沒打開也要在背景同步歌單（給 agent／自動下載用）
+      checkAutoStems();
       if (S.options.autoNew) enableAutoNew();
-      if (S.host.ok || S.options.autoNew) {
+      if (S.host.ok || S.options.autoNew || S.options.autoStems) {
         startLive();
         if (!S.loaded) refreshSongsQuiet();
       }

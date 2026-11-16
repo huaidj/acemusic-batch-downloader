@@ -17,14 +17,17 @@ const isWin = process.platform === 'win32';
 
 const STORE_ITEMS = ['manifest.json', 'src', 'icons'];
 const FULL_ITEMS = [
-  'manifest.json', 'src', 'icons', 'agent', 'native', 'mixdesk', 'docs',
+  'manifest.json', 'src', 'icons', 'agent', 'native', 'mixdesk', 'player', 'docs',
   'design', 'scripts/repair-wavs.mjs',
-  'README.md', 'CHANGELOG.md', 'LICENSE', 'PRIVACY.md', 'CHROMEWEBSTORE.md', 'RELEASING.md', 'package.json',
+  'README.md', 'CHANGELOG.md', 'LICENSE', 'PRIVACY.md', 'CHROMEWEBSTORE.md', 'RELEASING.md', 'package.json', '更新本機工具.cmd',
 ];
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.loopx', '.pack']);
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.loopx', '.pack', 'player-state', 'organize-backups', 'metadata-backups']);
+const PRIVATE_FILE = /^(?:\.env(?:\..*)?|session\.json|history\.json|agent-state\.json|verified-audio\.json|browser-download-state\.json|download-log\.json|page-.*\.json|host-build\.json)$/i;
 
 function rimraf(target) {
-  fs.rmSync(target, { recursive: true, force: true });
+  const absolute = path.resolve(target), relative = path.relative(dist, absolute);
+  if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error('Refusing to remove a target outside the build directory');
+  fs.rmSync(absolute, { recursive: true, force: true });
 }
 
 function stage(items) {
@@ -40,6 +43,8 @@ function stage(items) {
       filter: (source) => {
         const base = path.basename(source);
         if (SKIP_DIRS.has(base)) return false;
+        if (PRIVATE_FILE.test(base) || fs.lstatSync(source).isSymbolicLink()) return false;
+        if (/^(?:AGENTS|PLAN|HANDOFF|CODEX_HANDOFF|CONTRACT|VERIFICATION|SITE-API|FINDINGS)\.(?:md|docx|html)$/i.test(base) || /\.bak(?:[-.].*)?$/i.test(base)) return false;
         if (base === '__pycache__') return false;
         if (/\.(pyc|log|tmp|part)$/i.test(base)) return false;
         return true;

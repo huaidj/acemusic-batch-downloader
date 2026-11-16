@@ -12,35 +12,61 @@ let lastCompletedId = null;
 // 送出下載前先登記「URL → 想要的相對路徑」，onDeterminingFilename 觸發時用它覆寫檔名。
 // 這是 Chrome 擴充功能裡唯一保證能蓋過伺服器 Content-Disposition / URL 檔名的機制。
 const namedQueue = new Map(); // url -> [{ filename, conflictAction }]
+const namedById = new Map();
+const filenameWaiters = new Map();
+const FILENAME_WAIT_MS = 30000;
 
 function queueName(url, filename, conflictAction) {
   const key = String(url || '');
   const list = namedQueue.get(key) || [];
-  list.push({ filename, conflictAction });
+  const entry = { filename, conflictAction, downloadId: null };
+  list.push(entry);
   namedQueue.set(key, list);
-}
-
-function dropName(url) {
-  const key = String(url || '');
-  const list = namedQueue.get(key);
-  if (!list || !list.length) return;
-  list.pop();
-  if (!list.length) namedQueue.delete(key);
-}
-
-function takeName(url) {
-  const key = String(url || '');
-  const list = namedQueue.get(key);
-  if (!list || !list.length) return null;
-  const entry = list.shift();
-  if (!list.length) namedQueue.delete(key);
   return entry;
 }
 
+function dropName(url, entry) {
+  const key = String(url || '');
+  const list = namedQueue.get(key);
+  if (!list || !list.length) return;
+  const index = list.indexOf(entry);
+  if (index !== -1) list.splice(index, 1);
+  if (!list.length) namedQueue.delete(key);
+  if (entry && entry.downloadId != null && namedById.get(entry.downloadId) === entry) namedById.delete(entry.downloadId);
+}
+
+function resolveFilename(downloadId, entry, suggest) {
+  if (entry) {
+    namedById.delete(downloadId);
+    // Entry identity is stable even when multiple songs share exactly the same URL.
+    dropName(entry.url, entry);
+    suggest({ filename: entry.filename, conflictAction: entry.conflictAction });
+  } else suggest();
+}
+
+function releaseFilenameWaiter(downloadId, entry) {
+  const waiter = filenameWaiters.get(downloadId);
+  if (!waiter) return;
+  clearTimeout(waiter.timer);
+  filenameWaiters.delete(downloadId);
+  resolveFilename(downloadId, entry, waiter.suggest);
+}
+
+function bindName(downloadId, entry) {
+  entry.downloadId = downloadId;
+  namedById.set(downloadId, entry);
+  releaseFilenameWaiter(downloadId, entry);
+}
+
 chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
-  const entry = takeName(item.url) || takeName(item.finalUrl);
-  if (entry) suggest({ filename: entry.filename, conflictAction: entry.conflictAction });
-  else suggest();
+  const entry = namedById.get(item.id);
+  if (entry) { resolveFilename(item.id, entry, suggest); return false; }
+  if (!namedQueue.has(item.url) && !namedQueue.has(item.finalUrl)) { suggest(); return false; }
+  // This event may precede downloads.download's callback. Wait for that exact ID;
+  // URL ordering cannot identify a request when twins share an audio/cover URL.
+  const timer = setTimeout(() => releaseFilenameWaiter(item.id, null), FILENAME_WAIT_MS);
+  filenameWaiters.set(item.id, { suggest, timer });
+  return true;
 });
 
 function respondLater(fn, sendResponse) {
@@ -59,8 +85,7 @@ function startDownload(msg) {
       return;
     }
     let filename = String(msg.filename || '').trim();
-    filename = filename.replace(/^[/\\]+/, '');
-    if (!filename || filename.includes('..') || /^[a-zA-Z]:/.test(filename) || filename.includes('\\')) {
+    if (!filename || filename.startsWith('/') || /^[a-zA-Z]:/.test(filename) || filename.includes('\\') || filename.split('/').some((part) => part === '.' || part === '..' || part === '')) {
       resolve({ ok: false, error: '檔名不合法' });
       return;
     }
@@ -68,11 +93,14 @@ function startDownload(msg) {
 
     let settled = false;
     let id = null;
+    let nameEntry = null;
     const finish = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (id != null) pending.delete(id);
+      if (nameEntry) dropName(url, nameEntry);
+      if (id != null) releaseFilenameWaiter(id, null);
       resolve(result);
     };
     const timer = setTimeout(() => {
@@ -87,17 +115,24 @@ function startDownload(msg) {
       finish({ ok: false, error: '下載逾時（' + Math.round(DOWNLOAD_TIMEOUT_MS / 1000) + ' 秒）' });
     }, DOWNLOAD_TIMEOUT_MS);
 
-    queueName(url, filename, conflictAction);
+    nameEntry = queueName(url, filename, conflictAction);
+    nameEntry.url = url;
     try {
       chrome.downloads.download({ url, filename, conflictAction, saveAs: false }, (downloadId) => {
         const lastError = chrome.runtime.lastError;
         if (lastError || downloadId == null || downloadId < 0) {
-          dropName(url);
+          dropName(url, nameEntry);
           finish({ ok: false, error: lastError ? lastError.message : '無法開始下載' });
+          return;
+        }
+        if (settled) {
+          releaseFilenameWaiter(downloadId, null);
+          try { chrome.downloads.cancel(downloadId); } catch (_) { /* timed-out request must not revive */ }
           return;
         }
         id = downloadId;
         pending.set(id, { done: finish, filename });
+        bindName(id, nameEntry);
       });
     } catch (err) {
       finish({ ok: false, error: String((err && err.message) || err) });
@@ -106,10 +141,29 @@ function startDownload(msg) {
 }
 
 let localFilesChangedTimer = 0;
+let historyExportPromise = null;
+let lastIndexHistoryExport = 0;
+let lastBrowserStateContent = '';
+function exportHistoryForIndex() {
+  if (historyExportPromise) return historyExportPromise;
+  if (Date.now() - lastIndexHistoryExport < 1000) return Promise.resolve();
+  historyExportPromise = (async () => {
+    await exportHistoryToHost();
+    const stored = await chrome.storage.local.get('aceHistory');
+    const content = JSON.stringify(stored.aceHistory || {});
+    if (stored.aceHistory && typeof stored.aceHistory === 'object' && content !== lastBrowserStateContent) {
+      await hostRequest({ cmd: 'export', name: 'browser-download-state', data: { savedAt: Date.now(), history: stored.aceHistory } }, 15000);
+      lastBrowserStateContent = content;
+    }
+    lastIndexHistoryExport = Date.now();
+  })().finally(() => { historyExportPromise = null; });
+  return historyExportPromise;
+}
 function notifyLocalFilesChanged() {
   clearTimeout(localFilesChangedTimer);
-  localFilesChangedTimer = setTimeout(() => {
+  localFilesChangedTimer = setTimeout(async () => {
     localFilesChangedTimer = 0;
+    await exportHistoryForIndex().catch(() => {});
     chrome.tabs.query({ url: ['https://acemusic.ai/*', 'https://www.acemusic.ai/*'] }, (tabs) => {
       if (chrome.runtime.lastError) return;
       const message = { type: 'ACE_LOCAL_FILES_CHANGED', at: Date.now() };
@@ -227,28 +281,18 @@ async function exportSessionToHost() {
     });
 }
 
+let lastHistoryContent = '';
 async function exportHistoryToHost() {
     const items = await new Promise((resolve) => chrome.downloads.search({ limit: 2000, orderBy: ['-startTime'] }, resolve));
     // Chrome 下載紀錄被清空（或搜尋暫時回空）時不要覆寫：否則本機 history.json 會被洗成 0 筆（曾發生）
     if (!items || !items.length) return { ok: true, skipped: 'empty-history' };
-    return hostRequest({
-        cmd: 'export',
-        name: 'history',
-        data: {
-            savedAt: Date.now(),
-            items: (items || []).map((item) => ({
-                id: item.id,
-                filename: item.filename,
-                url: item.url,
-                finalUrl: item.finalUrl,
-                state: item.state,
-                mime: item.mime,
-                fileSize: item.fileSize,
-                startTime: item.startTime,
-                byExtId: item.byExtensionId || '',
-            })),
-        },
-    });
+    const dataItems = items.map((item) => ({ id: item.id, filename: item.filename, url: item.url, finalUrl: item.finalUrl,
+      state: item.state, mime: item.mime, fileSize: item.fileSize, startTime: item.startTime, byExtId: item.byExtensionId || '' }));
+    const content = JSON.stringify(dataItems);
+    if (content === lastHistoryContent) return { ok: true, skipped: 'unchanged-history' };
+    const result = await hostRequest({ cmd: 'export', name: 'history', data: { savedAt: Date.now(), items: dataItems } });
+    lastHistoryContent = content;
+    return result;
 }
 
 async function exportAgentState() {
@@ -287,9 +331,68 @@ function setBadge(text, color) {
   }
 }
 
+// Native index codec: accept the original compact shape and bounded gzip envelopes.
+async function decodeNativeIndexPayload(value) {
+  let index = value;
+  if (value?.encoding) {
+    if (value.ok !== true || value.encoding !== 'gzip-base64' || typeof value.data !== 'string' || value.data.length > 900 * 1024 || value.data.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value.data)) throw new Error('本機索引壓縮格式不正確或超過傳輸上限');
+    let reader;
+    try {
+      const bytes = Uint8Array.from(atob(value.data), (char) => char.charCodeAt(0));
+      reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+      const chunks = [];
+      let size = 0;
+      while (true) {
+        const { value: chunk, done } = await reader.read();
+        if (done) break;
+        size += chunk.byteLength;
+        if (size > 32 * 1024 * 1024) throw new Error('本機索引解壓大小超過上限');
+        chunks.push(chunk);
+      }
+      const output = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
+      index = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(output));
+    } catch (err) {
+      if (err.message === '本機索引解壓大小超過上限') throw err;
+      throw new Error('本機索引解壓或 JSON 解析失敗，請更新本機工具後重試');
+    } finally { if (reader) await reader.cancel().catch(() => {}); }
+  }
+  if (!index?.ok || index.apiVersion !== 1 || typeof index.revision !== 'string' || !index.byTask || typeof index.byTask !== 'object' || Array.isArray(index.byTask)) throw new Error('本機索引版本或資料格式不正確，請更新本機工具');
+  for (const row of Object.values(index.byTask)) {
+    if (!row || typeof row !== 'object' || !row.downloaded || typeof row.downloaded !== 'object' || Array.isArray(row.downloaded) || !Array.isArray(row.completedKeys) || row.completedKeys.some((key) => typeof key !== 'string') || !Array.isArray(row.uncertainKinds) || row.uncertainKinds.some((kind) => typeof kind !== 'string')) throw new Error('本機索引歌曲資料格式不正確，請更新本機工具');
+  }
+  return index;
+}
+// End native index codec.
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || typeof msg.type !== 'string') return false;
   switch (msg.type) {
+    case 'ACE_HOST_LOCAL_INDEX':
+      return respondLater(async () => {
+        await exportHistoryForIndex().catch(() => {});
+        const result = await hostRequest({ cmd: 'local-index', root: String(msg.root || 'ai音樂') }, 120000);
+        if (!result.ok || result.exitCode !== 0 || !result.data?.ok) return { ok: false, error: result.error || result.data?.error || '本機索引未就緒，請更新本機工具' };
+        return { ok: true, index: await decodeNativeIndexPayload(result.data) };
+      }, sendResponse);
+    case 'ACE_OPEN_PLAYER':
+      return respondLater(async () => {
+        const songId = typeof msg.songId === 'string' && msg.songId.length <= 256 ? msg.songId : '';
+        const result = await hostRequest({ cmd: 'player-start', songId }, 30000);
+        const data = result.data;
+        if (!result.ok || result.exitCode !== 0 || !data?.ok || !/^http:\/\/127\.0\.0\.1:\d{1,5}\/?$/.test(data.url || '')) throw new Error(result.error || data?.error || '播放器尚未就緒，請更新完整套件');
+        const windowStore = chrome.storage.session;
+        const existingId = windowStore ? (await windowStore.get('acePlayerWindow')).acePlayerWindow : null;
+        if (existingId) {
+          try { await chrome.windows.update(existingId, { focused: true }); return { ok: true, windowId: existingId }; } catch (_) { /* Closed windows are recreated. */ }
+        }
+        const url = new URL(data.url);
+        if (songId) url.searchParams.set('song', songId);
+        const window = await chrome.windows.create({ url: url.href, type: 'popup', width: 1100, height: 780, focused: true });
+        if (windowStore) await windowStore.set({ acePlayerWindow: window.id });
+        return { ok: true, windowId: window.id };
+      }, sendResponse);
     case 'ACE_DOWNLOAD_FILE':
       return respondLater(() => startDownload(msg), sendResponse);
     case 'ACE_CANCEL_DOWNLOAD':

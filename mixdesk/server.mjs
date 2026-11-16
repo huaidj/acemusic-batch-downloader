@@ -12,19 +12,22 @@ import { config as agentConfig } from '../agent/lib/config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT = path.resolve(HERE, '..');
-const PORT = Number(process.env.ACE_MIX_PORT || 8777);
-const HOST = process.env.ACE_MIX_HOST || '127.0.0.1';
-const cfg = agentConfig();
-const MIX_ROOT = process.env.ACE_MIX_LIBRARY || path.join(cfg.downloadDir, 'ai音樂', '成品MP3');
-const STATE_DIR = process.env.ACE_MIX_STATE_DIR || path.join(cfg.stateDir, 'mixdesk');
+export async function createMixdeskServer(options = {}) {
+const cfg = options.cfg || agentConfig();
+const MIX_ROOT = options.libraryRoot || process.env.ACE_MIX_LIBRARY || path.join(cfg.downloadDir, 'ai音樂', '成品MP3');
+const STATE_DIR = options.stateDir || process.env.ACE_MIX_STATE_DIR || path.join(cfg.stateDir, 'mixdesk');
 const STATE_FILE = path.join(STATE_DIR, 'state.json');
 // mock 生成輸出（P4 離線閉環用）：與使用者的成品 MP3 庫分開，避免污染
-const MOCK_DIR = process.env.ACE_MIX_MOCK_DIR || path.join(STATE_DIR, 'mock-library');
+const MOCK_DIR = options.mockDir || process.env.ACE_MIX_MOCK_DIR || path.join(STATE_DIR, 'mock-library');
 const ANALYZER = process.env.ACE_ANALYZER || path.join(PROJECT, 'agent', 'analyze_audio.py');
 const PYTHON = process.env.ACE_PYTHON || 'python';
 const SLOTS = ['opening', 'build', 'peak', 'cooldown', 'transition'];
 const SLOT_TEXT = { opening: '暖場', build: '推進', peak: '高潮', cooldown: '降溫', transition: '過渡' };
 const MAX_REFS = 3;
+const BODY_LIMIT = 256 * 1024;
+const ID_PATTERNS = { track: /^t_\d{4,20}$/, decision: /^d_\d{4,20}$/, prompt: /^p_\d{4,20}$/, generation: /^g_\d{4,20}$/ };
+const failure = (status, message) => Object.assign(new Error(message), { status });
+const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 /* ------------------------------------------------------------------ *
  * 狀態
@@ -48,22 +51,45 @@ let writeChain = Promise.resolve();
 function saveState() {
   state.updatedAt = new Date().toISOString();
   const snapshot = JSON.parse(JSON.stringify(state));
-  writeChain = writeChain.then(async () => {
+  const task = writeChain.then(async () => {
+    if (options.persistSnapshot) return options.persistSnapshot(snapshot, STATE_FILE);
     await fsp.mkdir(STATE_DIR, { recursive: true });
     const tmp = `${STATE_FILE}.${process.pid}.tmp`;
     await fsp.writeFile(tmp, JSON.stringify(snapshot, null, 2), 'utf8');
     await fsp.rename(tmp, STATE_FILE);
   });
-  return writeChain;
+  writeChain = task.catch(() => {});
+  return task;
 }
 
 async function loadState() {
   try {
     const raw = await fsp.readFile(STATE_FILE, 'utf8');
     const data = JSON.parse(raw);
-    if (data && data.schema === 'ace_mix_desk_state_v1') state = { ...defaultState(), ...data };
-  } catch {
-    /* first run */
+    const fields = ['tracks', 'decisions', 'prompts', 'generations', 'pending', 'events'];
+    if (!object(data) || data.schema !== 'ace_mix_desk_state_v1' || fields.some((key) => !Array.isArray(data[key])) || !object(data.station) || !object(data.counters)) throw new Error('state schema invalid');
+    for (const [field, kind] of [['tracks', 'track'], ['decisions', 'decision'], ['prompts', 'prompt'], ['generations', 'generation'], ['pending', 'decision']]) {
+      if (data[field].some((item) => !object(item) || !ID_PATTERNS[kind].test(item.id))) throw new Error('state record ID invalid');
+    }
+    if (data.tracks.some((item) => typeof item.file !== 'string' || typeof item.title !== 'string')) throw new Error('state track invalid');
+    state = { ...defaultState(), ...data, counters: { ...defaultState().counters, ...data.counters } };
+    for (const kind of Object.keys(state.counters)) if (!Number.isSafeInteger(state.counters[kind]) || state.counters[kind] < 0) throw new Error('state counter invalid');
+    for (const [field, kind] of [['tracks', 'track'], ['decisions', 'decision'], ['pending', 'decision'], ['prompts', 'prompt'], ['generations', 'generation']]) {
+      for (const item of state[field]) {
+        const value = Number(item.id.slice(2));
+        if (!Number.isSafeInteger(value)) throw new Error('state ID counter out of range');
+        state.counters[kind] = Math.max(state.counters[kind], value);
+      }
+    }
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    const backup = STATE_FILE + '.unreadable-' + new Date().toISOString().replace(/[:.]/g, '-') + '-' + crypto.randomBytes(3).toString('hex') + '.bak';
+    let copied = false;
+    try { await fsp.copyFile(STATE_FILE, backup, fs.constants.COPYFILE_EXCL); copied = true; } catch (_) { /* Never overwrite an unreadable original even if its backup cannot be made. */ }
+    const rejected = new Error('Mixdesk 狀態檔無法讀取，拒絕重設或覆寫原檔。' + (copied ? ' 備份：' + backup : ' 原檔仍保留。'));
+    rejected.code = 'MIXDESK_STATE_UNREADABLE';
+    if (copied) rejected.backupPath = backup;
+    throw rejected;
   }
 }
 
@@ -136,7 +162,7 @@ async function indexLibrary({ limit = 30, refresh = false } = {}) {
   const batch = 10;
   for (let i = 0; i < todo.length; i += batch) {
     const chunk = todo.slice(i, i + batch);
-    const results = analyzeFiles(chunk.map((item) => item.file));
+    const results = await (options.analyzeFiles || analyzeFiles)(chunk.map((item) => item.file));
     for (const item of chunk) {
       const analysis = results.find((result) => result && result.path && path.resolve(result.path) === path.resolve(item.file)) || {};
       const title = trimTitle(path.basename(item.file));
@@ -461,43 +487,65 @@ async function runClosedLoop({ trackId, adapter = 'mock' } = {}) {
  * ------------------------------------------------------------------ */
 function json(res, code, payload) {
   const body = JSON.stringify(payload);
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(body);
 }
 
 async function readBody(req) {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  if (!chunks.length) return {};
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-  } catch {
-    return {};
-  }
+  if (String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase() !== 'application/json') throw failure(415, '請使用 application/json');
+  if (Number(req.headers['content-length'] || 0) > BODY_LIMIT) { req.resume(); throw failure(413, '請求資料過大'); }
+  return new Promise((resolve, reject) => {
+    let chunks = [], bytes = 0, ended = false;
+    const fail = (error) => { if (!ended) { ended = true; chunks = []; reject(error); } };
+    req.on('data', (chunk) => {
+      if (ended) return;
+      bytes += chunk.length;
+      if (bytes > BODY_LIMIT) { fail(failure(413, '請求資料過大')); return; }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (ended) return;
+      try {
+        const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        if (!object(value)) throw new Error('object required');
+        ended = true; resolve(value);
+      } catch (_) { fail(failure(400, 'JSON 必須是有效物件，未提交任何動作')); }
+    });
+    req.on('aborted', () => fail(failure(400, '請求已中止')));
+    req.on('error', fail);
+  });
 }
 
-function streamMedia(req, res, track) {
-  if (!track || !fs.existsSync(track.file)) return json(res, 404, { ok: false, error: '找不到音檔' });
-  const stat = fs.statSync(track.file);
-  const range = req.headers.range;
-  if (!range) {
-    res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': stat.size, 'Accept-Ranges': 'bytes' });
-    return fs.createReadStream(track.file).pipe(res);
+async function streamMedia(req, res, track) {
+  if (!track || typeof track.file !== 'string') return json(res, 404, { ok: false, error: '找不到音檔' });
+  let file, stat;
+  try {
+    file = await fsp.realpath(track.file);
+    const roots = await Promise.all([MIX_ROOT, MOCK_DIR].map((root) => fsp.realpath(root).catch(() => null)));
+    const inside = roots.some((root) => { if (!root) return false; const rel = path.relative(root, file); return rel && !path.isAbsolute(rel) && rel !== '..' && !rel.startsWith('..' + path.sep); });
+    if (!inside) return json(res, 403, { ok: false, error: '音檔不在已設定曲庫內' });
+    stat = await fsp.stat(file);
+    if (!stat.isFile()) throw new Error('not a file');
+  } catch (_) { return json(res, 404, { ok: false, error: '音檔已移動或無法讀取' }); }
+  const mime = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.flac': 'audio/flac', '.aif': 'audio/aiff', '.aiff': 'audio/aiff' }[path.extname(file).toLowerCase()] || 'application/octet-stream';
+  let start = 0, end = stat.size - 1, code = 200;
+  if (req.headers.range) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range));
+    const first = match && match[1] ? Number(match[1]) : null;
+    const last = match && match[2] ? Number(match[2]) : null;
+    const valid = match && (first !== null || last !== null) && (first === null || Number.isSafeInteger(first)) && (last === null || Number.isSafeInteger(last));
+    if (valid) { start = first === null ? Math.max(0, stat.size - last) : first; end = first === null || last === null ? stat.size - 1 : Math.min(last, stat.size - 1); }
+    if (!valid || !stat.size || (first === null && last === 0) || start < 0 || start >= stat.size || end < start) { res.writeHead(416, { 'Content-Range': `bytes */${stat.size}` }); return res.end(); }
+    code = 206;
   }
-  const match = /bytes=(\d*)-(\d*)/.exec(range);
-  const start = match && match[1] ? Number(match[1]) : 0;
-  const end = match && match[2] ? Number(match[2]) : stat.size - 1;
-  if (start >= stat.size) {
-    res.writeHead(416, { 'Content-Range': `bytes */${stat.size}` });
-    return res.end();
-  }
-  res.writeHead(206, {
-    'Content-Type': 'audio/mpeg',
-    'Content-Range': `bytes ${start}-${end}/${stat.size}`,
-    'Accept-Ranges': 'bytes',
-    'Content-Length': end - start + 1,
-  });
-  fs.createReadStream(track.file, { start, end }).pipe(res);
+  const headers = { 'Content-Type': mime, 'Content-Length': stat.size ? end - start + 1 : 0, 'Accept-Ranges': 'bytes' };
+  if (code === 206) headers['Content-Range'] = `bytes ${start}-${end}/${stat.size}`;
+  res.writeHead(code, headers);
+  if (req.method === 'HEAD' || !stat.size) return res.end();
+  const stream = fs.createReadStream(file, { start, end });
+  stream.on('error', () => res.destroy());
+  res.on('close', () => stream.destroy());
+  return stream.pipe(res);
 }
 
 function stateSummary() {
@@ -525,18 +573,28 @@ function stateSummary() {
 
 const server = http.createServer(async (req, res) => {
   try {
+    const port = server.address()?.port;
+    const host = String(req.headers.host || '');
+    const allowed = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
+    if (!allowed.has(host) || (req.headers.origin && req.headers.origin !== `http://${host}`) || req.headers['sec-fetch-site'] === 'cross-site') return json(res, 403, { ok: false, error: '僅允許本機同來源存取' });
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
     const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
     const pathname = url.pathname;
 
     if (pathname === '/' || pathname === '/index.html') {
-      const html = await fsp.readFile(path.join(HERE, 'public', 'index.html'), 'utf8');
+      const nonce = crypto.randomBytes(18).toString('base64');
+      const html = (await fsp.readFile(path.join(HERE, 'public', 'index.html'), 'utf8')).replace('<script>', `<script nonce="${nonce}">`);
+      res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'; media-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`);
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       return res.end(html);
     }
 
     if (pathname.startsWith('/media/')) {
+      if (!['GET', 'HEAD'].includes(req.method)) return json(res, 405, { ok: false, error: 'method not allowed' });
       const id = decodeURIComponent(pathname.slice('/media/'.length));
-      return streamMedia(req, res, trackById(id));
+      return await streamMedia(req, res, trackById(id));
     }
 
     if (pathname === '/api/state' && req.method === 'GET') return json(res, 200, stateSummary());
@@ -568,6 +626,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/decisions' && req.method === 'POST') {
       const body = await readBody(req);
       const input = body.decision || body;
+      if (!object(input)) return json(res, 400, { ok: false, error: 'decision 必須是物件' });
       const track = trackById(input.trackId);
       if (!track) return json(res, 404, { ok: false, error: '找不到曲目：' + input.trackId });
       const refs = Array.isArray(input.references) ? input.references : [];
@@ -576,6 +635,11 @@ const server = http.createServer(async (req, res) => {
       if (badRef) return json(res, 400, { ok: false, error: '參考曲不在本機曲庫：' + JSON.stringify(badRef) });
       if (!input.fitSlot || !SLOTS.includes(input.fitSlot)) return json(res, 400, { ok: false, error: 'fitSlot 必須是 ' + SLOTS.join('/') });
       if (!input.prompt || !String(input.prompt).trim()) return json(res, 400, { ok: false, error: 'prompt 不能為空' });
+      if (input.id != null) {
+        const n = typeof input.id === 'string' ? Number(input.id.slice(2)) : NaN;
+        if (typeof input.id !== 'string' || !ID_PATTERNS.decision.test(input.id) || !Number.isSafeInteger(n) || state.decisions.some((item) => item.id === input.id)) return json(res, 400, { ok: false, error: 'decision id 無效或已存在' });
+        state.counters.decision = Math.max(state.counters.decision, n);
+      }
       const decision = {
         id: input.id || nextId('decision'),
         trackId: input.trackId,
@@ -669,18 +733,30 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ok: false, error: 'not found: ' + pathname }));
   } catch (err) {
-    json(res, 500, { ok: false, error: String((err && err.message) || err) });
+    if (res.headersSent) { res.destroy(); return; }
+    json(res, err.status || 500, { ok: false, error: String((err && err.message) || err) });
   }
 });
 
 await loadState();
 const indexLimit = Number(process.env.ACE_MIX_INDEX_LIMIT || 30);
-if (!state.tracks.length) {
+if (options.indexOnStart !== false && !state.tracks.length) {
   console.log('[mixdesk] 首次啟動，索引曲庫（limit ' + indexLimit + '）…');
   await indexLibrary({ limit: indexLimit });
 }
-server.listen(PORT, HOST, () => {
-  console.log(`[mixdesk] ACE MIX DESK 已啟動：http://${HOST}:${PORT}`);
-  console.log(`[mixdesk] 曲庫：${MIX_ROOT}`);
-  console.log(`[mixdesk] 狀態：${STATE_FILE}（${state.tracks.length} 首曲目）`);
-});
+server.mixdeskStateFile = STATE_FILE;
+server.mixdeskLibraryRoot = MIX_ROOT;
+return server;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const port = Number(process.env.ACE_MIX_PORT || 8777);
+  const host = process.env.ACE_MIX_HOST || '127.0.0.1';
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || !['127.0.0.1', 'localhost', '::1'].includes(host)) throw new Error('Mixdesk 僅允許 loopback 與有效本機埠');
+  const server = await createMixdeskServer();
+  server.listen(port, host, () => {
+    console.log(`[mixdesk] ACE MIX DESK 已啟動：http://${host === '::1' ? '[::1]' : host}:${port}`);
+    console.log(`[mixdesk] 曲庫：${server.mixdeskLibraryRoot}`);
+    console.log(`[mixdesk] 狀態：${server.mixdeskStateFile}`);
+  });
+}

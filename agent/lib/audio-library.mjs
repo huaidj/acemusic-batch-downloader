@@ -3,6 +3,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const HEADER_BYTES = 65536;
+export async function buildAudioLibrary(options) {
+    return (await import('./local-index.mjs')).buildAudioLibrary(options);
+}
 const MAX_WAV_CHUNKS = 4096;
 const AUDIO_FORMATS = new Set(['mp3', 'wav', 'flac', 'm4a', 'ogg', 'aac', 'aiff']);
 const normalizeFormat = (value) => {
@@ -171,6 +174,40 @@ async function inspectRiffFile(handle, bytes, prefix) {
     return { ...result, reason: offset < riffBytes ? 'WAV chunk inspection limit reached' : 'WAV fmt/data chunks were not both found' };
 }
 
+/** Locate MPEG audio after a bounded ID3 tag without reading a large embedded cover. */
+async function inspectId3File(handle, bytes, prefix) {
+    const result = { validity: 'unknown', format: 'mp3', bytes };
+    const damaged = (reason, expectedBytes) => ({ ...result, validity: 'damaged', reason, ...(expectedBytes ? { expectedBytes } : {}) });
+    if (prefix.length < 10) return damaged('Incomplete MP3 ID3 header', 10);
+    const major = prefix[3], revision = prefix[4], flags = prefix[5];
+    if (major === 0xff || revision === 0xff) return damaged('Invalid MP3 ID3 version');
+    if (![2, 3, 4].includes(major)) return { ...result, reason: 'Unsupported ID3 major version' };
+    const reserved = major === 2 ? 0x3f : major === 3 ? 0x1f : 0x0f;
+    if (flags & reserved) return damaged('Invalid reserved MP3 ID3 flags');
+    if ([prefix[6], prefix[7], prefix[8], prefix[9]].some((value) => value & 0x80)) return damaged('Invalid MP3 ID3 tag size');
+    const tagSize = prefix[6] * 2097152 + prefix[7] * 16384 + prefix[8] * 128 + prefix[9];
+    const tagEnd = 10 + tagSize;
+    // ID3v2.4 size excludes its ten-byte header and optional ten-byte footer.
+    // https://id3.org/id3v2.4.0-structure
+    const hasFooter = major === 4 && !!(flags & 0x10);
+    const audioOffset = tagEnd + (hasFooter ? 10 : 0);
+    if (!Number.isSafeInteger(audioOffset) || audioOffset < 10) return damaged('Invalid MP3 ID3 audio offset');
+    if (audioOffset > bytes) return damaged('MP3 ID3 tag exceeds the downloaded file', audioOffset);
+    if (hasFooter) {
+        const footer = Buffer.alloc(10);
+        const read = await handle.read(footer, 0, 10, tagEnd);
+        if (read.bytesRead !== 10) return damaged('Incomplete MP3 ID3 footer', audioOffset);
+        if (footer.toString('ascii', 0, 3) !== '3DI' || !footer.subarray(3, 10).equals(prefix.subarray(3, 10))) return damaged('MP3 ID3 footer does not match its header');
+    }
+    if (audioOffset + 4 > bytes) return damaged('MP3 tag leaves no complete MPEG frame header', audioOffset + 4);
+    const header = Buffer.alloc(4);
+    const { bytesRead } = await handle.read(header, 0, header.length, audioOffset);
+    if (bytesRead !== header.length) return damaged('Incomplete MPEG frame header', audioOffset + 4);
+    const checked = inspectHeader(header, bytes - audioOffset, 'mp3');
+    return { ...checked, bytes, audioOffset, id3Bytes: audioOffset,
+        ...(checked.expectedBytes ? { expectedBytes: audioOffset + checked.expectedBytes } : {}) };
+}
+
 /** Inspect a local file without reading an account session or decoding the audio payload. */
 export async function inspectAudioFile(absolutePath) {
     const requested = normalizeFormat(path.extname(absolutePath));
@@ -185,6 +222,9 @@ export async function inspectAudioFile(absolutePath) {
         let inspected = inspectHeader(prefix, before.size, requested);
         if (inspected.validity === 'unknown' && inspected.format === 'wav' && prefix.toString('ascii', 0, 4) === 'RIFF' && prefix.toString('ascii', 8, 12) === 'WAVE') {
             inspected = await inspectRiffFile(handle, before.size, prefix);
+        }
+        if (inspected.validity === 'unknown' && inspected.format === 'mp3' && prefix.toString('ascii', 0, 3) === 'ID3') {
+            inspected = await inspectId3File(handle, before.size, prefix);
         }
         const after = await handle.stat();
         if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || bytesRead !== buffer.length) return { ...inspected, validity: 'unknown', reason: 'Audio file changed while its header was being inspected' };

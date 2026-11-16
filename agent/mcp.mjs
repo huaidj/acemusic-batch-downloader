@@ -2,23 +2,61 @@
 // mcp.mjs — MCP (Model Context Protocol) stdio server：把 ACE Music 批量下載器接給 agent
 // 傳輸：stdio，一行一個 JSON-RPC 訊息（MCP stdio transport）。
 import * as ACE from './lib/ace.mjs';
+import { randomUUID } from 'node:crypto';
 import { config, readJson, exists } from './lib/config.mjs';
-import { hubJson, hubRequest, HUB_URL } from './lib/hubclient.mjs';
+import { hubJson, hubRequest, canFallbackHubWrite, HUB_URL } from './lib/hubclient.mjs';
 
-const SERVER = { name: 'ace-music-downloader', version: '1.7.4' };
+const SERVER = { name: 'ace-music-downloader', version: '1.7.5' };
 const jobs = new Map();
 let jobSeq = 0;
 const hubJobs = new Set();
 let hubDownUntil = 0;
 
 async function hubCall(pathname, { method = 'GET', body, timeoutMs = 2000 } = {}) {
-    if (Date.now() < hubDownUntil) throw new Error('hub recently unavailable');
+    // 讀取可沿用短暫斷線快取；寫入必須親自嘗試連線，不能把舊讀取失敗當作「本次尚未送出」。
+    if ((method === 'GET' || method === 'HEAD') && Date.now() < hubDownUntil) throw new Error('hub recently unavailable');
     try {
-        return await hubJson(pathname, { method, body, timeoutMs });
+        const data = await hubJson(pathname, { method, body, timeoutMs });
+        hubDownUntil = 0;
+        return data;
     } catch (err) {
         // 只有「連不上」才暫停 30 秒走本地；Hub 回的業務錯誤（例如登入過期）不算 Hub 掛掉
-        if (/ECONNREFUSED|ECONNRESET|hub timeout|EHOSTUNREACH/i.test(String((err && (err.code || err.message)) || ''))) hubDownUntil = Date.now() + 30000;
+        if (/ECONNREFUSED|ECONNRESET|HUB_TIMEOUT|hub timeout|EHOSTUNREACH/i.test(String((err && (err.code || err.message)) || ''))) hubDownUntil = Date.now() + 30000;
         throw err;
+    }
+}
+
+function hubWriteFailure(error, { idempotencyKey, jobId } = {}) {
+    if (error?.hubResponseReceived && error.status >= 400 && error.status < 500 && error.status !== 408) {
+        if (idempotencyKey) error.idempotencyKey = idempotencyKey;
+        error.submissionStatus = 'rejected';
+        return error;
+    }
+    const keyHint = idempotencyKey ? ` idempotency_key=${idempotencyKey}。` : '';
+    return Object.assign(new Error(`Hub 提交狀態待查，禁止自動重送或改走本機；先檢查 Hub 工作佇列。${keyHint} ${String(error?.message || error)}`), {
+        code: 'HUB_SUBMISSION_UNKNOWN', submissionStatus: 'unknown',
+        ...(idempotencyKey ? { idempotencyKey } : {}), ...(jobId || error?.jobId ? { jobId: jobId || error.jobId } : {}),
+    });
+}
+
+async function tryHubWrite(pathname, options = {}) {
+    try {
+        const started = await hubCall(pathname, options);
+        if (!started?.jobId) throw new Error('Hub 已回應，但未提供工作 ID');
+        hubJobs.add(started.jobId);
+        return started;
+    } catch (error) {
+        if (canFallbackHubWrite(error)) return null;
+        throw hubWriteFailure(error, { idempotencyKey: options.body?.idempotency_key });
+    }
+}
+
+async function waitAcceptedHubJob(jobId, timeoutMs) {
+    try { return await hubWaitJob(jobId, timeoutMs); }
+    catch (error) {
+        error.jobId = jobId;
+        error.submissionStatus = 'accepted';
+        throw error;
     }
 }
 
@@ -34,6 +72,16 @@ async function hubWaitJob(jobId, timeoutMs = 20000) {
 }
 
 const TOOLS = [
+    {
+        name: 'ace_download_index',
+        description: '按歌曲ID、來源及實際檔案核對下載狀態；區分已下載、待核對與缺檔，唯讀且不提交生成。',
+        inputSchema: { type: 'object', properties: { root: { type: 'string' }, full: { type: 'boolean' } }, additionalProperties: false },
+    },
+    {
+        name: 'ace_player',
+        description: '啟動獨立本機播放器服務並回傳入口；song_id可定位歌曲，不自動播放、不下載或生成。',
+        inputSchema: { type: 'object', properties: { song_id: { type: 'string' } }, additionalProperties: false },
+    },
     {
         name: 'ace_session_status',
         description: '檢查 ACE Music 登入狀態（擴充功能是否已「同步登入狀態給 Agent」、session 是否有效）。',
@@ -190,7 +238,7 @@ const TOOLS = [
                 types: {
                     type: 'array',
                     items: { type: 'string', enum: ['all', 'stems', 'midi', 'musicxml', 'mp3', 'wav', 'cover'] },
-                    description: '要下載的類型（預設 ["stems","midi","cover"]；"all" = 全部可下載資源；WAV 僅部分模型支援，不支援自動跳過；MIDI/MusicXML 由站點生成，可能扣 credit）',
+                    description: '要下載的類型（預設全部六種：stems,midi,musicxml,mp3,wav,cover）；MIDI/MusicXML 僅限該歌已要求分軌且獲授權時提交，可能扣 credit；WAV 不支援時跳過。',
                 },
                 root: { type: 'string', description: '最上層資料夾名稱（預設 ai音樂）' },
                 force: { type: 'boolean', description: '已下載過的也重新下載' },
@@ -256,6 +304,12 @@ function textContent(value) {
 
 async function callTool(name, args) {
     switch (name) {
+        case 'ace_download_index': {
+            const options = { root: args.root || 'ai音樂', full: !!args.full };
+            try { return await hubCall('/download-index?root=' + encodeURIComponent(options.root) + (options.full ? '&full=1' : ''), { timeoutMs: 30000 }); }
+            catch { return ACE.localDownloadIndex(config(), options); }
+        }
+        case 'ace_player': return ACE.startPlayer(config(), { songId: args.song_id || '' });
         case 'ace_session_status': {
             const [status, page] = await Promise.all([ACE.sessionStatus(), ACE.pageChannelStatus()]);
             return { ...status, page, hint: status.authenticated ? '已可下載' : '請在擴充功能面板按「同步登入狀態給 Agent」' };
@@ -286,13 +340,10 @@ async function callTool(name, args) {
             }
         }
         case 'ace_warm': {
-            try {
-                const started = await hubCall('/warm', { method: 'POST', body: { refresh_session: !!args.refresh_session }, timeoutMs: 1500 });
-                const job = await hubWaitJob(started.jobId, 20000);
-                return { hub: true, ...(job.result || { status: job.status }) };
-            } catch {
-                return await ACE.warmCaches(undefined, { refreshSession: !!args.refresh_session });
-            }
+            const started = await tryHubWrite('/warm', { method: 'POST', body: { refresh_session: !!args.refresh_session }, timeoutMs: 1500 });
+            if (!started) return await ACE.warmCaches(undefined, { refreshSession: !!args.refresh_session });
+            const job = await waitAcceptedHubJob(started.jobId, 20000);
+            return { hub: true, jobId: started.jobId, ...(job.result || { status: job.status }) };
         }
         case 'ace_locate': {
             const params = new URLSearchParams();
@@ -338,15 +389,23 @@ async function callTool(name, args) {
         }
         case 'ace_events': {
             const params = new URLSearchParams();
-            if (args.since) params.set('since', String(args.since));
+            if (args.since != null) params.set('since', String(args.since));
             if (args.type) params.set('type', String(args.type));
             if (args.limit) params.set('limit', String(args.limit));
             try {
                 return { ...(await hubCall('/page/events?' + params.toString(), { timeoutMs: 1500 })), hub: true };
             } catch {
-                // 沒有 Hub：直接讀面板寫的事件檔（沒有 seq，用 at）
-                const events = await ACE.readPageEvents(undefined, {});
-                return { ok: true, hub: false, events: events.slice(-(Number(args.limit) || 50)) };
+                // since 是 Hub 的 seq，不能假裝是頁面檔的 at 時間戳（包含 seq=0）。
+                if (args.since != null) {
+                    const err = new Error('目前無法查詢 Hub 事件序號；since（seq）不能轉成本機 at 時間。請等 Hub 恢復，或省略 since 重新讀取最新本機事件。');
+                    err.code = 'EVENT_CURSOR_UNAVAILABLE';
+                    throw err;
+                }
+                const local = await ACE.readPageEvents(undefined, {});
+                const filtered = args.type ? local.filter((event) => event.type === args.type) : local;
+                const limit = Math.max(1, Math.min(200, Number(args.limit) || 50));
+                const events = filtered.slice(-limit);
+                return { ok: true, hub: false, events, cursor: { kind: 'timestamp', field: 'at', lastAt: events.length ? events[events.length - 1].at : null } };
             }
         }
         case 'ace_library': {
@@ -375,19 +434,14 @@ async function callTool(name, args) {
             return await ACE.randomPrompt(undefined, { model: args.model, mode: args.mode, seed: args.seed, lockA: args.lock_a, lockB: args.lock_b, count: args.count });
         }
         case 'ace_tidy': {
-            let started;
-            try {
-                started = await hubCall('/tidy', { method: 'POST', body: {}, timeoutMs: 2500 });
-            } catch {
-                started = null;
-            }
+            const started = await tryHubWrite('/tidy', { method: 'POST', body: {}, timeoutMs: 2500 });
             if (!started) {
                 // 沒有 Hub：本地直接跑（會花 10–30 秒）
                 const result = await ACE.tidyAll({ cfg: config() });
                 return { hub: false, ...result };
             }
             if (!args.wait) return { hub: true, jobId: started.jobId, status: 'queued', hint: '用 ace_job_status 查進度' };
-            const job = await hubWaitJob(started.jobId, Math.min(1800, Number(args.timeout_sec) || 120) * 1000);
+            const job = await waitAcceptedHubJob(started.jobId, Math.min(1800, Number(args.timeout_sec) || 120) * 1000);
             return { hub: true, jobId: started.jobId, status: job.status, result: job.result, error: job.error };
         }
         case 'ace_backups': {
@@ -434,9 +488,8 @@ async function callTool(name, args) {
             }
         }
         case 'ace_download': {
-            let hubStarted = null;
-            try {
-                const body = {
+            const idempotencyKey = args.idempotency_key ? String(args.idempotency_key) : 'mcp-download-' + randomUUID();
+            const body = {
                     song_ids: args.song_ids,
                     all: !!args.all,
                     query: args.query,
@@ -447,20 +500,17 @@ async function callTool(name, args) {
                     force: !!args.force,
                     concurrency: args.concurrency,
                     dry_run: !!args.dry_run,
+                    idempotency_key: idempotencyKey,
                 };
-                if (args.idempotency_key) body.idempotency_key = String(args.idempotency_key);
-                hubStarted = await hubCall('/download', { method: 'POST', body, timeoutMs: 2500 });
-            } catch {
-                hubStarted = null;
-            }
+            const hubStarted = await tryHubWrite('/download', { method: 'POST', body, timeoutMs: 2500 });
             if (hubStarted) {
                 if (args.dry_run) {
-                    const job = await hubWaitJob(hubStarted.jobId, 20000);
+                    const job = await waitAcceptedHubJob(hubStarted.jobId, 20000);
                     if (job.status === 'failed') throw new Error(job.error || 'hub dry-run 失敗');
                     return { hub: true, ...job.result };
                 }
                 hubJobs.add(hubStarted.jobId);
-                return { jobId: hubStarted.jobId, status: 'queued', hub: true, hint: '用 ace_job_status 查進度（hub job）' };
+                return { jobId: hubStarted.jobId, status: 'queued', hub: true, idempotency_key: idempotencyKey, hint: '用 ace_job_status 查進度（hub job）' };
             }
             // 與 Hub、CLI 共用選歌／類型規則
             const picked = ACE.selectSongs(await ACE.listSongs(), args);
@@ -584,7 +634,13 @@ async function handleMessage(message) {
             const value = await callTool(name, args);
             return result(id, { content: textContent(value), isError: false });
         } catch (err) {
-            return result(id, { content: textContent('錯誤：' + ((err && err.message) || err)), isError: true });
+            const detail = [
+                '錯誤：' + ((err && err.message) || err),
+                err?.jobId ? 'job_id=' + err.jobId : '',
+                err?.idempotencyKey && !String(err.message).includes('idempotency_key=') ? 'idempotency_key=' + err.idempotencyKey : '',
+                err?.submissionStatus ? 'submission_status=' + err.submissionStatus : '',
+            ].filter(Boolean).join('\n');
+            return result(id, { content: textContent(detail), isError: true });
         }
     }
     if (method === 'resources/list') return result(id, { resources: [] });

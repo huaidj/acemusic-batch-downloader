@@ -1,7 +1,8 @@
-# build-host.ps1 — 編譯 ACE Music 本機整理工具（native messaging host）
+# Build to an immutable, source-hashed filename. Never terminate an active host.
+param([string]$OutputDirectory = '')
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$installDir = Join-Path $env:LOCALAPPDATA 'AceMusicDL'
+$installDir = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory) } elseif ($env:ACE_STATE_DIR) { [IO.Path]::GetFullPath($env:ACE_STATE_DIR) } else { Join-Path $env:LOCALAPPDATA 'AceMusicDL' }
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
 $cscCandidates = @(
@@ -11,22 +12,20 @@ $cscCandidates = @(
 $csc = $cscCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $csc) { throw '找不到 .NET Framework 的 csc.exe（Windows 內建，應在 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\）' }
 
-$out = Join-Path $installDir 'acemusic_host.exe'
-$outNew = Join-Path $installDir 'acemusic_host.new.exe'
-if (Test-Path $outNew) { Remove-Item $outNew -Force -ErrorAction SilentlyContinue }
-& $csc /nologo /target:exe /optimize+ /out:"$outNew" /r:System.Web.Extensions.dll (Join-Path $here 'host.cs')
-if ($LASTEXITCODE -ne 0) { throw "編譯失敗（exit $LASTEXITCODE）" }
-
-# 舊的 host 可能還被 Chrome 擴充功能的 native messaging 連線持有，先結束再替換（重試幾次）
-for ($i = 0; $i -lt 5; $i++) {
-    Get-Process acemusic_host -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 500
-    try {
-        Move-Item $outNew $out -Force
-        Copy-Item (Join-Path $here 'host.cs') $installDir -Force
-        Write-Host "已編譯：$out"
-        return
-    } catch {
-        if ($i -eq 4) { throw "無法替換 host.exe（可能仍被使用）：$($_.Exception.Message)" }
-    }
+$source = Join-Path $here 'host.cs'
+$sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()
+$out = Join-Path $installDir ('acemusic_host-' + $sourceHash.Substring(0, 16) + '.exe')
+$recordPath = Join-Path $installDir 'host-build.json'
+$reusable = $false
+if ((Test-Path -LiteralPath $out) -and (Test-Path -LiteralPath $recordPath)) {
+    $previous = Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json
+    $reusable = $previous.sourceHash -eq $sourceHash -and $previous.sha256 -eq (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLowerInvariant()
 }
+if (-not $reusable) {
+    if (Test-Path -LiteralPath $out) { $out = Join-Path $installDir ('acemusic_host-' + $sourceHash.Substring(0, 16) + '-' + [guid]::NewGuid().ToString('N') + '.exe') }
+    & $csc /nologo /target:exe /optimize+ (('/out:') + $out) /r:System.Web.Extensions.dll $source
+    if ($LASTEXITCODE -ne 0) { throw "Native host compilation failed ($LASTEXITCODE). Active host was preserved." }
+}
+$record = [ordered]@{ executable=$out; sourceHash=$sourceHash; sha256=(Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLowerInvariant(); builtAt=[DateTime]::UtcNow.ToString('o') }
+$record | ConvertTo-Json | Set-Content -LiteralPath $recordPath -Encoding UTF8
+Write-Host ('Compiled without stopping an active host: ' + $out)

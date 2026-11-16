@@ -173,7 +173,8 @@ async function refresh() {
   try {
     state.data = await api('/api/state');
     render();
-  } catch (err) { toast('讀取狀態失敗：' + err.message); }
+    return true;
+  } catch (err) { toast('讀取狀態失敗：' + err.message); return false; }
 }
 
 function render() {
@@ -205,7 +206,7 @@ function render() {
     : '<div class="hint">沒有待分析的預先監聽任務。</div>';
   document.querySelectorAll('[data-pending]').forEach((btn) => btn.addEventListener('click', () => autoDecide(btn.dataset.pending)));
   const lastDecisions = d.events.filter((event) => event.type === 'decision.applied').slice(-2);
-  $('decisionBox').innerHTML = lastDecisions.length ? lastDecisions.map((event) => `<div class="decision small">已套用決策 ${event.payload.decisionId}：${escapeHtml(event.payload.trackId)} → ${event.payload.slot}</div>`).join('') : '';
+  $('decisionBox').innerHTML = lastDecisions.length ? lastDecisions.map((event) => `<div class="decision small">已套用決策 ${escapeHtml(event.payload.decisionId)}：${escapeHtml(event.payload.trackId)} → ${escapeHtml(event.payload.slot)}</div>`).join('') : '';
   const prompts = (d.prompts || []).slice(-3);
   const generations = (d.generations || []).slice(-3);
   $('promptBox').innerHTML =
@@ -330,7 +331,7 @@ $('btnSubmit').addEventListener('click', async () => {
   } catch (err) { toast('送出失敗：' + err.message); }
 });
 player.addEventListener('ended', async () => {
-  try { const data = await api('/api/queue', { method: 'POST', body: JSON.stringify({}) }); if (data.track) { await api('/api/play', { method: 'POST', body: JSON.stringify({ trackId: data.track.id }) }); player.play().catch(() => {}); refresh(); } }
+  try { const data = await api('/api/queue', { method: 'POST', body: JSON.stringify({}) }); if (data.track) { await api('/api/play', { method: 'POST', body: JSON.stringify({ trackId: data.track.id }) }); if (await refresh() && currentTrack && currentTrack.id === data.track.id) await player.play(); } }
   catch (err) { toast('自動接歌失敗：' + err.message); }
 });
 refresh();

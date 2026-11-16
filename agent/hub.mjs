@@ -358,6 +358,8 @@ const ENDPOINTS = [
   { method: 'GET', path: '/songs', query: 'q, undownloaded=1, limit, compact=0', desc: '歌單（記憶體快照）' },
   { method: 'GET', path: '/locate', query: 'latest, q, song, views=1, limit_files', desc: '歌曲 → 本機真實目錄與檔案' },
   { method: 'GET', path: '/library', query: 'sizes=1', desc: '曲庫分類總覽' },
+  { method: 'GET', path: '/download-index', query: 'root, full=1', desc: '按歌曲 ID 與實存檔案核對下載狀態' },
+  { method: 'POST', path: '/player', desc: '啟動獨立本機播放器（不提交生成）' },
   { method: 'GET', path: '/favorites', desc: '面板的收藏清單（新 → 舊）' },
   { method: 'GET', path: '/prompts/random', query: 'model, mode(idea|custom), seed, lock_a, lock_b, count', desc: '隨機提示詞（依模型＋模式選詞典；不提交生成）' },
   { method: 'GET', path: '/page', desc: '頁面通道健康度' },
@@ -486,6 +488,10 @@ const server = http.createServer(async (req, res) => {
       });
       return json(res, 200, result);
     }
+    if (pathname === '/download-index' && req.method === 'GET') {
+      return json(res, 200, await ACE.localDownloadIndex(cfg, { root: url.searchParams.get('root') || 'ai音樂', full: url.searchParams.get('full') === '1' }));
+    }
+    if (pathname === '/player' && req.method === 'POST') return json(res, 200, await ACE.startPlayer(cfg));
 
     if (pathname === '/page' && req.method === 'GET') {
       return json(res, 200, { ok: true, ...(await ACE.pageChannelStatus(cfg)), lastEvent: lastPageEvent });
@@ -507,7 +513,7 @@ const server = http.createServer(async (req, res) => {
       const timeoutMs = Number(url.searchParams.get('timeout') || 60000);
       const match = (e) => e.type === type && (!taskId || e.task_id === taskId || (Array.isArray(e.task_ids) && e.task_ids.includes(taskId)));
       // since 之後已經發生過 → 立即回
-      const already = since ? EVENTS.find((e) => e.seq > since && match(e)) : null;
+      const already = url.searchParams.has('since') ? EVENTS.find((e) => e.seq > since && match(e)) : null;
       const event = already || (await waitForEvent(match, timeoutMs));
       return json(res, 200, { ok: true, timedOut: !event, event });
     }

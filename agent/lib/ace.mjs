@@ -7,10 +7,15 @@ import { spawnSync } from 'node:child_process';
 import { config, readJson, writeJson, exists, toWin, sleep, appendLog, cacheRead, cacheWrite, cacheClear, cachePeek } from './config.mjs';
 import { loadShared } from './shared.mjs';
 import { inspectAudioFile, validateAudioBuffer } from './audio-library.mjs';
+import { hasLibraryWriteLease, withLibraryWriteLease } from './library-lease.mjs';
+import { invalidateLocalIndex } from './local-index-service.mjs';
+import { sameFileContent, moveFileSafely, recordRelocations } from './file-ops.mjs';
+export { localDownloadIndex } from './local-index-service.mjs';
+export { startPlayer } from './player-process.mjs';
 
 const { N, P, PR } = loadShared();
 const SNAPSHOT_NAME = 'library-snapshot';
-function clearFsCaches(cfg) { cacheClear('fs-index', cfg); cacheClear(SNAPSHOT_NAME, cfg); }
+function clearFsCaches(cfg) { cacheClear('fs-index', cfg); cacheClear(SNAPSHOT_NAME, cfg); invalidateLocalIndex(cfg); }
 const STEM_LABELS = Object.values(N.STEM_TYPE_NAMES).map((s) => s.toLowerCase());
 const FILE_TYPES = ['stems', 'midi', 'musicxml', 'mp3', 'wav', 'cover'];
 
@@ -68,17 +73,26 @@ export function absolutize(cfg, url) {
 }
 
 async function aceFetch(cfg, session, url, options = {}) {
-    const target = absolutize(cfg, url);
-    const headers = Object.assign(
-        {
-            'User-Agent': session.ua || cfg.ua,
-            Accept: '*/*',
-            Referer: cfg.baseUrl + '/create/',
-        },
-        session.cookie ? { Cookie: session.cookie } : {},
-        options.headers || {},
-    );
-    return fetch(target, { ...options, headers, redirect: 'follow' });
+    let target = new URL(absolutize(cfg, url));
+    const origin = new URL(cfg.baseUrl).origin;
+    let method = String(options.method || 'GET').toUpperCase();
+    let body = options.body;
+    const signal = options.signal || AbortSignal.timeout(180000);
+    for (let redirect = 0; redirect <= 5; redirect++) {
+        if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password) throw new Error('不支援的站點檔案來源');
+        const headers = new Headers({ 'User-Agent': session.ua || cfg.ua, Accept: '*/*', Referer: cfg.baseUrl + '/create/', ...options.headers });
+        if (target.origin === origin && session.cookie) headers.set('Cookie', session.cookie);
+        else { headers.delete('Cookie'); headers.delete('Authorization'); headers.delete('Proxy-Authorization'); }
+        const response = await fetch(target, { ...options, method, body, signal, headers, redirect: 'manual' });
+        if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+        const location = response.headers.get('location');
+        await response.body?.cancel();
+        if (!location || redirect === 5) throw new Error('站點檔案轉址過多，已停止');
+        const next = new URL(location, target);
+        if (!['GET', 'HEAD'].includes(method) && next.origin !== origin) throw Object.assign(new Error('站點寫入請求轉址到其他來源，提交狀態待核對'), { code: 'SUBMISSION_UNKNOWN' });
+        if (response.status === 303 || ([301, 302].includes(response.status) && method === 'POST')) { method = 'GET'; body = undefined; }
+        target = next;
+    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -597,7 +611,7 @@ export function selectSongs(songs, input = {}) {
 }
 
 /** 檔案類型：'all' 展開成全部（FILE_TYPES 為唯一清單）；未知類型丟錯，避免靜默忽略 */
-export const DEFAULT_DOWNLOAD_TYPES = Object.freeze(['stems', 'midi', 'cover', 'wav']);
+export const DEFAULT_DOWNLOAD_TYPES = Object.freeze(['stems', 'midi', 'musicxml', 'mp3', 'wav', 'cover']);
 export function normalizeTypes(types, fallback = DEFAULT_DOWNLOAD_TYPES) {
     const list = (Array.isArray(types) ? types : types ? String(types).split(',') : []).map((t) => String(t).trim()).filter(Boolean);
     if (!list.length) return [...fallback];
@@ -741,6 +755,7 @@ async function createApiFile(cfg, session, songId, kind) {
     const endpoint = `/api/songs/${encodeURIComponent(songId)}/download`;
     const deadline = Date.now() + 180000;
     for (let attempt = 0; attempt < 2; attempt += 1) {
+        await appendLog(JSON.stringify({ event: 'notation_submit', taskId: songId, kind, attempt: attempt + 1 }), cfg);
         let res = await aceFetch(cfg, session, endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -817,10 +832,12 @@ async function downloadToFile(cfg, session, url, relPath) {
     if (!buffer.length) throw new Error('檔案為空');
     const extension = path.extname(relPath).slice(1).toLowerCase();
     if (extension === 'wav' || extension === 'mp3') validateAudioBuffer(buffer, extension);
-    const tmp = target + '.part';
-    await fsp.writeFile(tmp, buffer);
-    await fsp.rename(tmp, target);
-    return { target, bytes: buffer.length };
+    const tmp = target + '.' + process.pid + '.' + crypto.randomUUID() + '.part';
+    await fsp.writeFile(tmp, buffer, { flag: 'wx' });
+    // A fresh source/version must not overwrite an older take or a user edit.
+    // The verified file operation chooses a distinct final name on collision.
+    const moved = await moveFileSafely(cfg, tmp, target, { conflict: 'unique', reason: 'download-file' });
+    return { target: moved.to, bytes: buffer.length };
 }
 
 export async function loadState(cfg = config()) {
@@ -840,13 +857,24 @@ export async function loadState(cfg = config()) {
 }
 
 async function saveState(cfg, buildPlanResult, state) {
+    const current = await readJson(cfg.stateFile, {});
+    const history = { ...(current.history || {}) };
+    for (const [id, incoming] of Object.entries(state.history || {})) {
+        const previous = history[id] || {};
+        const files = { ...(previous.files || {}) };
+        for (const [key, file] of Object.entries(incoming.files || {})) {
+            if (!files[key] || Number(file.at || 0) > Number(files[key].at || 0)) files[key] = file;
+        }
+        history[id] = { ...incoming, ...previous, files };
+    }
     await writeJson(cfg.stateFile, {
-        folderByTask: buildPlanResult ? buildPlanResult.folderByTask : state.folderByTask,
-        ownerByFolder: buildPlanResult ? buildPlanResult.ownerByFolder : state.ownerByFolder,
-        history: state.history,
-        aliases: state.aliases || {},
-        removedPaths: state.removedPaths || {},
-        unavailable: state.unavailable || {},
+        ...current,
+        folderByTask: { ...(buildPlanResult ? buildPlanResult.folderByTask : state.folderByTask), ...(current.folderByTask || {}) },
+        ownerByFolder: { ...(buildPlanResult ? buildPlanResult.ownerByFolder : state.ownerByFolder), ...(current.ownerByFolder || {}) },
+        history,
+        aliases: { ...(state.aliases || {}), ...(current.aliases || {}) },
+        removedPaths: { ...(state.removedPaths || {}), ...(current.removedPaths || {}) },
+        unavailable: P.mergeUnavailable(current.unavailable || {}, state.unavailable || {}),
     });
 }
 
@@ -892,76 +920,75 @@ export async function randomPrompt(cfg = config(), { model = 'acemusic-v1.1', mo
     return { ok: clean.every((r) => r.ok), model, mode, limitsFrom: siteModels ? 'site' : 'fallback', count: clean.length, prompts: clean };
 }
 export async function buildPlanForSongs(cfg = config(), songs, options = {}) {
+    const { buildLocalDownloadIndex } = await import('./local-index.mjs');
+    const { compactLocalIndex } = await import('./local-index-service.mjs');
     const state = await loadState(cfg);
-    const existingHistory = {};
-    for (const [taskId, entry] of Object.entries(state.history || {})) {
-        const files = {};
-        for (const [kind, info] of Object.entries(entry.files || {})) {
-            const absolute = info.absolute || (info.path ? path.join(cfg.downloadDir, toWin(info.path)) : '');
-            if (!absolute || !exists(absolute)) continue;
-            if ((kind === 'wav' || kind === 'mp3') && (await inspectAudioFile(absolute)).validity === 'damaged') continue;
-            files[kind] = info;
-        }
-        existingHistory[taskId] = { ...entry, files };
-    }
-    const types = options.types || ['stems', 'midi', 'wav'];
-    const lossyModels = (Array.isArray(types) ? types : [...types]).includes('wav') ? await getLossyModels(cfg) : null;
+    const types = options.types || DEFAULT_DOWNLOAD_TYPES;
+    const lossyModels = P.normalizeOptions({ types }).types.has('wav') ? await getLossyModels(cfg) : null;
     const plan = P.buildDownloadPlan({
         songs,
-        options: {
-            types,
-            root: options.root || 'ai音樂',
-            typeFolders: !!options.typeFolders,
-            force: !!options.force,
-            origin: cfg.baseUrl,
-            lossyModels,
-        },
-        state: { ...state, history: existingHistory },
-        origin: cfg.baseUrl,
+        options: { types, root: options.root || 'ai音樂', typeFolders: !!options.typeFolders, force: !!options.force, origin: cfg.baseUrl, lossyModels },
+        // A persisted path alone is not completion evidence. The exact index below is authoritative.
+        state: { ...state, history: {} }, origin: cfg.baseUrl,
     });
+    const page = await readJson(path.join(cfg.stateDir, 'page-songs.json'), {});
+    const cached = await readJson(path.join(cfg.stateDir, 'cache', 'songs.json'), {});
+    const pool = new Map([...(cached.known || []), ...(cached.songs || []), ...(page.songs || []), ...(songs || [])].filter((song) => song && song.task_id).map((song) => [song.task_id, song]));
+    const exact = await buildLocalDownloadIndex({ cfg, root: plan.options.root, songs: [...pool.values()] });
+    Object.defineProperty(plan, '_exactLocalIndex', { value: compactLocalIndex(exact), configurable: true });
+    await applyLocalSkips(cfg, plan, state);
     return { plan, state };
 }
 
+
 /** 以本機檔案／去重紀錄／alias 套用跳過（給 runDownload 與 dry-run 共用） */
 export async function applyLocalSkips(cfg = config(), plan, state = {}) {
-    const index = await collectDownloadIndex(cfg);
-    const verified = await readJson(path.join(cfg.stateDir, 'verified-audio.json'), {});
-    const verifiedByTask = new Map((Array.isArray(verified.files) ? verified.files : []).map((file) => [file.task_id + '|' + file.kind, file]));
+    if (plan.options?.force) return 0;
+    let exact = plan._exactLocalIndex;
+    if (!exact) {
+        const { buildLocalDownloadIndex } = await import('./local-index.mjs');
+        const { compactLocalIndex } = await import('./local-index-service.mjs');
+        const page = await readJson(path.join(cfg.stateDir, 'page-songs.json'), {});
+        const cached = await readJson(path.join(cfg.stateDir, 'cache', 'songs.json'), {});
+        const pool = new Map([...(cached.known || []), ...(cached.songs || []), ...(page.songs || [])].filter((song) => song && song.task_id).map((song) => [song.task_id, song]));
+        for (const task of plan.tasks || []) {
+            if (pool.has(task.task_id)) continue;
+            const tracks = (task.files || []).filter((file) => file.kind === 'stems' && String(file.key || '').startsWith('stem:') && file.sourceUrl)
+                .map((file) => ({ id: file.key.slice(5), type: file.stemType || file.label, local_audio: file.sourceUrl }));
+            pool.set(task.task_id, { task_id: task.task_id, status: 'succeeded', capability: task.capability || 'music_generate', model: task.model || null,
+                local_audio: (task.files || []).find((file) => file.kind === 'mp3' && file.sourceUrl)?.sourceUrl || '/data/' + task.task_id + '.mp3',
+                meta: { title: task.title || '' }, stems: task.stems || (task.stemsMode && tracks.length ? { [task.stemsMode]: { status: 'done', tracks } } : {}) });
+        }
+        exact = compactLocalIndex(await buildLocalDownloadIndex({ cfg, root: plan.options?.root || 'ai音樂', songs: [...pool.values()] }));
+        Object.defineProperty(plan, '_exactLocalIndex', { value: exact, configurable: true });
+    }
     let skipped = 0;
-    for (const task of plan.tasks) {
-        for (const file of task.files) {
+    for (const task of plan.tasks || []) {
+        const completed = new Set(exact.byTask[task.task_id]?.completedKeys || []);
+        for (const file of task.files || []) {
             if (file.skip) continue;
-            const proof = verifiedByTask.get(task.task_id + '|' + file.kind);
-            let found = !!(proof && proof.absolute && exists(proof.absolute) && fs.statSync(proof.absolute).size === proof.bytes);
-            if (found && file.kind === 'wav') found = (await inspectAudioFile(proof.absolute)).validity === 'valid';
-            if (!found) {
-                const rel = String(file.path).toLowerCase();
-                if (index.rel.has(rel)) {
-                    found = true;
-                }
-                // 名稱後備：分類庫（成品MP3／採樣包／…）已有同名檔；分軌檔名含 take 編號，同名即同一軌
-                if (!found && file.kind !== 'mp3' && file.kind !== 'wav') found = index.names.has(path.basename(String(file.path)).toLowerCase());
-                if (found && (file.kind === 'mp3' || file.kind === 'wav')) {
-                    const actual = path.join(cfg.downloadDir, toWin(file.path));
-                    found = (await inspectAudioFile(actual)).validity !== 'damaged';
-                }
-            }
-            if (found) {
-                file.skip = true;
-                skipped += 1;
-            }
+            const key = file.key || (file.kind !== 'stems' ? file.kind : null);
+            if (!key || !completed.has(key)) continue;
+            file.skip = true;
+            skipped++;
         }
     }
     if (skipped) {
-        plan.skipped += skipped;
-        plan.toDownload = Math.max(0, plan.toDownload - skipped);
+        plan.skipped = (Number(plan.skipped) || 0) + skipped;
+        plan.toDownload = Math.max(0, Number(plan.toDownload) - skipped);
     }
     return skipped;
 }
 
+
 export async function runDownload({ songs, options = {}, concurrency = 4, onProgress = null, isCancelled = null, cfg = config() }) {
+    if (!hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => runDownload(...arguments), { isCancelled });
+    const notifyProgress = (value) => { try { onProgress?.(value); } catch { /* Display failures do not undo completed file writes. */ } };
     const session = await loadSession(cfg);
     const { plan, state } = await buildPlanForSongs(cfg, songs, options);
+    const runId = crypto.randomUUID();
+    const log = (event, fields = {}) => appendLog(JSON.stringify({ event, runId, ...fields }), cfg);
+    await log('download_start', { songs: songs.length, total: plan.total, types: plan.options.types, force: !!options.force });
     await saveState(cfg, plan, state);
 
     // 以實際檔案存在／去重紀錄／alias 再跳過一次（之前由擴充功能/CLI/站點下載過的檔案）
@@ -970,6 +997,7 @@ export async function runDownload({ songs, options = {}, concurrency = 4, onProg
     }
 
     if (!plan.toDownload) {
+        await log('download_done', { done: 0, skipped: plan.skipped, failed: 0, stateSaved: true });
         return { ok: true, message: '沒有需要下載的檔案（可加 force=true 或勾「強制重下」）', total: plan.total, done: 0, skipped: plan.skipped, failed: 0, failedList: [] };
     }
 
@@ -1021,6 +1049,7 @@ export async function runDownload({ songs, options = {}, concurrency = 4, onProg
     const failedList = [];
     let cursor = 0;
     const total = entries.length;
+    const stateWarnings = [];
     const workers = Math.min(Math.max(1, concurrency), 6);
 
     const worker = async () => {
@@ -1041,22 +1070,27 @@ export async function runDownload({ songs, options = {}, concurrency = 4, onProg
                 done += 1;
                 bytes += result.bytes;
                 state.history = P.mergeHistory(state.history, task.task_id, task.folder, file, result.target);
-                if (onProgress) onProgress({ done, skipped, failed, total, current: file.path, bytes });
-                await saveState(cfg, plan, state);
+                await log('file_complete', { taskId: task.task_id, kind: file.kind, bytes: result.bytes });
+                notifyProgress({ done, skipped, failed, total, current: file.path, bytes });
+                try { await saveState(cfg, plan, state); }
+                catch (error) { stateWarnings.push({ taskId: task.task_id, kind: file.kind, code: error.code || 'STATE_WRITE_FAILED' }); }
             } catch (err) {
                 if (err && (err.code === 'WAV_UNSUPPORTED' || err.code === 'NOT_AVAILABLE' || err.code === 'RATE_LIMIT')) {
                     skipped += 1;
+                    await log('file_skipped', { taskId: task.task_id, kind: file.kind, code: err.code });
                     if (err.code === 'NOT_AVAILABLE') {
                         // 記住「站點不提供」，下次不再請求、狀態顯示 N/A（force 可重試）
                         state.unavailable = P.markUnavailable(state.unavailable, task.task_id, file.kind, 'no_download');
-                        await saveState(cfg, plan, state);
+                        try { await saveState(cfg, plan, state); }
+                        catch (error) { stateWarnings.push({ taskId: task.task_id, kind: file.kind, code: error.code || 'STATE_WRITE_FAILED' }); }
                     }
-                    if (onProgress) onProgress({ done, skipped, failed, total, current: file.path, bytes, skippedReason: err.message });
+                    notifyProgress({ done, skipped, failed, total, current: file.path, bytes, skippedReason: err.message });
                     continue;
                 }
                 failed += 1;
+                await log('file_failed', { taskId: task.task_id, kind: file.kind, code: String(err.code || 'DOWNLOAD_FAILED').slice(0, 80) });
                 failedList.push({ name: `${task.folder}/${file.filename}`, error: String((err && err.message) || err) });
-                if (onProgress) onProgress({ done, skipped, failed, total, current: file.path, bytes });
+                notifyProgress({ done, skipped, failed, total, current: file.path, bytes });
             }
         }
     };
@@ -1065,9 +1099,13 @@ export async function runDownload({ songs, options = {}, concurrency = 4, onProg
     await prepPromise;
 
     skipped += plan.skipped;
-    await saveState(cfg, plan, state);
+    let stateSaved = true;
+    try { await saveState(cfg, plan, state); }
+    catch (error) { stateSaved = false; stateWarnings.push({ code: error.code || 'STATE_WRITE_FAILED' }); }
     clearFsCaches(cfg); // 下載後讓 list/overview 立即看到新檔案
-    return { ok: failed === 0, total: plan.total, done, skipped, failed, bytes, failedList, elapsedMs: Date.now() - startedAt };
+    if (stateWarnings.length) await appendLog(`download-state saved=${stateSaved} warnings=${stateWarnings.length}`, cfg);
+    await log('download_done', { done, skipped, failed, stateSaved, stateWarnings: stateWarnings.length });
+    return { ok: failed === 0 && stateSaved, runId, total: plan.total, done, skipped, failed, bytes, failedList, stateSaved, stateWarnings, elapsedMs: Date.now() - startedAt };
 }
 
 /* ------------------------------------------------------------------ *
@@ -1169,9 +1207,12 @@ export async function extractFullMp3s({
     isCancelled = null,
     cfg = config(),
 } = {}) {
+    if (!hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => extractFullMp3s(...arguments), { isCancelled });
     const session = await loadSession(cfg);
     const all = songs || (await listSongs(cfg));
-    const list = all.filter((song) => song && song.task_id && P.isDone(song));
+    const completed = all.filter((song) => song && song.task_id && P.isDone(song));
+    const nativeOnly = (song) => song.capability !== 'music_generate' && /\.(?:wav|flac|m4a|ogg|aif|aiff|aifc)$/i.test(String(song.local_audio || '').split(/[?#]/)[0]);
+    const list = completed.filter((song) => !nativeOnly(song));
     const orderedAll = [...list].sort(
         (a, b) => (Number(a.created_at) || 0) - (Number(b.created_at) || 0) || songTitleFile(a).localeCompare(songTitleFile(b)) || String(a.task_id).localeCompare(String(b.task_id)),
     );
@@ -1234,7 +1275,16 @@ export async function extractFullMp3s({
             ? isSongAudioUrl(song, entry.source)
             : ownsPath(song, entry.source);
     };
+    const invalidMp3Paths = new Set();
+    const candidates = new Set([...filesByTask.values()].flat().map((item) => item.full));
+    for (const entry of previousItems) if (entry?.file && path.basename(entry.file) === entry.file) candidates.add(path.join(outDir, entry.file));
+    for (const full of candidates) {
+        if (!exists(full)) continue;
+        const inspected = await inspectAudioFile(full);
+        if (inspected.validity === 'damaged' || !['mp3', 'unknown'].includes(inspected.format)) invalidMp3Paths.add(path.resolve(full).toLowerCase());
+    }
     const usableFile = (full, expectedBytes = null) => {
+        if (invalidMp3Paths.has(path.resolve(full).toLowerCase())) return false;
         try {
             const stat = fs.statSync(full);
             return stat.isFile() && stat.size > 0 && (!(Number(expectedBytes) > 0) || stat.size === Number(expectedBytes));
@@ -1285,6 +1335,7 @@ export async function extractFullMp3s({
         ok: true,
         folder: outDir,
         total: items.length,
+        unsupported: completed.filter(nativeOnly).map((song) => ({ task_id: song.task_id, title: songTitleText(song), reason: '原始音檔不是 MP3，保留原格式' })),
         skipped: 0,
         copied: 0,
         downloaded: 0,
@@ -1335,13 +1386,14 @@ export async function extractFullMp3s({
                         mode = 'copied';
                         report.copied += 1;
                     } else {
-                        const url = item.song.local_audio ? absolutize(cfg, item.song.local_audio) : await resolveFullAudioUrl(cfg, session, item.song);
+                        const url = /\.mp3$/i.test(String(item.song.local_audio || '').split(/[?#]/)[0]) ? absolutize(cfg, item.song.local_audio) : await resolveFullAudioUrl(cfg, session, item.song);
                         const res = await aceFetch(cfg, session, url, { headers: { Accept: '*/*' } });
-                        if (!res.ok) throw new Error('HTTP ' + res.status + '：' + String(url).slice(-70));
+                        if (!res.ok) throw new Error('MP3 檔案下載 HTTP ' + res.status);
                         const contentType = String(res.headers.get('content-type') || '');
                         if (/json|html/i.test(contentType)) throw new Error('伺服器回傳非音檔內容（' + contentType + '）');
                         const buffer = Buffer.from(await res.arrayBuffer());
                         if (!buffer.length) throw new Error('檔案為空');
+                        validateAudioBuffer(buffer, 'mp3');
                         await fsp.writeFile(temp, buffer);
                         await fsp.rename(temp, target);
                         source = url;
@@ -1395,196 +1447,100 @@ export async function extractFullMp3s({
 /**
  * 把各歌曲資料夾內的 WAV 集中到 <root>/<folder>/（預設「成品WAV」）。
  * - 只搬「歌名資料夾」內的 WAV；成品MP3／採樣包／封面／音頻分類／自訂資料夾不動
- * - 同名同內容 → 移除來源；同名不同內容 → 改名 (n)
+ * - 同名同內容 → 來源歸檔保留回滾；同名不同內容 → 改名 (n)
  * - 保留硬連結（搬移後音頻分類的 mirror 仍然有效）
  */
 export async function collectFullWavs({ root = 'ai音樂', folder = '成品WAV', cfg = config(), onProgress = null } = {}) {
-    const rootDir = path.join(cfg.downloadDir, toWin(root));
-    const outDir = path.join(rootDir, folder);
+    if (!hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => collectFullWavs(...arguments));
+    const { moveFileSafely, recordRelocations } = await import('./file-ops.mjs');
+    const rootDir = path.join(cfg.downloadDir, toWin(root)), outDir = path.join(rootDir, folder);
     const report = { ok: true, total: 0, moved: 0, skipped: 0, duplicates: 0, failed: [], outDir, startedAt: new Date().toISOString() };
-    if (!exists(rootDir)) {
-        report.ok = false;
-        report.error = '找不到 ' + rootDir;
-        return report;
-    }
-    const state = await loadState(cfg);
-    const removedPaths = state.removedPaths || {};
+    if (!exists(rootDir)) return { ...report, ok: false, error: '找不到 ' + rootDir };
     const protectedTop = new Set([...DEDUPE_CATEGORY_DIRS, folder, '_未對應', ...DEDUPE_CUSTOM_TOP]);
+    const roles = new Set([...Object.values(N.STEM_TYPE_NAMES), 'Piano', 'Percussion', 'Melody', 'Other'].map((value) => String(value).toLowerCase()));
     const files = walkFiles(rootDir, 4, [], 60000).filter((file) => {
         if (!/\.wav$/i.test(file)) return false;
-        if (file.toLowerCase().startsWith(outDir.toLowerCase())) return false;
-        // 「歌名 - Vocals.wav」是分軌，交給 collectSamples 放 採樣包WAV；成品WAV 只收完整歌曲
-        if (/ - /i.test(path.basename(file))) return false;
-        const rel = path.relative(rootDir, file);
-        const top = rel.split(path.sep)[0];
-        return !protectedTop.has(top);
+        const parts = path.relative(rootDir, file).split(path.sep);
+        if (protectedTop.has(parts[0])) return false;
+        if (parts.slice(1, -1).some((part) => /^(stems|採樣包(?:WAV)?)$/i.test(part))) return false;
+        const stem = path.basename(file, path.extname(file));
+        if (stem.toLowerCase() === parts[0].toLowerCase() || parts.slice(1, -1).some((part) => /^Audio$/i.test(part))) return true;
+        const suffix = stem.split(' - ').at(-1).replace(/ \(\d+\)$/, '').trim().toLowerCase();
+        return !stem.includes(' - ') || !roles.has(suffix);
     });
-    const hashOf = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
     await fsp.mkdir(outDir, { recursive: true });
+    const moves = [];
     for (const file of files) {
-        report.total += 1;
+        report.total++;
         try {
-            const relKey = path.relative(cfg.downloadDir, file).split(path.sep).join('/').toLowerCase();
-            if (removedPaths[relKey]) {
-                report.skipped += 1;
-                continue;
-            }
-            const base = path.basename(file);
-            let target = path.join(outDir, base);
-            if (exists(target)) {
-                if (fs.statSync(target).size === fs.statSync(file).size && hashOf(target) === hashOf(file)) {
-                    fs.rmSync(file, { force: true });
-                    report.duplicates += 1;
-                    if (typeof onProgress === 'function') onProgress({ done: report.total, total: files.length, current: base });
-                    continue;
-                }
-                let index = 2;
-                while (exists(target)) {
-                    target = path.join(outDir, `${path.basename(base, path.extname(base))} (${index})${path.extname(base)}`);
-                    index += 1;
-                    if (index > 99) break;
-                }
-            }
-            // rename 可能跨磁碟失敗 → 複製後刪除
-            try {
-                await fsp.rename(file, target);
-            } catch {
-                await fsp.copyFile(file, target);
-                await fsp.unlink(file);
-            }
-            report.moved += 1;
-            if (typeof onProgress === 'function') onProgress({ done: report.total, total: files.length, current: base });
-        } catch (err) {
-            report.failed.push({ file, error: String((err && err.message) || err) });
-        }
+            const result = await moveFileSafely(cfg, file, path.join(outDir, path.basename(file)), { conflict: 'unique', reason: 'collect_full_wavs' });
+            if (result.moved) report.moved++;
+            else if (result.deduped) report.duplicates++;
+            else report.skipped++;
+            if (result.moved || result.deduped) moves.push(result);
+        } catch (error) { report.failed.push({ file, error: String(error.message || error) }); }
+        if (typeof onProgress === 'function') onProgress({ done: report.total, total: files.length, current: path.basename(file) });
     }
+    await recordRelocations(cfg, moves);
     report.finishedAt = new Date().toISOString();
     report.ok = report.failed.length === 0;
     clearFsCaches(cfg);
     return report;
 }
 
+
 /**
  * 把各歌曲資料夾內的「分軌/採樣」音檔集中到 <root>/<folder>/，檔名保留 <歌名> - <分軌>.mp3
- * 只複製、不搬動原始檔案；已存在的跳過。
+ * 只複製、不搬動原始檔案；相同內容才跳過，同名不同內容保留獨立版本。
  */
 export async function collectSamples({ root = 'ai音樂', folder = '採樣包', cfg = config() } = {}) {
-    const rootDir = path.join(cfg.downloadDir, toWin(root));
-    const outDir = path.join(rootDir, folder);
-    const wavOutDir = path.join(rootDir, '採樣包WAV');
+    if (!hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => collectSamples(...arguments));
+    const { copyFileSafely } = await import('./file-ops.mjs');
+    const rootDir = path.join(cfg.downloadDir, toWin(root)), outDir = path.join(rootDir, folder), wavOutDir = path.join(rootDir, '採樣包WAV');
     await fsp.mkdir(outDir, { recursive: true });
-    const stemLabelLookup = new Map(Object.values(N.STEM_TYPE_NAMES).map((value) => [String(value).toLowerCase(), String(value)]));
-    const typeFolderFor = (base) => {
-        const stem = base.replace(/\.[^.]+$/, '');
-        const parts = stem.split(' - ');
-        const rawLabel = parts.length > 1 ? parts.slice(1).join(' - ').trim() : '';
-        const canonical = stemLabelLookup.get(rawLabel.toLowerCase()) || (rawLabel ? N.stemLabel(rawLabel) : 'Other');
-        const safe = N.sanitizeComponent(canonical || 'Other', 40) || 'Other';
-        return /^(vocals|drums|bass|guitar|keys|synth|strings|fx|backing vocals|other|piano|percussion|melody)$/i.test(safe)
-            ? safe
-            : 'Other';
-    };
-    // 舊版平面採樣夾（採樣/）→ 自動搬到 採樣包/<類型>/
-    const legacyDir = path.join(rootDir, '採樣');
-    const migrated = [];
-    if (folder !== '採樣' && exists(legacyDir)) {
-        for (const full of walkFiles(legacyDir, 2, [], 30000)) {
-            if (!/\.(mp3|wav|flac|aiff?)$/i.test(full)) continue;
-            const base = path.basename(full);
-            if (!/ - /i.test(base)) continue;
-            const isWav = /\.wav$/i.test(base);
-            const typeDir = path.join(isWav ? wavOutDir : outDir, typeFolderFor(base));
-            await fsp.mkdir(typeDir, { recursive: true });
-            const target = path.join(typeDir, base);
-            try {
-                if (!exists(target)) {
-                    await fsp.copyFile(full, target + '.part');
-                    await fsp.rename(target + '.part', target);
-                    migrated.push(base);
-                }
-            } catch {
-                /* ignore */
-            }
-        }
-    }
-    const excludeTop = new Set([folder, '採樣包WAV', '採樣', '_成品MP3', '_未對應', 'sample', 'WAI', 'WAMI', '俱樂部版', '舊版對照', '成品MP3', '成品WAV', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他', '音頻分類']);
-    const files = walkFiles(rootDir, 3, [], 30000);
-    const report = { ok: true, folder: outDir, total: 0, copied: 0, skipped: 0, migrated: migrated.length, failed: [], bytes: 0 };
-    const manifestPath = path.join(outDir, '_manifest.json');
-    const previous = await readJson(manifestPath).catch(() => null);
-    const manifest = new Map();
-    for (const entry of (previous && Array.isArray(previous.items) ? previous.items : [])) {
-        if (entry && entry.file) manifest.set(String(entry.file), entry);
-    }
-    const pending = [];
-    const seen = new Set();
-    for (const full of files) {
+    const roles = new Map([...Object.values(N.STEM_TYPE_NAMES), 'Piano', 'Percussion', 'Melody', 'Other'].map((value) => [String(value).toLowerCase(), String(value)]));
+    const excluded = new Set([folder, '採樣包WAV', '_成品MP3', '_未對應', 'sample', 'WAI', 'WAMI', '俱樂部版', '舊版對照', '成品MP3', '成品WAV', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他', '音頻分類']);
+    const report = { ok: true, folder: outDir, total: 0, copied: 0, skipped: 0, migrated: 0, failed: [], bytes: 0 };
+    const manifestPath = path.join(outDir, '_manifest.json'), previous = await readJson(manifestPath).catch(() => null), manifest = new Map();
+    for (const entry of previous && Array.isArray(previous.items) ? previous.items : []) if (entry && entry.file) manifest.set((entry.container || folder) + '/' + (entry.type || '') + '/' + entry.file, entry);
+    const pending = [], seenPaths = new Set();
+    for (const full of walkFiles(rootDir, 4, [], 60000)) {
         if (!/\.(mp3|wav|flac|aiff?)$/i.test(full)) continue;
-        const rel = path.relative(rootDir, full).split(path.sep).filter(Boolean);
-        if (rel.length < 2) continue;
-        if (excludeTop.has(rel[0])) continue;
-        const base = path.basename(full);
-        if (!/ - /i.test(base)) continue; // 只要分軌/採樣，不要完整成品
-        const dirParts = rel.slice(1, -1);
-        if (dirParts.some((part) => /^(MIDI|Audio)$/i.test(part))) continue;
-        const isWav = /\.wav$/i.test(base);
-        const typeDir = path.join(isWav ? wavOutDir : outDir, typeFolderFor(base));
-        const target = path.join(typeDir, base);
-        const key = base.toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        pending.push({ from: full, to: target, song: rel[0], file: base, type: path.basename(path.dirname(target)), container: /\\.wav$/i.test(base) ? '採樣包WAV' : folder });
+        const parts = path.relative(rootDir, full).split(path.sep);
+        if (parts.length < 2 || excluded.has(parts[0])) continue;
+        const base = path.basename(full), stem = path.basename(full, path.extname(full));
+        if (stem.toLowerCase() === parts[0].toLowerCase()) continue;
+        const dirs = parts.slice(1, -1), explicitStems = dirs.some((part) => /^Stems$/i.test(part));
+        if (dirs.some((part) => /^(MIDI|Audio)$/i.test(part))) continue;
+        const rawRole = stem.includes(' - ') ? stem.split(' - ').at(-1).replace(/ \(\d+\)$/, '').trim() : '';
+        const role = roles.get(rawRole.toLowerCase());
+        if (!explicitStems && !role) continue;
+        const key = path.resolve(full).toLowerCase();
+        if (seenPaths.has(key)) continue;
+        seenPaths.add(key);
+        const isWav = /\.wav$/i.test(base), container = isWav ? '採樣包WAV' : folder, type = role || 'Other';
+        pending.push({ from: full, to: path.join(isWav ? wavOutDir : outDir, type, base), song: parts[0], container, type, legacy: parts[0] === '採樣' });
     }
     report.total = pending.length;
     for (const item of pending) {
         try {
-            if (exists(item.to) && fs.statSync(item.to).size > 0) {
-                report.skipped += 1;
-                continue;
-            }
-            await fsp.mkdir(path.dirname(item.to), { recursive: true });
-            const temp = item.to + '.part';
-            await fsp.copyFile(item.from, temp);
-            await fsp.rename(temp, item.to);
-            const size = fs.statSync(item.to).size;
-            report.copied += 1;
-            report.bytes += size;
-            manifest.set(item.type + '/' + item.file, {
-                file: item.file,
-                type: item.type,
-                container: item.container || folder,
-                song: item.song,
-                source: item.from,
-                size,
-                at: new Date().toISOString(),
-            });
-        } catch (err) {
-            report.failed.push({ file: item.file, source: item.from, error: String((err && err.message) || err) });
-        }
+            const result = await copyFileSafely(cfg, item.from, item.to, { conflict: 'unique', reason: 'collect_samples' });
+            if (result.skipped) report.skipped++;
+            else { report.copied++; report.bytes += fs.statSync(result.to).size; if (item.legacy) report.migrated++; }
+            const file = path.basename(result.to), key = item.container + '/' + item.type + '/' + file, prior = manifest.get(key);
+            manifest.set(key, { file, type: item.type, container: item.container, song: item.song, source: item.from,
+                sources: [...new Set([...(prior && prior.sources || []), ...(prior && prior.source ? [prior.source] : []), item.from])],
+                size: fs.statSync(result.to).size, at: new Date().toISOString() });
+        } catch (error) { report.failed.push({ file: path.basename(item.from), source: item.from, error: String(error.message || error) }); }
     }
     report.ok = report.failed.length === 0;
     report.finishedAt = new Date().toISOString();
-    await writeJson(manifestPath, {
-        schema: 'ace_samples_manifest_v1',
-        generatedAt: report.finishedAt,
-        root,
-        folder,
-        total: report.total,
-        items: [...manifest.values()],
-    });
-    // 舊平面採樣夾若已清空就移除
-    if (folder !== '採樣' && exists(legacyDir)) {
-        try {
-            const left = fs.readdirSync(legacyDir).filter((name) => !/^_manifest\.json$/i.test(name));
-            if (!left.length) fs.rmdirSync(legacyDir);
-        } catch {
-            /* ignore */
-        }
-    }
+    await writeJson(manifestPath, { schema: 'ace_samples_manifest_v1', generatedAt: report.finishedAt, root, folder, total: report.total, items: [...manifest.values()] });
     report.manifestPath = manifestPath;
     clearFsCaches(cfg);
     return report;
 }
+
 
 /**
  * 依「檔案屬性/類型」把各歌曲資料夾內的非音訊檔集中分類到：
@@ -1592,100 +1548,50 @@ export async function collectSamples({ root = 'ai音樂', folder = '採樣包', 
  * （音訊由 extractFullMp3s / collectSamples 處理）
  */
 export async function classifyByAttributes({ root = 'ai音樂', move = true, cfg = config() } = {}) {
+    if (!hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => classifyByAttributes(...arguments));
+    const { moveFileSafely, copyFileSafely, recordRelocations } = await import('./file-ops.mjs');
     const rootDir = path.join(cfg.downloadDir, toWin(root));
-    const CATEGORY = {
-        mid: 'MIDI',
-        midi: 'MIDI',
-        musicxml: 'MusicXML',
-        jpg: '封面',
-        jpeg: '封面',
-        png: '封面',
-        webp: '封面',
-        gif: '封面',
-        avif: '封面',
-        zip: '壓縮檔',
-        rar: '壓縮檔',
-        '7z': '壓縮檔',
-        asd: '其他',
-        als: '其他',
-        amxd: '其他',
-        pdf: '其他',
-    };
-    const AUDIO_EXT = new Set(['mp3', 'wav', 'flac', 'aiff', 'aif', 'ogg', 'm4a']);
-    const EXCLUDE_TOP = new Set([...Object.values(CATEGORY), '成品MP3', '成品WAV', '採樣包', '採樣包WAV', '採樣', '_未對應', 'sample', 'WAI', '俱樂部版']);
-    const files = walkFiles(rootDir, 3, [], 30000);
+    const categories = { mid: 'MIDI', midi: 'MIDI', musicxml: 'MusicXML', jpg: '封面', jpeg: '封面', png: '封面', webp: '封面', gif: '封面', avif: '封面', zip: '壓縮檔', rar: '壓縮檔', '7z': '壓縮檔', asd: '其他', als: '其他', amxd: '其他', pdf: '其他' };
+    const excluded = new Set([...Object.values(categories), '成品MP3', '成品WAV', '採樣包', '採樣包WAV', '採樣', '_未對應', 'sample', 'WAI', 'WAMI', '俱樂部版', '音頻分類']);
     const byCategory = new Map();
-    for (const full of files) {
-        const ext = path.extname(full).toLowerCase().replace(/^\./, '');
-        if (!ext || AUDIO_EXT.has(ext)) continue;
-        const category = CATEGORY[ext];
-        if (!category) continue;
-        const rel = path.relative(rootDir, full).split(path.sep).filter(Boolean);
-        if (rel.length < 2) continue;
-        if (EXCLUDE_TOP.has(rel[0])) continue;
-        const songFolder = rel[0];
-        const base = path.basename(full);
-        let targetName = base;
-        if ((ext === 'mid' || ext === 'midi') && !/ - /i.test(base)) targetName = `${songFolder} - MIDI.mid`;
-        else if (ext === 'musicxml' && !/ - /i.test(base)) targetName = `${songFolder} - MusicXML.musicxml`;
+    for (const full of walkFiles(rootDir, 3, [], 30000)) {
+        const ext = path.extname(full).slice(1).toLowerCase(), category = categories[ext], parts = path.relative(rootDir, full).split(path.sep);
+        if (!category || parts.length < 2 || excluded.has(parts[0])) continue;
+        let name = path.basename(full);
+        if ((ext === 'mid' || ext === 'midi') && !name.includes(' - ')) name = parts[0] + ' - MIDI.mid';
+        else if (ext === 'musicxml' && !name.includes(' - ')) name = parts[0] + ' - MusicXML.musicxml';
         if (!byCategory.has(category)) byCategory.set(category, []);
-        byCategory.get(category).push({ from: full, to: path.join(rootDir, category, targetName), name: targetName });
+        byCategory.get(category).push({ from: full, to: path.join(rootDir, category, name) });
     }
-    const report = { ok: true, categories: {}, total: 0, copied: 0, moved: 0, skipped: 0, failed: [] };
-    for (const [category, items] of byCategory) {
-        const outDir = path.join(rootDir, category);
-        await fsp.mkdir(outDir, { recursive: true });
-        const manifestPath = path.join(outDir, '_manifest.json');
-        const previous = await readJson(manifestPath).catch(() => null);
-        const manifest = new Map();
-        for (const entry of previous && Array.isArray(previous.items) ? previous.items : []) {
-            if (entry && entry.file) manifest.set(String(entry.file), entry);
-        }
-        for (const item of items) {
-            try {
-                if (exists(item.to)) {
-                    // 同名但內容不同（例如兩首同名歌的 MusicXML）→ 用唯一檔名分類，不要留在歌名資料夾
-                    let same = false;
-                    try {
-                        same = fs.readFileSync(item.from).equals(fs.readFileSync(item.to));
-                    } catch {
-                        same = false;
-                    }
-                    if (same) {
-                        report.skipped += 1;
-                        continue;
-                    }
-                    item.to = uniquePath(item.to);
-                    item.name = path.basename(item.to);
-                }
-                if (move) {
-                    await fsp.rename(item.from, item.to);
-                    report.moved += 1;
-                } else {
-                    await fsp.copyFile(item.from, item.to + '.part');
-                    await fsp.rename(item.to + '.part', item.to);
-                    report.copied += 1;
-                }
-                const size = fs.statSync(item.to).size;
-                manifest.set(item.name, { file: item.name, source: item.from, size, at: new Date().toISOString() });
-                report.categories[category] = (report.categories[category] || 0) + 1;
-                report.total += 1;
-            } catch (err) {
-                report.failed.push({ file: item.name, error: String((err && err.message) || err) });
+    const report = { ok: true, categories: {}, total: 0, copied: 0, moved: 0, deduped: 0, skipped: 0, failed: [] }, moves = [];
+    try {
+        for (const [category, items] of byCategory) {
+            const outDir = path.join(rootDir, category), manifestPath = path.join(outDir, '_manifest.json');
+            const previous = await readJson(manifestPath).catch(() => null), manifest = new Map();
+            for (const entry of previous && Array.isArray(previous.items) ? previous.items : []) if (entry && entry.file) manifest.set(entry.file, entry);
+            for (const item of items) {
+                try {
+                    const result = await (move ? moveFileSafely : copyFileSafely)(cfg, item.from, item.to, { conflict: 'unique', reason: 'classify_by_attributes' });
+                    if (result.moved) report.moved++;
+                    else if (result.copied) report.copied++;
+                    else if (result.deduped) report.deduped++;
+                    else report.skipped++;
+                    if (result.moved || result.deduped) moves.push(result);
+                    const file = path.basename(result.to), prior = manifest.get(file);
+                    manifest.set(file, { file, source: item.from, sources: [...new Set([...(prior && prior.sources || []), ...(prior && prior.source ? [prior.source] : []), item.from])], size: fs.statSync(result.to).size, at: new Date().toISOString() });
+                    report.categories[category] = (report.categories[category] || 0) + 1;
+                    report.total++;
+                } catch (error) { report.failed.push({ file: path.basename(item.from), error: String(error.message || error) }); }
             }
+            await writeJson(manifestPath, { schema: 'ace_file_category_v1', category, generatedAt: new Date().toISOString(), items: [...manifest.values()] });
         }
-        await writeJson(manifestPath, {
-            schema: 'ace_file_category_v1',
-            category,
-            generatedAt: new Date().toISOString(),
-            items: [...manifest.values()],
-        });
-    }
+    } finally { await recordRelocations(cfg, moves); }
     report.ok = report.failed.length === 0;
     report.finishedAt = new Date().toISOString();
     clearFsCaches(cfg);
     return report;
 }
+
 
 /**
  * 一鍵自動整理管線：整理舊檔 → 補齊成品 MP3 → 採樣包分類 → 檔案屬性分類
@@ -1695,6 +1601,9 @@ export async function classifyByAttributes({ root = 'ai音樂', move = true, cfg
  * 對 ai音樂 內所有音檔（成品、分軌、未對應）分析後用 hardlink 建分類視圖（不佔額外空間）。
  */
 export async function classifyByAudio({ root = 'ai音樂', folder = '音頻分類', linkMode = 'hardlink', limit = 0, refresh = false, onProgress = null, cfg = config() } = {}) {
+    if (!hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => classifyByAudio(...arguments));
+    const { sameFileContent, copyFileSafely } = await import('./file-ops.mjs');
+    const algorithmVersion = 'huaidj-audio-v2-pitch-class-c';
     const rootDir = path.join(cfg.downloadDir, toWin(root));
     if (!exists(rootDir)) return { ok: false, total: 0, error: '找不到 ' + rootDir };
     const outDir = path.join(rootDir, folder);
@@ -1707,17 +1616,25 @@ export async function classifyByAudio({ root = 'ai音樂', folder = '音頻分�
     const selected = Number(limit) > 0 ? unique.slice(0, Number(limit)) : unique;
     const cache = (await cacheRead('audio-analysis', { cfg }).catch(() => null)) || { items: {}, thresholds: null };
     const cacheItems = cache.items || {};
+    const previousAlgorithmItems = { ...(cache.previousAlgorithmItems || {}) };
     const analyses = [];
     const todo = [];
     for (const file of selected) {
         const stat = fs.statSync(file);
         const key = path.resolve(file);
         const cached = cacheItems[key];
+        const matchingAlgorithm = !!cached && cached.algorithmVersion === algorithmVersion;
+        if (cached && !matchingAlgorithm) {
+            const priorVersion = String(cached.algorithmVersion || 'unversioned');
+            const retained = { ...(previousAlgorithmItems[priorVersion] || {}) };
+            if (!retained[key] || (retained[key].ok !== true && cached.ok === true)) retained[key] = cached;
+            previousAlgorithmItems[priorVersion] = retained;
+        }
         // JSON 讀回後 mtime 可能是字串，統一換算成毫秒再比對，否則快取永遠不會命中
         const cachedMtime = cached ? (typeof cached.mtime === 'number' ? cached.mtime : Date.parse(cached.mtime)) : NaN;
         const sameTime = Number.isFinite(cachedMtime) && Math.abs(cachedMtime - stat.mtimeMs) < 1.5;
         // 只有「成功」的分析結果可以重用；失敗紀錄一旦重用，暫時性錯誤會永遠卡在失敗
-        if (!refresh && cached && cached.ok === true && cached.size === stat.size && sameTime) {
+        if (!refresh && cached && cached.ok === true && matchingAlgorithm && cached.size === stat.size && sameTime) {
             analyses.push(cached);
         } else {
             todo.push({ file: key, size: stat.size, mtime: stat.mtimeMs });
@@ -1768,6 +1685,7 @@ export async function classifyByAudio({ root = 'ai音樂', folder = '音頻分�
                 size: item.size,
                 mtime: item.mtime,
                 ok: !!hit.ok,
+                algorithmVersion: typeof hit.algorithmVersion === 'string' ? hit.algorithmVersion : null,
                 duration: hit.duration ?? null,
                 bpm: hit.bpm ?? null,
                 key: hit.key ?? null,
@@ -1775,7 +1693,11 @@ export async function classifyByAudio({ root = 'ai音樂', folder = '音頻分�
                 energy: hit.energy ?? null,
                 analyzedAt: new Date().toISOString(),
             };
-            if (!record.ok) record.error = String(hit.error || 'analysis failed').slice(0, 300);
+            if (record.ok && record.algorithmVersion !== algorithmVersion) {
+                record.ok = false;
+                record.error = 'Analyzer algorithm version does not match the required pitch-class correction.';
+            }
+            if (!record.ok && !record.error) record.error = String(hit.error || 'analysis failed').slice(0, 300);
             analyses.push(record);
             cacheItems[item.file] = record;
             // 單檔分析失敗 = 檔案本身無法分析（略過但不讓整輪整理變失敗）；批次/啟動失敗才算管線失敗
@@ -1785,7 +1707,7 @@ export async function classifyByAudio({ root = 'ai音樂', folder = '音頻分�
                 try { onProgress({ done, total: todo.length, current: path.basename(item.file) }); } catch { /* ignore */ }
             }
         }
-        await cacheWrite('audio-analysis', { items: cacheItems, thresholds: cache.thresholds }, cfg).catch(() => {});
+        await cacheWrite('audio-analysis', { items: cacheItems, previousAlgorithmItems, algorithmVersion, thresholds: cache.thresholds }, cfg).catch(() => {});
     }
     // 能量分級門檻（用整體分位數，之後固定沿用，讓增量分類一致）
     if (!cache.thresholds) {
@@ -1797,7 +1719,7 @@ export async function classifyByAudio({ root = 'ai音樂', folder = '音頻分�
         } else {
             cache.thresholds = { low: 0.1, high: 0.18 };
         }
-        await cacheWrite('audio-analysis', { items: cacheItems, thresholds: cache.thresholds }, cfg).catch(() => {});
+        await cacheWrite('audio-analysis', { items: cacheItems, previousAlgorithmItems, algorithmVersion, thresholds: cache.thresholds }, cfg).catch(() => {});
     }
     report.thresholds = cache.thresholds;
     const low = cache.thresholds.low;
@@ -1805,53 +1727,87 @@ export async function classifyByAudio({ root = 'ai音樂', folder = '音頻分�
     const sanitize = (value) => N.sanitizeComponent(String(value || ''), 80) || 'Unknown';
     const bucketBpm = (bpm) => (bpm == null ? 'Unknown' : String(Math.max(0, Math.floor(bpm / 5) * 5)) + '-' + String(Math.max(5, Math.floor(bpm / 5) * 5 + 5)));
     const tierEnergy = (energy) => (energy == null ? 'Unknown' : energy < low ? 'Low' : energy < high ? 'Mid' : 'High');
+    const stemRoles = new Map([...Object.values(N.STEM_TYPE_NAMES), 'Piano', 'Percussion', 'Melody', 'Other'].map((value) => [String(value).toLowerCase(), String(value)]));
     const stemTypeOf = (base) => {
         const stem = base.replace(/\.[^.]+$/, '');
         const parts = stem.split(' - ');
-        const raw = (parts.length > 1 ? parts.slice(1).join(' - ') : '').trim().toLowerCase();
-        if (!raw) return '';
-        const lookup = new Map(Object.values(N.STEM_TYPE_NAMES).map((value) => [String(value).toLowerCase(), String(value)]));
-        return lookup.get(raw) || N.stemLabel(raw) || '';
+        const raw = (parts.length > 1 ? parts.at(-1) : '').replace(/ \(\d+\)$/, '').trim().toLowerCase();
+        return stemRoles.get(raw) || '';
     };
     const manifest = [];
+    const safeLinkPath = async (file) => {
+        const base = path.resolve(cfg.downloadDir), full = path.resolve(file), relative = path.relative(base, full);
+        if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw Object.assign(new Error('Classification path is outside the download directory.'), { code: 'FILE_OUTSIDE_ROOT' });
+        let current = base;
+        for (const part of ['', ...relative.split(path.sep).filter(Boolean)]) {
+            if (part) current = path.join(current, part);
+            try {
+                if ((await fsp.lstat(current)).isSymbolicLink()) throw Object.assign(new Error('Classification refuses symbolic links.'), { code: 'FILE_SYMLINK' });
+            } catch (error) { if (error.code === 'ENOENT') break; throw error; }
+        }
+    };
     const linkFile = async (source, target) => {
-        if (exists(target)) { report.skipped += 1; return; }
-        await fsp.mkdir(path.dirname(target), { recursive: true });
+        await safeLinkPath(source);
+        await safeLinkPath(target);
         if (linkMode === 'copy') {
-            await fsp.copyFile(source, target);
-        } else {
+            const result = await copyFileSafely(cfg, source, target, { conflict: 'unique', reason: 'classify_audio_view' });
+            if (result.skipped) report.skipped++;
+            else report.linked++;
+            return result.to;
+        }
+        const desired = target;
+        for (let number = 2; ; number++) {
+            await safeLinkPath(target);
+            if (exists(target)) {
+                if (await sameFileContent(source, target)) { report.skipped++; return target; }
+                target = path.join(path.dirname(desired), path.basename(desired, path.extname(desired)) + ' (' + number + ')' + path.extname(desired));
+                continue;
+            }
+            await fsp.mkdir(path.dirname(target), { recursive: true });
+            await safeLinkPath(target);
             try {
                 await fsp.link(source, target);
-            } catch {
-                await fsp.copyFile(source, target);
+            } catch (error) {
+                if (error.code === 'EEXIST') continue;
+                if (!['EXDEV', 'EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'EINVAL'].includes(error.code)) throw error;
+                const result = await copyFileSafely(cfg, source, target, { conflict: 'unique', reason: 'classify_audio_view_fallback' });
+                if (result.skipped) report.skipped++;
+                else report.linked++;
+                return result.to;
             }
+            if (!await sameFileContent(source, target)) throw Object.assign(new Error('Source changed while its classification view was checked.'), { code: 'SOURCE_CHANGED' });
+            report.linked++;
+            return target;
         }
-        report.linked += 1;
     };
     for (const record of analyses) {
         if (!record.ok) continue;
         const base = path.basename(record.file);
         const item = { ...record, links: [] };
-        const isStem = / - /.test(base) || record.file.includes('\\採樣包\\') || record.file.includes('/採樣包/');
+        const parts = path.relative(rootDir, record.file).split(path.sep), directories = parts.slice(0, -1);
+        const fullFolder = /^(成品MP3|成品WAV|俱樂部版)$/i.test(parts[0]) || directories.some((part) => /^Audio$/i.test(part))
+            || path.basename(base, path.extname(base)).toLowerCase() === parts[0].toLowerCase();
+        const explicitStem = directories.some((part) => /^(Stems|採樣包(?:WAV)?)$/i.test(part));
+        const isStem = !fullFolder && (explicitStem || !!stemTypeOf(base));
         const isUnknown = record.file.includes('_未對應');
         const kind = isUnknown ? '其他音檔' : isStem ? '分軌' : '完整歌曲';
-        const stemType = isStem ? sanitize(stemTypeOf(base) || 'Other') : '';
+        const stemType = isStem ? sanitize(stemTypeOf(base) || stemRoles.get(String(directories.at(-1) || '').toLowerCase()) || 'Other') : '';
         const axes = [
             ['BPM', bucketBpm(record.bpm)],
             ['Key', sanitize(record.camelot || (record.key ? record.key.replace(':', ' ') : 'Unknown'))],
             ['Energy', tierEnergy(record.energy)],
         ];
-        for (const [axis, bucket] of axes) {
-            const target = path.join(outDir, kind, axis, sanitize(bucket), base);
-            await linkFile(record.file, target);
-            item.links.push(path.relative(outDir, target).split(path.sep).join('/'));
-        }
-        if (stemType) {
-            const target = path.join(outDir, '分軌', '類型', stemType, base);
-            await linkFile(record.file, target);
-            item.links.push(path.relative(outDir, target).split(path.sep).join('/'));
-        }
-        manifest.push(item);
+        try {
+            for (const [axis, bucket] of axes) {
+                const target = await linkFile(record.file, path.join(outDir, kind, axis, sanitize(bucket), base));
+                item.links.push(path.relative(outDir, target).split(path.sep).join('/'));
+            }
+            if (stemType) {
+                const target = await linkFile(record.file, path.join(outDir, '分軌', '類型', stemType, base));
+                item.links.push(path.relative(outDir, target).split(path.sep).join('/'));
+            }
+            manifest.push(item);
+        } catch (error) { report.failed.push({ file: record.file, error: String(error.message || error), code: error.code }); }
     }
     await writeJson(path.join(outDir, '_manifest.json'), {
         schema: 'ace_audio_classification_v1',
@@ -1879,9 +1835,10 @@ function PROJECT_ROOT_FOR_AI() {
 
 /**
  * 把歌曲資料夾裡「已有分類副本」的檔案刪掉，完成真正的單一分類庫（省空間）。
- * 只刪同名/同大小（或同名去掉 (n) 後同大小）的副本，不碰沒有分類副本的檔案。
+ * 同名/同格式/同大小只是候選；內容 hash 相同才歸檔，保留可回滾副本。
  */
 export async function dedupeSongCopies({ root = 'ai音樂', cfg = config() } = {}) {
+    if (!hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => dedupeSongCopies(...arguments));
     const rootDir = path.join(cfg.downloadDir, toWin(root));
     const CATEGORY_DIRS = ['成品MP3', '成品WAV', '採樣包', '採樣包WAV', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他'];
     const normalize = (name) => name.replace(/\.[^.]+$/, '').replace(/\s*\(\d+\)\s*$/, '').toLowerCase();
@@ -1892,12 +1849,15 @@ export async function dedupeSongCopies({ root = 'ai音樂', cfg = config() } = {
         for (const file of walkFiles(full, 3, [], 30000)) {
             try {
                 const stat = fs.statSync(file);
-                index.set(normalize(path.basename(file)) + '|' + stat.size, file);
+                const key = path.extname(file).toLowerCase() + '|' + normalize(path.basename(file)) + '|' + stat.size;
+                if (!index.has(key)) index.set(key, []);
+                index.get(key).push(file);
             } catch { /* ignore */ }
         }
     }
-    const report = { ok: true, removed: 0, savedBytes: 0, failed: [], scanned: 0 };
-    const skipTop = new Set([...CATEGORY_DIRS, '_未對應', 'sample', 'WAI', '俱樂部版']);
+    const report = { ok: true, removed: 0, archived: 0, savedBytes: 0, failed: [], scanned: 0 };
+    const relocations = [];
+    const skipTop = new Set([...CATEGORY_DIRS, '音頻分類', '_未對應', 'sample', 'WAI', '俱樂部版', '舊版對照']);
     for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
         if (!entry.isDirectory() || skipTop.has(entry.name)) continue;
         const songDir = path.join(rootDir, entry.name);
@@ -1905,17 +1865,20 @@ export async function dedupeSongCopies({ root = 'ai音樂', cfg = config() } = {
             report.scanned += 1;
             try {
                 const stat = fs.statSync(file);
-                const key = normalize(path.basename(file)) + '|' + stat.size;
+                const key = path.extname(file).toLowerCase() + '|' + normalize(path.basename(file)) + '|' + stat.size;
                 if (!index.has(key)) continue;
-                fs.unlinkSync(file);
-                report.removed += 1;
-                report.savedBytes += stat.size;
+                const keeper = await (async () => { for (const candidate of index.get(key)) if (await sameFileContent(file, candidate)) return candidate; return null; })();
+                if (!keeper) continue;
+                const moved = await moveFileSafely(cfg, file, keeper, { reason: 'song-copy-dedupe' });
+                relocations.push(moved);
+                if (moved.deduped) { report.removed += 1; report.archived += 1; }
             } catch (err) {
                 report.failed.push({ file, error: String((err && err.message) || err) });
             }
         }
     }
     report.ok = report.failed.length === 0;
+    await recordRelocations(cfg, relocations);
     clearFsCaches(cfg);
     return report;
 }
@@ -1943,6 +1906,12 @@ function compareRank(a, b) {
     return 0;
 }
 
+async function streamFileHash(file) {
+    const hash = crypto.createHash('sha256');
+    for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+    return hash.digest('hex');
+}
+
 /** 保留歷史 alias 線索，不把其他歌曲的檔案狀態當成本曲的證據。 */
 export function applyAliases(rows, state) {
     const aliases = (state && state.aliases) || {};
@@ -1961,50 +1930,54 @@ export function applyAliases(rows, state) {
  * 本地快取層：library snapshot（一次算好，後續查詢直接讀）
  * ------------------------------------------------------------------ */
 export async function buildLibrarySnapshot(cfg = config(), { refresh = false } = {}) {
-    const [songs, index, state] = await Promise.all([
-        listSongs(cfg, { refresh }),
-        collectDownloadIndex(cfg, { refresh }),
-        loadState(cfg),
+    const { buildLocalDownloadIndex } = await import('./local-index.mjs');
+    const { compactLocalIndex } = await import('./local-index-service.mjs');
+    const [songs, state, page, cached] = await Promise.all([
+        listSongs(cfg, { refresh }), loadState(cfg),
+        readJson(path.join(cfg.stateDir, 'page-songs.json'), {}), readJson(path.join(cfg.stateDir, 'cache', 'songs.json'), {}),
     ]);
-    const rows = applyAliases(songs.map((song) => summarizeSong(song, index, state.unavailable)), state);
-    const proof = await readJson(path.join(cfg.stateDir, 'verified-audio.json'), {});
-    const verifiedWavs = new Set();
-    for (const file of Array.isArray(proof.files) ? proof.files : []) {
-        if (file.kind !== 'wav' || !file.task_id || !file.absolute || !exists(file.absolute)) continue;
-        const actual = await inspectAudioFile(file.absolute);
-        if (actual.validity === 'valid' && actual.bytes === Number(file.bytes) && file.sha256 && file.verifiedAt) verifiedWavs.add(file.task_id);
-    }
-    for (const row of rows) {
-        if (!verifiedWavs.has(row.task_id) || !row.downloaded) continue;
-        row.downloaded.wav = true;
-        row.downloaded.wavVerified = true;
-        const wav = row.downloaded.detail.find((item) => item.type === 'wav');
-        if (wav) { wav.have = 1; wav.done = true; }
-        row.downloaded.have = row.downloaded.detail.reduce((total, item) => total + item.have, 0);
-        row.downloaded.any = row.downloaded.have > 0;
-        row.downloaded.allDone = row.downloaded.total > 0 && row.downloaded.have >= row.downloaded.total;
-    }
+    const pool = new Map([...(cached.known || []), ...(cached.songs || []), ...(page.songs || []), ...songs].filter((song) => song && song.task_id).map((song) => [song.task_id, song]));
+    const exact = await buildLocalDownloadIndex({ cfg, root: 'ai音樂', songs: [...pool.values()] });
+    const compact = compactLocalIndex(exact);
+    const rows = songs.map((song) => {
+        const summary = summarizeSong(song);
+        const indexed = compact.byTask[song.task_id], raw = exact.byTask[song.task_id];
+        const completed = new Set(indexed?.completedKeys || []), group = P.pickStemGroup(song.stems);
+        const downloaded = { stems: (group?.tracks || []).filter((track) => completed.has('stem:' + track.id)).length };
+        for (const kind of ['mp3', 'wav', 'midi', 'musicxml', 'cover']) downloaded[kind] = completed.has(kind);
+        const status = P.downloadStatusForTypes(song, { types: DEFAULT_DOWNLOAD_TYPES, downloaded, unavailable: state.unavailable });
+        const uncertainKinds = new Set(indexed?.uncertainKinds || []), known = !!indexed;
+        const detail = Array.from(status.detail, (item) => ({ ...item, uncertain: !item.done && !item.na && (!known || uncertainKinds.has(item.type)) }));
+        const missingCount = detail.reduce((sum, item) => sum + (!item.done && !item.na && !item.uncertain ? Math.max(0, item.total - item.have) : 0), 0);
+        const uncertainCount = detail.reduce((sum, item) => sum + (item.uncertain ? Math.max(0, item.total - item.have) : 0), 0);
+        summary.downloaded = { ...status, detail, known, missingCount, uncertainCount, allDone: status.allDone && uncertainCount === 0,
+            mp3: downloaded.mp3, wav: downloaded.wav,
+            wavVerified: !!downloaded.wav && !!raw?.files.some((file) => file.kind === 'wav' && file.confidence === 'verified' && file.validity === 'valid'),
+            unavailable: detail.filter((item) => item.na).map((item) => item.type) };
+        return summary;
+    });
     const counts = { songs: rows.length, downloaded: 0, partial: 0, undownloaded: 0, midiAvailable: 0 };
     for (const row of rows) {
-        const downloaded = row.downloaded;
-        if (downloaded && downloaded.allDone) counts.downloaded += 1;
-        else if (downloaded && downloaded.any) counts.partial += 1;
-        else counts.undownloaded += 1;
-        if (row.midi_available) counts.midiAvailable += 1;
+        if (row.downloaded.allDone) counts.downloaded++;
+        else if (row.downloaded.any) counts.partial++;
+        else counts.undownloaded++;
+        if (row.midi_available) counts.midiAvailable++;
     }
-    const snapshot = { builtAt: new Date().toISOString(), counts, songs: rows };
+    const snapshot = { schema: 'ace-library-snapshot-v2-exact-task-index', builtAt: new Date().toISOString(), revision: exact.revision, downloadTypes: [...DEFAULT_DOWNLOAD_TYPES], counts, songs: rows };
     await cacheWrite(SNAPSHOT_NAME, snapshot, cfg).catch(() => {});
     return snapshot;
 }
 
+
 export async function getLibrarySnapshot(cfg = config(), { refresh = false, ttlMs = Number(process.env.ACE_SNAPSHOT_TTL_MS || 60000) } = {}) {
     if (!refresh) {
         const peek = await cachePeek(SNAPSHOT_NAME, { ttlMs, cfg });
-        if (peek.fresh && peek.data && Array.isArray(peek.data.songs)) return { ...peek.data, cached: true, ageMs: peek.ageMs };
+        if (peek.fresh && peek.data?.schema === 'ace-library-snapshot-v2-exact-task-index' && Array.isArray(peek.data.songs)) return { ...peek.data, cached: true, ageMs: peek.ageMs };
     }
     const built = await buildLibrarySnapshot(cfg, { refresh });
     return { ...built, cached: false, ageMs: 0 };
 }
+
 
 /** 預熱：登入狀態、歌單、檔案索引、曲庫快照一次備好（refresh=false 時全部走快取） */
 export async function warmCaches(cfg = config(), { refreshSession = false, refresh = false } = {}) {
@@ -2028,6 +2001,7 @@ export async function warmCaches(cfg = config(), { refreshSession = false, refre
  * 被移除的檔案若對應到某個 task，會記錄 alias 到保留 task，避免下次被誤判未下載而重下。
  */
 export async function dedupeContent({ root = 'ai音樂', commit = false, includeCustom = false, cfg = config() } = {}) {
+    if (commit && !hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => dedupeContent(...arguments));
     const rootDir = path.join(cfg.downloadDir, toWin(root));
     if (!exists(rootDir)) return { ok: false, total: 0, error: '找不到 ' + rootDir };
     const excludedTop = new Set(['音頻分類', ...(includeCustom ? [] : DEDUPE_CUSTOM_TOP)]);
@@ -2041,20 +2015,22 @@ export async function dedupeContent({ root = 'ai音樂', commit = false, include
         let stat;
         try { stat = fs.statSync(file); } catch { continue; }
         if (!stat.size) continue;
-        if (!bySize.has(stat.size)) bySize.set(stat.size, []);
-        bySize.get(stat.size).push({ file, size: stat.size, nlink: stat.nlink });
+        const groupKey = path.extname(file).toLowerCase() + '|' + stat.size;
+        if (!bySize.has(groupKey)) bySize.set(groupKey, []);
+        bySize.get(groupKey).push({ file, size: stat.size, nlink: stat.nlink });
     }
     const hashCache = new Map();
     const hashOf = (file) => {
-        if (!hashCache.has(file)) hashCache.set(file, crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'));
+        if (!hashCache.has(file)) hashCache.set(file, streamFileHash(file));
         return hashCache.get(file);
     };
-    for (const [size, list] of bySize) {
+    for (const [, list] of bySize) {
+        const size = list[0].size;
         if (list.length < 2) continue;
         const byHash = new Map();
         for (const item of list) {
             let hash;
-            try { hash = hashOf(item.file); } catch (err) { report.errors.push({ file: item.file, error: String((err && err.message) || err) }); continue; }
+            try { hash = await hashOf(item.file); } catch (err) { report.errors.push({ file: item.file, error: String((err && err.message) || err) }); continue; }
             if (!byHash.has(hash)) byHash.set(hash, []);
             byHash.get(hash).push(item);
         }
@@ -2104,30 +2080,28 @@ export async function dedupeContent({ root = 'ai音樂', commit = false, include
     }
     report.aliases = aliases;
     if (commit) {
-        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const backupDir = path.join(cfg.stateDir, 'organize-backups', 'content-' + stamp);
+        const relocations = [];
         for (const dup of report.duplicateFiles) {
             try {
-                const dest = path.join(backupDir, dup.rel);
-                await fsp.mkdir(path.dirname(dest), { recursive: true });
-                try {
-                    await fsp.rename(dup.file, dest);
-                } catch {
-                    await fsp.copyFile(dup.file, dest);
-                    await fsp.unlink(dup.file);
-                }
+                const moved = await moveFileSafely(cfg, dup.file, dup.keep, { conflict: 'skip', reason: 'content-dedupe' });
+                if (!moved.deduped) throw new Error('去重前內容已變，原件保留');
+                relocations.push(moved);
+                dup.backup = moved.backup;
                 report.moved += 1;
-                if (!dup.hardlink) report.bytesReclaimed += dup.size;
             } catch (err) {
                 report.errors.push({ file: dup.file, error: String((err && err.message) || err) });
             }
         }
-        if (Object.keys(aliases).length || report.duplicateFiles.length) {
-            rawState.aliases = { ...(rawState.aliases || {}), ...aliases };
-            // 路徑級跳過表：即使沒有 history 的歌，也能知道「這個路徑已被去重、內容在 keeper」
-            rawState.removedPaths = { ...(rawState.removedPaths || {}) };
-            for (const dup of report.duplicateFiles) rawState.removedPaths[dup.file.toLowerCase()] = dup.keep;
-            await writeJson(cfg.stateFile, rawState);
+        await recordRelocations(cfg, relocations);
+        if (relocations.length) {
+            const latest = await readJson(cfg.stateFile, {});
+            const confirmedAliases = {};
+            for (const moved of relocations) {
+                const fromTask = taskFromPath(moved.from), toTask = taskFromPath(moved.to);
+                if (fromTask && toTask && fromTask !== toTask) confirmedAliases[fromTask] = toTask;
+            }
+            latest.aliases = { ...(latest.aliases || {}), ...confirmedAliases };
+            await writeJson(cfg.stateFile, latest);
         }
         clearFsCaches(cfg);
     }
@@ -2146,6 +2120,7 @@ export async function dedupeContent({ root = 'ai音樂', commit = false, include
  * commit=false 只回報，不動檔案。
  */
 export async function dedupeFolders({ root = 'ai音樂', commit = false, includeCustom = false, cfg = config() } = {}) {
+    if (commit && !hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => dedupeFolders(...arguments));
     const rootDir = path.join(cfg.downloadDir, toWin(root));
     if (!exists(rootDir)) return { ok: false, total: 0, error: '找不到 ' + rootDir };
     const protectedTop = new Set([...DEDUPE_PROTECTED_TOP, ...(includeCustom ? [] : DEDUPE_CUSTOM_TOP)]);
@@ -2176,7 +2151,7 @@ export async function dedupeFolders({ root = 'ai音樂', commit = false, include
     }
     const hashCache = new Map();
     const hashOf = (file) => {
-        if (!hashCache.has(file)) hashCache.set(file, crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'));
+        if (!hashCache.has(file)) hashCache.set(file, streamFileHash(file));
         return hashCache.get(file);
     };
     const songFiles = [];
@@ -2192,10 +2167,11 @@ export async function dedupeFolders({ root = 'ai音樂', commit = false, include
         );
         if (!candidates.length) continue;
         let hash = null;
-        try { hash = hashOf(file); } catch (err) { report.errors.push({ file, error: String(err.message || err) }); continue; }
-        const keeper = candidates.find((candidate) => {
-            try { return hashOf(candidate) === hash; } catch { return false; }
-        });
+        try { hash = await hashOf(file); } catch (err) { report.errors.push({ file, error: String(err.message || err) }); continue; }
+        let keeper;
+        for (const candidate of candidates) {
+            try { if (await hashOf(candidate) === hash) { keeper = candidate; break; } } catch { /* Keep unique originals when comparison fails. */ }
+        }
         if (!keeper) continue;
         const hardlink = Number(stat.nlink) > 1;
         report.duplicateFiles.push({ file, keep: keeper, size: stat.size, hardlink });
@@ -2222,25 +2198,19 @@ export async function dedupeFolders({ root = 'ai音樂', commit = false, include
     }
     report.emptyFolders = empties;
     if (commit) {
-        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const backupDir = path.join(cfg.stateDir, 'organize-backups', 'dedupe-' + stamp);
+        const relocations = [];
         for (const item of report.duplicateFiles) {
             try {
-                const rel = path.relative(rootDir, item.file);
-                const dest = path.join(backupDir, rel);
-                await fsp.mkdir(path.dirname(dest), { recursive: true });
-                try {
-                    await fsp.rename(item.file, dest);
-                } catch {
-                    await fsp.copyFile(item.file, dest);
-                    await fsp.unlink(item.file);
-                }
+                const moved = await moveFileSafely(cfg, item.file, item.keep, { conflict: 'skip', reason: 'folder-dedupe' });
+                if (!moved.deduped) throw new Error('去重前內容已變，原件保留');
+                relocations.push(moved);
+                item.backup = moved.backup;
                 report.moved += 1;
-                if (!item.hardlink) report.bytesReclaimed += item.size;
             } catch (err) {
                 report.errors.push({ file: item.file, error: String(err.message || err) });
             }
         }
+        await recordRelocations(cfg, relocations);
         for (const dir of empties.slice().sort((a, b) => b.length - a.length)) {
             try { fs.rmdirSync(dir); } catch (err) { report.errors.push({ dir, error: String(err.message || err) }); }
         }
@@ -2254,6 +2224,7 @@ export async function dedupeFolders({ root = 'ai音樂', commit = false, include
 }
 
 export async function tidyAll({ root = 'ai音樂', concurrency = 4, onProgress = null, cfg = config() } = {}) {
+    if (!hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => tidyAll(...arguments));
     const steps = [];
     const emit = (phase, extra = {}) => {
         if (typeof onProgress === 'function') {
@@ -2350,6 +2321,20 @@ export async function tidyAll({ root = 'ai音樂', concurrency = 4, onProgress =
         },
     });
     steps.push({ name: 'audio', total: audioResult.total, analyzed: audioResult.analyzed, cached: audioResult.cached, linked: audioResult.linked, failed: audioResult.failed.length, unanalyzable: audioResult.unanalyzable ? audioResult.unanalyzable.length : 0 });
+    // Relocations are recorded by each safe file operation. Refresh proof paths
+    // once after the pipeline, under the same library lease and proof lock.
+    emit('index');
+    let indexFailed = 0;
+    try {
+        const { buildLocalDownloadIndex } = await import('./local-index.mjs');
+        const index = await buildLocalDownloadIndex({ cfg, root, repairProofs: true });
+        indexFailed = index.problems.filter((problem) => /^PROOF_REPAIR_/.test(problem.code)).length;
+        steps.push({ name: 'index', revision: index.revision, repairedProofs: index.summary.metadataRepair?.repaired || 0, failed: indexFailed });
+    } catch (error) {
+        indexFailed = 1;
+        steps.push({ name: 'index', failed: 1, error: String(error.message || error).slice(0, 300) });
+    }
+    clearFsCaches(cfg);
     const result = {
         ok:
             (organizeResult.failedCount || 0) === 0 &&
@@ -2360,7 +2345,7 @@ export async function tidyAll({ root = 'ai音樂', concurrency = 4, onProgress =
             dedupeResult.failed.length === 0 &&
             contentResult.errors.length === 0 &&
             foldersResult.errors.length === 0 &&
-            audioResult.failed.length === 0,
+            audioResult.failed.length === 0 && indexFailed === 0,
         root,
         startedAt,
         finishedAt: new Date().toISOString(),
@@ -2371,12 +2356,14 @@ export async function tidyAll({ root = 'ai音樂', concurrency = 4, onProgress =
 }
 
 export async function organize({ dryRun = true, root = 'ai音樂', typeFolders = false, conflict = 'skip', cfg = config() } = {}) {
+    if (!dryRun && !hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => organize(...arguments));
     const session = await loadSession(cfg);
     const songs = await listSongs(cfg);
     const state = await loadState(cfg);
     const byTitle = new Map();
     for (const song of songs) {
-        byTitle.set(titleKey((song.meta && song.meta.title) || ''), song);
+        const key = titleKey((song.meta && song.meta.title) || '');
+        byTitle.set(key, byTitle.has(key) ? null : song);
     }
     const byTask = new Map(songs.map((s) => [s.task_id, s]));
     const rootAbs = path.join(cfg.downloadDir, root);
@@ -2593,40 +2580,19 @@ export async function organize({ dryRun = true, root = 'ai音樂', typeFolders =
     let conflictCount = 0;
     const conflicts = [];
     const failed = [];
+    const relocations = [];
     for (const move of moves) {
         try {
-            await fsp.mkdir(path.dirname(move.to), { recursive: true });
-            let target = move.to;
-            if (exists(target)) {
-                const a = await fsp.stat(move.from).catch(() => null);
-                const b = await fsp.stat(target).catch(() => null);
-                if (a && b && a.size === b.size) {
-                    await fsp.unlink(move.from).catch(() => {});
-                    dedupedCount += 1;
-                    continue;
-                }
-                if (conflict === 'skip') {
-                    conflictCount += 1;
-                    conflicts.push({ from: move.from, to: target });
-                    continue;
-                }
-                if (conflict === 'overwrite') {
-                    await fsp.unlink(target).catch(() => {});
-                } else {
-                    target = uniquePath(target);
-                }
-            }
-            try {
-                await fsp.rename(move.from, target);
-            } catch {
-                await fsp.copyFile(move.from, target);
-                await fsp.unlink(move.from);
-            }
-            movedCount += 1;
+            const actual = await moveFileSafely(cfg, move.from, move.to, { conflict, reason: 'organize' });
+            if (actual.skipped) { conflictCount += 1; conflicts.push({ from: move.from, to: move.to }); continue; }
+            relocations.push(actual);
+            if (actual.deduped) dedupedCount += 1;
+            if (actual.moved) movedCount += 1;
         } catch (err) {
             failed.push({ from: move.from, error: String((err && err.message) || err) });
         }
     }
+    await recordRelocations(cfg, relocations);
     await saveState(cfg, null, state);
     clearFsCaches(cfg);
     return {
