@@ -97,6 +97,14 @@
 ### 6.1 面板
 勾類型 → 選歌（或全選、只看未下載）→「下載選中」。完成後可「一鍵整理」或開「下載完自動整理」。
 
+**即時同步**：面板訂閱站點的歌單推送（SSE），歌一完成就出現在清單（實測約 50 ms），不再每 8 秒全量重抓；推送斷線才退回輪詢。
+
+**新歌自動下載**（選項「新歌自動下載」，預設關）：
+- 只處理**開啟之後**完成的新歌，不會回頭掃舊歌。
+- 下載上方勾選的類型；分軌會等分離完成，之後才出現的分軌會再補抓（已存在的檔案自動跳過）。
+- **MIDI／MusicXML 預設不自動下載**：站點即時生成，可能扣 credit；要的話另勾「自動含 MIDI／MusicXML」。
+- 下完若開了「下載完自動整理」，會接著分類。需要開著 acemusic.ai/create 分頁。
+
 ### 6.2 CLI（`node agent\cli.mjs …`）
 
 | 指令 | 用途 |
@@ -112,17 +120,37 @@
 | `hub --background\|--status\|--stop` | 常駐中樞 |
 | `watch --background\|--status\|--stop` | 背景自動整理 |
 | `cache [status\|clear] [--all]` | 快取（clear 預設保留音頻分析） |
+| `library [--sizes]` | 曲庫分類總覽（每類資料夾、檔數、大小） |
+| `events [--since seq] [--type t]` | 中樞事件（新歌、自動下載、下載完成） |
+| `wait [--timeout 秒]` | 等下一首新歌（需 Hub＋站點分頁） |
+| `probe` | 站點健康（唯讀：登入、方案、模型） |
+| `backups [--keep-days 7] [--keep-last 1] [--max-mb N] [--prune --commit]` | 整理備份清單；預設只預覽，`--prune --commit` 才刪 |
+| `masters` | 母帶清單（唯讀） |
 
-### 6.3 MCP（`node agent\mcp.mjs`，stdio）
-`ace_overview`、`ace_locate`、`ace_list_songs`、`ace_download`、`ace_job_status`、`ace_job_cancel`、`ace_organize`、`ace_warm`、`ace_hub_status`、`ace_session_status`…（完整清單見 `agent/README-AGENT.md`）。Hub 在跑時自動走 Hub。
+開機自動啟動 Hub＋watcher（工作排程，可移除）：`pwsh -File scripts\install-autostart.ps1 [-DryRun|-Uninstall]`。
+
+### 6.3 MCP（`node agent\mcp.mjs`，stdio）— agent 中樞
+
+| 想做的事 | 工具 |
+|---|---|
+| 開場看狀態 | `ace_overview` |
+| 最新那首歌的檔案在哪 | `ace_locate`（預設最新一首；`query`／`song_id`／`latest`） |
+| 等我做完下一首、下載好給我路徑 | `ace_wait_new_song { wait_download: true }` |
+| 最近發生什麼 | `ace_events` |
+| 曲庫每類有多少 | `ace_library` |
+| 下載／整理 | `ace_download` → `ace_job_status`；`ace_organize` |
+| 維運 | `ace_backups`（只預覽）、`ace_masters`、`ace_probe`、`ace_hub_status` |
+
+Hub 在跑時自動走 Hub（p50：overview 1.2 ms、locate 2.7 ms、list 0.5 ms）；不在時回落本地。
 
 ### 6.4 Hub API（`127.0.0.1:8788`）
-`GET /health /overview /songs /locate /page /jobs/:id /events(SSE)`；`POST /download /tidy /dedupe /organize /warm /jobs/:id/cancel /shutdown`。
+`GET /health /overview /songs /locate /library /page /page/events /wait /jobs/:id /events(SSE)`；`POST /download /tidy /dedupe /organize /warm /jobs/:id/cancel /shutdown`。詳見 `agent/HUB.md`。
 
 ## 7. 網頁 ↔ agent 怎麼「高速搬運」
 
-- 面板載入歌單後（變動時＋每 5 分鐘心跳）把精簡快照寫到 `page-songs.json`；站點回 `no_download` 時寫 `page-unavailable.json`。
-- Hub 監看這兩個檔，一變就重建記憶體快照並推 SSE `page` 事件——agent 不必等 TTL、不必連網、不需要 session。
+- 站點 → 面板：訂閱 `/api/songs/events` 推送，版本變了才抓 `/api/songs/changes` 增量。
+- 面板 → 本機：精簡歌單寫 `page-songs.json`（變動時＋每 5 分鐘心跳）；站點回 `no_download` 時寫 `page-unavailable.json`；新歌／自動下載／下載完成寫 `page-events.json`。
+- 本機 → agent：Hub 監看這三個檔，一變就重建記憶體快照、推 SSE、喚醒 `/wait` 長輪詢——agent 不必等 TTL、不必連網、不需要 session。
 - 登入過期或離線時，唯讀查詢（list／overview／locate）自動改用「頁面快照或舊快取」中較新的一份；下載仍需有效 session。
 
 ## 8. 常見問題

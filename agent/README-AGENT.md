@@ -105,6 +105,18 @@ args = ["F:\\code\\acemusic-batch-downloader\\agent\\mcp.mjs"]
 | `ace_job_status` | 查 job 進度與結果 |
 | `ace_job_cancel` | 取消 job（已完成檔案保留） |
 | `ace_organize` | 整理舊檔：`dry_run`（預設 true）、`commit=true` 才移動 |
+| `ace_overview` | 登入＋曲庫統計（開場首選，Hub 下約 1 ms） |
+| `ace_locate` | **歌曲 → 本機真實目錄與檔案絕對路徑**；預設最新一首，`query`／`song_id`／`latest`；免網路、免登入 |
+| `ace_wait_new_song` | 等下一首新歌完成；`wait_download:true` 再等自動下載完成並回 locate 結果（需 Hub＋開著站點分頁） |
+| `ace_events` | 中樞事件：`song_new`、`auto_download`、`download_done`；`since`（seq）增量 |
+| `ace_library` | 曲庫分類總覽（成品MP3／WAV、採樣包各樂器、MIDI、MusicXML、封面…），`sizes:true` 算大小 |
+| `ace_backups` | 整理備份清單＋依規則可刪預覽（MCP 只預覽，不刪） |
+| `ace_masters` | 母帶清單（俱樂部版／舊版對照；WAV 取樣率／位元深度／長度，唯讀） |
+| `ace_probe` | 站點健康（唯讀 `/api/status`：是否登入、方案、模型；不回個資） |
+| `ace_warm`／`ace_hub_status`／`ace_session_status` | 預熱快取／Hub 狀態／登入＋頁面通道狀態 |
+
+典型「拿最新歌曲路徑」流程：`ace_locate {}` → 直接得到 `songs[0].dirs[].dir` 與 `files[].path`。
+典型「做完歌自動拿檔」流程：使用者在面板開「新歌自動下載」→ `ace_wait_new_song { wait_download: true }`。
 
 範例 agent 對話流程：
 

@@ -42,7 +42,12 @@ agent / CLI / MCP ──HTTP──► agent/hub.mjs (127.0.0.1:8788)
 | GET | `/jobs` | 最近 job 摘要 |
 | GET | `/jobs/:id` | job 詳情（status／progress／result／error） |
 | POST | `/jobs/:id/cancel` | 合作式取消（下載支援；其他 job 標記） |
-| GET | `/events` | SSE：`job`、`progress`、`snapshot` 事件 |
+| GET | `/events` | SSE：`job`、`progress`、`snapshot`、`page`（頁面檔更新）、`event`（中樞事件）|
+| GET | `/locate?latest=&q=&song=&views=1` | 歌曲 → 本機真實目錄／檔案（v1.7.0） |
+| GET | `/library?sizes=1` | 曲庫分類總覽（v1.7.0） |
+| GET | `/page` | 頁面通道健康度（page-songs 快照時間、筆數、新鮮度、不可用紀錄數） |
+| GET | `/page/events?since=&type=&limit=` | 事件環（最近 200）：`song_new`（頁面或歌單差異）、`auto_download`、`download_done` |
+| GET | `/wait?type=song_new&task_id=&since=&timeout=` | 長輪詢：等下一個符合的事件；`since` 之後已發生則立即回 |
 | POST | `/shutdown` | 關閉 hub（只接受 loopback） |
 
 ### job 狀態機
@@ -58,6 +63,13 @@ agent / CLI / MCP ──HTTP──► agent/hub.mjs (127.0.0.1:8788)
 - hub 啟動時 `warmCaches()` 預熱；之後每 60s 或寫入 job 完成後刷新。
 - 讀取路徑不等待刷新：先回目前 snapshot，必要時背景更新（stale-while-revalidate）。
 - `ACE_HUB_SNAPSHOT_TTL_MS` 可調。
+
+### 4.1 頁面通道（v1.7.0）
+
+- 面板把精簡歌單寫 `page-songs.json`（變動時＋每 5 分鐘心跳）、不可用紀錄寫 `page-unavailable.json`、事件寫 `page-events.json`（都經 native host 的 `export`，背景執行）。
+- Hub 以 `fs.watch` 監看 state 目錄：歌單／不可用檔變動 → 立即重建快照（不等 TTL）並推 `page`；事件檔變動 → 匯入事件環並推 `event`、喚醒 `/wait`。
+- 讀取一律 stale-while-revalidate：有舊快照就立刻回，背景重算；Hub 熱路徑 p50：`/health` 0.3 ms、`/overview` 0.9 ms、`/locate` 1.7 ms（`scripts/bench.mjs`）。
+- 客戶端（CLI／MCP）用 `agent/lib/hubclient.mjs`（node:http keep-alive）；Node 內建 fetch 在 Windows 對 localhost 每次約 15 ms。
 
 ## 5. 安全
 
