@@ -18,7 +18,7 @@ $out = Join-Path $installDir ('acemusic_host-' + $sourceHash.Substring(0, 16) + 
 $recordPath = Join-Path $installDir 'host-build.json'
 $reusable = $false
 if ((Test-Path -LiteralPath $out) -and (Test-Path -LiteralPath $recordPath)) {
-    $previous = Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json
+    $previous = Get-Content -LiteralPath $recordPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $reusable = $previous.sourceHash -eq $sourceHash -and $previous.sha256 -eq (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 if (-not $reusable) {

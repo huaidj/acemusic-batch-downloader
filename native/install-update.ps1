@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Split-Path -Parent $here
 $installDir = if ($env:ACE_STATE_DIR) { [IO.Path]::GetFullPath($env:ACE_STATE_DIR) } else { Join-Path $env:LOCALAPPDATA 'AceMusicDL' }
-$version = (Get-Content -LiteralPath (Join-Path $projectRoot 'manifest.json') -Raw | ConvertFrom-Json).version
+$version = (Get-Content -LiteralPath (Join-Path $projectRoot 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
 if (-not $BackupDirectory) {
     # 有 F:\DevData 的開發機沿用原備份位置；其他電腦放在本機應用資料夾，不再要求 F: 槽。
     $backupBase = if ($env:ACE_BACKUP_DIR) { $env:ACE_BACKUP_DIR } elseif (Test-Path -LiteralPath 'F:\DevData') { 'F:\DevData\Backups' } else { Join-Path $env:LOCALAPPDATA 'AceMusicDL-backups' }
@@ -19,12 +19,12 @@ try { $capabilities = Invoke-RestMethod -Uri 'http://127.0.0.1:8788/capabilities
 if ($hub -and (($hub.jobs.running -gt 0) -or ($hub.jobs.queued -gt 0))) { throw 'The downloader still has active jobs. They were preserved; update after they finish.' }
 $leasePath = Join-Path $installDir 'library-write.lock'
 if (Test-Path -LiteralPath $leasePath) {
-    try { $lease = Get-Content -LiteralPath $leasePath -Raw | ConvertFrom-Json } catch { throw 'A library write lease cannot be read. It was preserved; do not update while its owner is unknown.' }
+    try { $lease = Get-Content -LiteralPath $leasePath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { throw 'A library write lease cannot be read. It was preserved; do not update while its owner is unknown.' }
     if (-not $lease.pid -or (Get-Process -Id $lease.pid -ErrorAction SilentlyContinue)) { throw 'A library writer is still active. It was preserved; update after it finishes.' }
 }
 $watchPath = Join-Path $installDir 'watch-status.json'
 if (Test-Path -LiteralPath $watchPath) {
-    $watch = Get-Content -LiteralPath $watchPath -Raw | ConvertFrom-Json
+    $watch = Get-Content -LiteralPath $watchPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($watch.pid -and $watch.phase -in @('starting','idle','running') -and (Get-Process -Id $watch.pid -ErrorAction SilentlyContinue)) { throw 'The background organizer is still running. Its work was preserved; stop it before updating.' }
 }
 $cliPathPattern = [regex]::Escape((Join-Path $installDir 'agent\cli.mjs'))
@@ -33,7 +33,7 @@ if ($legacyWriters.Count) { throw 'A local CLI file operation is still running. 
 New-Item -ItemType Directory -Path $backupRoot | Out-Null
 $records = @()
 $sourceVersion = 'unknown'
-try { $sourceVersion = (Get-Content -LiteralPath (Join-Path $installDir 'manifest.json') -Raw | ConvertFrom-Json).version } catch { }
+try { $sourceVersion = (Get-Content -LiteralPath (Join-Path $installDir 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version } catch { }
 foreach ($part in @('agent','src','player','design','manifest.json','host-manifest.json','host-build.json')) {
     $original = Join-Path $installDir $part
     if (-not (Test-Path -LiteralPath $original)) { continue }
@@ -64,7 +64,7 @@ foreach ($part in @('agent','src','player','design','manifest.json')) {
     }
 }
 & (Join-Path $here 'build-host.ps1') -OutputDirectory $installDir
-$build = Get-Content -LiteralPath (Join-Path $installDir 'host-build.json') -Raw | ConvertFrom-Json
+$build = Get-Content -LiteralPath (Join-Path $installDir 'host-build.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $manifestPath = Join-Path $installDir 'host-manifest.json'
 [ordered]@{name='com.acemusic.batchdownloader';description='ACE Music local file tools';path=$build.executable;type='stdio';allowed_origins=@('chrome-extension://abiaielnlhijedekadfkfonbpdaajkhf/')} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 foreach ($base in @('HKCU:\Software\Google\Chrome\NativeMessagingHosts','HKCU:\Software\Microsoft\Edge\NativeMessagingHosts')) {
