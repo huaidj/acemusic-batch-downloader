@@ -71,7 +71,7 @@
 
 - **內容去重**：相同內容（size→sha256）只留一份，其餘搬到 `%LOCALAPPDATA%\AceMusicDL\organize-backups\`（不直接刪）。
 - **hardlink 不是重複**：`音頻分類` 的檔案與原檔是同一份資料，刪了也省不到空間，還會讓 BPM／Key 檢視缺檔。
-- **收藏夾**：把 acemusic.ai 上按過拇指向上（`meta.rating === "good"`）與面板播放器按過愛心的歌，整首複製到 `ai音樂\收藏\<歌名>\`。只複製、不搬原檔；內容相同就跳過，同名不同內容不覆寫（`favorites --force` 才覆寫，舊檔先歸檔）。清單在 `收藏\_收藏清單.json`；未被喜歡的歌不會被收進來，取消喜歡後已複製的檔也不會自動刪除。整理流程（含「下載完自動整理」）每次都會補齊；也可單獨跑 `node agent\cli.mjs favorites [--dry-run]`。
+- **收藏夾**：把 acemusic.ai 上按過拇指向上（`meta.rating === "good"`）與面板播放器按過愛心的歌，每首取一個**成品 WAV 母帶**複製成 `ai音樂\收藏\<歌名>.wav`（平鋪一層，不建子資料夾）。站點只有 MP3 的歌沒有母帶可收，計入 `noWav`（檔案仍在 `成品MP3`／`已點讚`）。只複製、不搬原檔；內容相同就跳過，同名不同內容不覆寫（`favorites --force` 才覆寫，舊檔先歸檔）。清單在 `收藏\_收藏清單.json`；未被喜歡的歌不會被收進來，取消喜歡後已複製的檔也不會自動刪除。1.8.9 起舊版 `收藏\<歌名>\` 子資料夾與其中的 MP3／分軌／封面會在整理時清掉（只刪我們放的、大小沒變的檔，使用者改過的一律保留）。整理流程（含「下載完自動整理」）每次都會補齊；也可單獨跑 `node agent\cli.mjs favorites [--dry-run]`。
 - **指紋清除**：把既有檔案裡的 ACE metadata 就地抹掉——WAV 的 `LIST/INFO`（IART／ICMT／ISFT…）、`id3`／`bext`／`iXML`／`XMP`，MP3 的 `TSSE`／`TENC`、含 `ACE Music` 的 `COMM`、指向 `acemusic.ai` 的 `WOAS`；標題、藝人、專輯、BPM、調性、封面、歌詞保留。就地覆寫不改變檔案長度與 inode（硬連結的音頻分類檢視同步），原 bytes 存 `%LOCALAPPDATA%\AceMusicDL\fingerprint-backups\`，`strip-fingerprints --restore` 可還原。新下載的檔案會自動清，舊檔用一次整理或 `node agent\cli.mjs strip-fingerprints` 補齊。
 
 ### 3.4 維護功能一覽：指紋、分類、命名

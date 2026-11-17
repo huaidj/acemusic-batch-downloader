@@ -8,7 +8,7 @@ import { hubJson, hubRequest, canFallbackHubWrite, HUB_URL } from './lib/hubclie
 import { MUSIC_CONTRACT, MUSIC_TOOLS, validateMusicInput } from './lib/music-contract.mjs';
 import { CREATE_CONTRACT, CREATE_TOOLS } from './lib/create-tools.mjs';
 
-const SERVER = { name: 'ace-music-downloader', version: '1.8.8' };
+const SERVER = { name: 'ace-music-downloader', version: '1.8.9' };
 const jobs = new Map();
 let jobSeq = 0;
 const hubJobs = new Set();
@@ -162,7 +162,7 @@ const TOOLS = [
     },
     {
         name: 'ace_collect_favorites',
-        description: '把「站點點讚 ∪ 面板愛心」的歌複製到 ai音樂/收藏/<歌名>/（整首歌的檔案：成品 MP3/WAV、分軌、MIDI、MusicXML、封面）。只複製、不動原檔；內容相同跳過，同名不同內容不覆寫（force 才覆寫）。dry_run=true 只回計畫。',
+        description: '把「站點點讚 ∪ 面板愛心」的歌複製成無損母帶：ai音樂/收藏/<歌名>.wav（平鋪一層，每首一個 WAV）。只收成品 WAV；只有 MP3 的歌不收（報 noWav），分軌／MIDI／MusicXML／封面不再複製。只複製、不動原檔；內容相同跳過，同名不同內容不覆寫（force 才覆寫）；舊版 收藏/<歌名>/ 子資料夾會清掉。dry_run=true 只回計畫。',
         inputSchema: {
             type: 'object',
             properties: {

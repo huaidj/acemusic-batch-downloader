@@ -14,7 +14,7 @@
 - **自動命名／分資料夾**：`<歌名>/<歌名> - Vocals.mp3`、`<歌名> - MIDI.mid`、`<歌名> - MusicXML.musicxml`
 - **WAV**：依站點模型能力與原始上傳音源判斷；有來源便獨立下載，不等 MIDI。原始 WAV 不冒充 MP3。
 - **一鍵整理**：舊檔整理 → 成品 MP3 → 成品 WAV（分類後把乾淨名字**複製**到 `整理輸出\成品WAV\`，來源不動、多 take 依序編號）→ 採樣包（MP3 分軌）／採樣包WAV（WAV 分軌）→ 檔案分類 → 內容去重 → 空殼清理 → 音頻屬性分類（BPM／調性／能量）→ 收藏夾 → 指紋清除
-- **收藏夾**：站點拇指點讚與面板愛心的歌，整首複製到 `ai音樂\收藏\<歌名>\`；只複製、內容相同跳過、同名不覆寫，原檔不動
+- **收藏夾**：站點拇指點讚與面板愛心的歌，每首只留一個無損母帶，平鋪成 `ai音樂\收藏\<歌名>.wav`（不建子資料夾、不收 MP3／分軌／MIDI／封面）；只有 MP3 的歌不收。只複製、內容相同跳過、同名不覆寫，原檔不動
 - **指紋清除**：既有檔案裡的 ACE metadata（WAV `LIST/INFO`／`id3`、MP3 `TSSE`／ACE `COMM`／`WOAS`）就地抹掉；檔長不變、可 `--restore` 還原，下載時也自動清
 - **不重複下載**：比對本機檔案、下載紀錄、去重紀錄；已存在的自動跳過
 - **狀態顯示**：本機索引按歌曲 ID、來源與實存檔案判斷；分開顯示確定缺檔與待核對，整理搬移後自動刷新。同名歌曲互不繼承紀錄。
@@ -61,7 +61,7 @@ node agent\cli.mjs doctor
 node agent\cli.mjs list --undownloaded
 node agent\cli.mjs download --all --types stems,midi,cover
 node agent\cli.mjs tidy-all
-node agent\cli.mjs favorites --dry-run   # 站點點讚／面板愛心的歌 → ai音樂\收藏\
+node agent\cli.mjs favorites --dry-run   # 點讚／愛心歌的 WAV 母帶 → ai音樂\收藏\<歌名>.wav
 ```
 
 MCP（stdio）：`node <repo>\agent\mcp.mjs`，工具包含 `ace_overview`、`ace_list_songs`、`ace_download`、`ace_job_status`、`ace_organize`、`ace_warm`、`ace_hub_status` 等。

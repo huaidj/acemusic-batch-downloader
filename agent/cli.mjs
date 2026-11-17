@@ -22,7 +22,7 @@ async function hubTry(pathname, { method = 'GET', body, timeoutMs = 1200 } = {})
     }
 }
 function usage() {
-    console.log(`ACE Music 批量下載器 CLI  v1.8.8
+    console.log(`ACE Music 批量下載器 CLI  v1.8.9
 
 用法：
   node cli.mjs create capabilities            Create 頁面完整 API 參數契約
@@ -57,7 +57,7 @@ function usage() {
   node cli.mjs organize [--commit]             整理 Downloads 內已下載的檔案（預設 dry-run）
   node cli.mjs extract-mp3 [選項]              把所有歌曲的成品 MP3 集中到 ai音樂\\成品MP3\\（會自動補齊漏掉的）
   node cli.mjs extract-samples                 把分軌/採樣集中到 ai音樂\\採樣包\\（按樂器類型分資料夾）
-  node cli.mjs favorites [--dry-run] [--force] [--sync]  把站點點讚／面板愛心的歌複製到 ai音樂\\收藏\\（整首歌的檔案）
+  node cli.mjs favorites [--dry-run] [--force] [--sync]  把站點點讚／面板愛心的歌 → ai音樂\\收藏\\<歌名>.wav（平鋪母帶）
   node cli.mjs wav-names [--dry-run]  成品WAV 分類後把乾淨名字複製到 整理輸出\\（來源檔不動）
   node cli.mjs strip-fingerprints [--dry-run|--restore]  就地抹掉既有檔案裡的 ACE metadata 指紋（檔長、inode 不變）
   node cli.mjs classify-files [--copy]         依檔案屬性分類 MIDI/MusicXML/封面/壓縮檔/其他（預設搬移，--copy 保留原檔）
@@ -102,6 +102,8 @@ favorites 選項：
   --folder <名稱>  收藏資料夾（預設 收藏，位於 ai音樂 底下）
   --root <資料夾>  最上層資料夾（預設 ai音樂）
   --json     以 JSON 輸出
+  註：只收每首歌的 WAV 母帶（站的成品 WAV），平鋪成 <歌名>.wav；只有 MP3 的歌不收（noWav）。
+      舊版 收藏/<歌名>/ 子資料夾與其中的 MP3／分軌／封面會在下次執行時清掉（只刪我們放的、大小沒變的檔）。
 
 strip-fingerprints 選項：
   --dry-run  只列出命中哪些檔案／frame，不改檔
@@ -507,7 +509,8 @@ async function main() {
         const result = await ACE.collectFavorites({ root, folder, dryRun: !!args.flags['dry-run'], force: !!args.flags.force, cfg });
         if (args.flags.json) return printJson(result);
         console.log(`收藏夾：喜歡 ${result.total} 首（站點點讚 ${result.sources.site.count}、面板愛心 ${result.sources.panel.count}）`);
-        console.log(`  複製 ${result.copied}、已存在 ${result.skipped}、同名保留原檔 ${result.conflicts}、未下載 ${result.missing}、清單外 ${result.unknown}、失敗 ${result.failed.length}`);
+        console.log(`  複製 ${result.copied}、已存在 ${result.skipped}、更新 ${result.refreshed}、改名 ${result.renamed}、同名保留原檔 ${result.conflicts}、沒有 WAV ${result.noWav}、未下載 ${result.missing}、清單外 ${result.unknown}、失敗 ${result.failed.length}`);
+        if (!result.dryRun) console.log(`  清掉舊版雜檔 ${result.pruned} 個（空資料夾 ${result.prunedDirs} 個）`);
         if (result.dryRun) {
             const mb = Math.round((result.plannedBytes || 0) / 1048576);
             console.log(`  預計複製 ${result.planned || 0} 個檔（約 ${mb} MB）`);

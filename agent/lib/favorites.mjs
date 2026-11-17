@@ -1,13 +1,15 @@
-// favorites.mjs — 把「我點贊／收藏」的歌另外複製到一個獨立資料夾（複製，不動原檔）。
+// favorites.mjs — 把「我點贊／收藏」的歌另外複製成一份無損母帶資料夾（複製，不動原檔）。
 //
 // 來源：兩份本機快照的聯集
 //   * site-likes.json     站點拇指向上（/api/songs 的 meta.rating === 'good'，見 site-likes.mjs）
 //   * page-favorites.json 面板播放器的愛心收藏
 // 任何一邊標記為喜歡就收；同一首歌（task_id）只複製一份。
 //
-// 目標：<downloadDir>/<root>/<folder>/<歌名>/<原檔名>
-// 只複製「本機索引裡確實屬於這首歌」的檔案（成品 MP3／WAV、分軌、MIDI、MusicXML、封面）；
-// 內容相同就跳過，同名不同內容絕不覆寫（force 才會覆寫，且舊檔先歸檔到 organize-backups）。
+// 目標（使用者 2026-11-17 指定）：<downloadDir>/<root>/收藏/<歌名>.wav —— 平鋪一層，
+// 每首歌一個 WAV 母帶，檔名直接用歌名。不再一首一個子資料夾、不再複製 MP3／分軌／MIDI／
+// MusicXML／封面；本站沒有 WAV 的歌（部分模型只出 MP3）不收，計入 noWav。
+// 只複製「本機索引裡確實屬於這首歌」的檔案；內容相同就跳過，同名不同內容絕不覆寫（force 才會覆寫，
+// 舊檔先歸檔到 organize-backups）。
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { config, readJson, writeJson, exists, toWin } from './config.mjs';
@@ -18,12 +20,16 @@ const { N } = loadShared();
 
 export const DEFAULT_FAVORITES_FOLDER = '收藏';
 export const FAVORITES_MANIFEST = '_收藏清單.json';
-export const FAVORITES_SCHEMA = 'ace_favorites_manifest_v1';
+export const FAVORITES_SCHEMA = 'ace_favorites_manifest_v2';
+export const FAVORITES_KINDS = Object.freeze(['wav']);
 const SITE_LIKES_SCHEMA = 'ace_site_likes_v1';
 const TITLE_LIMIT = 80;
-
-const KIND_ORDER = { mp3: 0, wav: 1, cover: 2, stems: 3, midi: 4, musicxml: 5, audio: 6 };
+const KIND_ORDER = { wav: 1, mp3: 0, cover: 2, stems: 3, midi: 4, musicxml: 5, audio: 6 };
 const AUDIO_KINDS = new Set(['mp3', 'wav', 'audio', 'stems']);
+// 分軌資料夾（採樣包／Stems）裡的音檔不是整首母帶。
+const STEMS_PATH = /(^|[\\/])(採樣包|stems?)([\\/]|$)/i;
+// 舊版（v1）會複製整首歌的所有檔案到 收藏/<歌名>/；改版後那些檔案要清掉。
+const PREVIOUS_SCHEMAS = new Set([FAVORITES_SCHEMA, 'ace_favorites_manifest_v1']);
 
 function usableForCopy(item) {
     if (!item || typeof item.absolute !== 'string' || !item.absolute) return false;
@@ -34,7 +40,7 @@ function usableForCopy(item) {
     return true;
 }
 
-function legalDirName(value) {
+function legalFileName(value) {
     return typeof value === 'string' && !!value && value === value.trim() && !['.', '..'].includes(value)
         && !/[<>:"/\\|?*\u0000-\u001f]/.test(value) && !value.endsWith('.') && path.basename(value) === value;
 }
@@ -79,16 +85,27 @@ export async function readFavoriteTargets(cfg = config()) {
     };
 }
 
-/** 決定這首歌在收藏夾裡的資料夾名：沿用上次清單的命名，否則用歌名並避開別的 task 已佔用的名字。 */
-function chooseDirName({ taskId, title, outDir, prevItems, taken }) {
-    const previous = prevItems.find((item) => item && item.task_id === taskId && legalDirName(item.dir));
-    if (previous) return previous.dir;
+/** 一首歌只收一個 WAV：verified 優先、再來 recorded，路徑短的同分優先；不收分軌與損壞檔。 */
+export function pickFavoriteWav(row) {
+    if (!row || !Array.isArray(row.files)) return null;
+    const rank = { verified: 0, recorded: 1 };
+    const wavs = row.files
+        .filter((file) => file && file.kind === 'wav' && usableForCopy(file) && rank[file.confidence] !== undefined)
+        // 分軌（採樣包）不是整首母帶；索引正常時它們是 kind=stems，這裡再擋一次標錯的舊資料。
+        .filter((file) => !STEMS_PATH.test(String(file.absolute || '')))
+        .sort((a, b) => rank[a.confidence] - rank[b.confidence] || String(a.absolute).length - String(b.absolute).length);
+    return wavs[0] || null;
+}
+
+/** 決定這首歌的檔名（不含副檔名）：沿用上次清單的名字，否則用歌名並避開別首已佔用的名字。 */
+function chooseBaseName({ taskId, title, outDir, previousBase, taken }) {
+    if (previousBase && legalFileName(previousBase)) return previousBase;
     const base = N.sanitizeComponent(title || '', TITLE_LIMIT) || 'Untitled';
     for (let number = 1; ; number++) {
         const candidate = number === 1 ? base : `${base} (${number})`;
         if (taken.has(candidate.toLowerCase())) continue;
-        // 已經存在同名資料夾但不是清單裡的（使用者自己的東西）→ 不併入，換下一個名字
-        if (exists(path.join(outDir, candidate))) continue;
+        // 已經存在同名檔案但不是清單裡的（使用者自己的東西）→ 不覆寫，換下一個名字
+        if (exists(path.join(outDir, candidate + '.wav'))) continue;
         return candidate;
     }
 }
@@ -109,18 +126,26 @@ export async function collectFavorites({
     const outDir = path.join(rootDir, folder);
     const manifestPath = path.join(outDir, FAVORITES_MANIFEST);
     const previous = await readJson(manifestPath, null);
-    const prevItems = previous && Array.isArray(previous.items) ? previous.items.filter((item) => item && item.task_id) : [];
+    const prevItems = previous && PREVIOUS_SCHEMAS.has(previous.schema) && Array.isArray(previous.items)
+        ? previous.items.filter((item) => item && item.task_id)
+        : [];
     const report = {
         ok: true,
         dryRun: !!dryRun,
         root,
         folder: outDir,
         manifestPath,
+        kinds: [...FAVORITES_KINDS],
         total: sources.total,
         copied: 0,
         skipped: 0,
+        renamed: 0,
+        refreshed: 0,
+        pruned: 0,
+        prunedDirs: 0,
         conflicts: 0,
         missing: 0,
+        noWav: 0,
         unknown: 0,
         planned: 0,
         plannedBytes: 0,
@@ -134,9 +159,13 @@ export async function collectFavorites({
         return report;
     }
     const library = index || (await (await import('./local-index.mjs')).buildLocalDownloadIndex({ cfg, root }));
+    const prevByTask = new Map();
+    for (const item of prevItems) prevByTask.set(item.task_id, item);
     const taken = new Set();
-    for (const item of prevItems) if (legalDirName(item.dir)) taken.add(String(item.dir).toLowerCase());
-    const outPrefix = outDir.toLowerCase() + path.sep;
+    for (const item of prevItems) {
+        const base = typeof item.file === 'string' ? item.file.replace(/\.wav$/i, '') : (legacyDirBase(item) || '');
+        if (base && legalFileName(base)) taken.add(base.toLowerCase());
+    }
     let progress = 0;
     for (const target of sources.targets) {
         progress += 1;
@@ -145,88 +174,134 @@ export async function collectFavorites({
         }
         const title = target.title || '';
         const row = library.byTask ? library.byTask[target.task_id] : null;
-        const entry = { task_id: target.task_id, title, sources: target.sources, dir: null, files: [] };
+        const entry = { task_id: target.task_id, title, sources: target.sources, file: null };
         if (!row) {
             report.unknown += 1;
             entry.state = 'unknown';
             report.items.push(entry);
             continue;
         }
-        const files = [];
-        const seen = new Set();
-        for (const item of [...(row.files || [])].sort((a, b) => (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9) || String(a.absolute).localeCompare(String(b.absolute)))) {
-            if (!usableForCopy(item)) continue;
-            const key = item.fileId || String(item.absolute).toLowerCase();
-            if (seen.has(key)) continue;
-            seen.add(key);
-            files.push(item);
-        }
-        if (!files.length) {
-            report.missing += 1;
-            entry.state = 'missing';
+        const wav = pickFavoriteWav(row);
+        if (!wav) {
+            // 站點只有 MP3／分軌的歌沒有無損母帶可收；留在 成品MP3、已點讚，不算失敗。
+            report.noWav += 1;
+            entry.state = 'no-wav';
             report.items.push(entry);
             continue;
         }
-        const dirName = chooseDirName({ taskId: target.task_id, title, outDir, prevItems, taken });
-        taken.add(dirName.toLowerCase());
-        entry.dir = dirName;
-        if (!dryRun) await fsp.mkdir(path.join(outDir, dirName), { recursive: true });
-        for (const item of files) {
-            if (String(item.absolute).toLowerCase().startsWith(outPrefix)) continue;
-            const name = path.basename(item.absolute);
-            const to = path.join(outDir, dirName, name);
-            const record = { name, kind: item.kind, bytes: item.bytes || null, fileId: item.fileId || null, source: item.absolute };
-            if (dryRun) {
-                const already = exists(to);
-                record.action = already ? 'keep-or-skip' : 'copy';
-                if (!already) {
-                    report.planned += 1;
-                    report.plannedBytes += Number(item.bytes) || 0;
-                }
-                entry.files.push(record);
-                continue;
+        const previousItem = prevByTask.get(target.task_id) || null;
+        const previousBase = previousItem ? (typeof previousItem.file === 'string' ? previousItem.file.replace(/\.wav$/i, '') : legacyDirBase(previousItem)) : '';
+        const base = previousBase && legalFileName(previousBase) ? previousBase : chooseBaseName({ taskId: target.task_id, title, outDir, previousBase, taken });
+        taken.add(base.toLowerCase());
+        const wanted = base + '.wav';
+        entry.file = wanted;
+        const source = wav.absolute;
+        const record = { name: wanted, kind: 'wav', bytes: wav.bytes || null, fileId: wav.fileId || null, source };
+        if (dryRun) {
+            const targetPath = path.join(outDir, wanted);
+            record.action = exists(targetPath) ? 'keep-or-skip' : 'copy';
+            if (!exists(targetPath)) {
+                report.planned += 1;
+                report.plannedBytes += Number(wav.bytes) || 0;
             }
-            try {
-                const result = await copyFileSafely(cfg, item.absolute, to, { conflict: force ? 'overwrite' : 'skip', reason: 'favorites_copy' });
-                record.name = path.basename(result.to || to);
-                record.fileId = result.toFileId || record.fileId;
-                if (result.copied) {
-                    const stat = await fsp.stat(result.to).catch(() => null);
-                    const bytes = stat ? Number(stat.size) : Number(record.bytes) || 0;
-                    record.bytes = bytes;
-                    record.action = 'copied';
-                    report.copied += 1;
-                    report.bytes += bytes;
-                } else if (result.skipped && result.contentVerified) {
+            entry.files = [record];
+            report.items.push(entry);
+            continue;
+        }
+        try {
+            await fsp.mkdir(outDir, { recursive: true });
+            const to = path.join(outDir, wanted);
+            // 歌名變了：把我們自己沒被改過的舊副本改名，不重複複製
+            if (previousBase && previousBase !== base && !exists(to)) {
+                const prevPath = path.join(outDir, previousBase + '.wav');
+                const prevStat = await fsp.stat(prevPath).catch(() => null);
+                const ours = !!prevStat && Number(previousItem?.size) === prevStat.size;
+                if (prevStat && prevStat.isFile() && ours) {
+                    if (await fsp.rename(prevPath, to).then(() => true, () => false)) report.renamed += 1;
+                }
+            }
+            const targetStat = await fsp.stat(to).catch(() => null);
+            let conflict = 'unique';
+            let refreshed = false;
+            if (targetStat) {
+                const identical = await copyFileSafely(cfg, source, to, { conflict: 'skip', reason: 'favorites_copy' });
+                if (identical.skipped && identical.contentVerified) {
                     record.action = 'unchanged';
                     report.skipped += 1;
-                } else if (result.skipped) {
-                    // 同名但內容不同：使用者的檔案優先，絕不覆寫
-                    record.action = 'conflict-kept-existing';
-                    report.conflicts += 1;
-                } else {
-                    record.action = 'skipped';
-                    report.skipped += 1;
+                    entry.files = [record];
+                    report.items.push(entry);
+                    continue;
                 }
-                entry.files.push(record);
-            } catch (error) {
-                const failure = { task_id: target.task_id, title, file: item.absolute, error: String((error && error.message) || error).slice(0, 300) };
-                report.failed.push(failure);
-                entry.files.push({ ...record, action: 'failed', error: failure.error });
+                // 內容不同：只有「我們放的那一份、大小沒變」或 --force 才覆寫；使用者改過的改用下一個名字
+                const ours = Number(previousItem?.size) === targetStat.size;
+                conflict = force || ours ? 'overwrite' : 'unique';
+                refreshed = conflict === 'overwrite';
             }
+            const result = await copyFileSafely(cfg, source, to, { conflict, reason: 'favorites_copy' });
+            const written = result.to || to;
+            record.name = path.basename(written);
+            record.fileId = result.toFileId || record.fileId;
+            if (result.copied) {
+                const writtenStat = await fsp.stat(written).catch(() => null);
+                record.bytes = writtenStat ? Number(writtenStat.size) : Number(record.bytes) || 0;
+                record.action = refreshed ? 'refreshed' : 'copied';
+                if (refreshed) report.refreshed += 1; else report.copied += 1;
+                report.bytes += record.bytes;
+            } else if (result.skipped && result.contentVerified) {
+                record.action = 'unchanged';
+                report.skipped += 1;
+            } else if (result.skipped) {
+                // 同名但內容不同：使用者的檔案優先，絕不覆寫
+                record.action = 'conflict-kept-existing';
+                report.conflicts += 1;
+            } else {
+                record.action = 'skipped';
+                report.skipped += 1;
+            }
+            entry.file = record.name;
+            entry.files = [record];
+            report.items.push(entry);
+        } catch (error) {
+            const failure = { task_id: target.task_id, title, file: source, error: String((error && error.message) || error).slice(0, 300) };
+            report.failed.push(failure);
+            entry.files = [{ ...record, action: 'failed', error: failure.error }];
+            report.items.push(entry);
         }
-        report.items.push(entry);
     }
     if (!dryRun) {
-        const nextItems = report.items.filter((item) => item.dir).map((item) => ({
-            task_id: item.task_id, title: item.title, dir: item.dir, sources: item.sources,
-            files: item.files.map((file) => ({ name: file.name, kind: file.kind, bytes: file.bytes, fileId: file.fileId, source: file.source })),
+        // 舊版留下來的 收藏/<歌名>/ 資料夾與其中的 MP3／分軌／MIDI／封面：只刪我們放的、大小沒變的檔，
+        // 使用者自己改過或自己放的一律保留；資料夾空了才移除。
+        for (const item of prevItems) {
+            const dirName = typeof item.dir === 'string' ? item.dir : '';
+            if (!legalFileName(dirName)) continue;
+            const dirPath = path.join(outDir, dirName);
+            if (!exists(dirPath)) continue;
+            for (const file of Array.isArray(item.files) ? item.files : []) {
+                const name = file && typeof file.name === 'string' ? path.basename(file.name) : '';
+                if (!name) continue;
+                const target = path.join(dirPath, name);
+                const st = await fsp.stat(target).catch(() => null);
+                if (!st || !st.isFile()) continue;
+                if (file.bytes && Number(file.bytes) !== st.size) continue;
+                if (await fsp.unlink(target).then(() => true, () => false)) report.pruned += 1;
+            }
+            const left = await fsp.readdir(dirPath).catch(() => null);
+            if (Array.isArray(left) && left.length === 0) {
+                if (await fsp.rmdir(dirPath).then(() => true, () => false)) report.prunedDirs += 1;
+            }
+        }
+        const nextItems = report.items.filter((item) => item.file).map((item) => ({
+            task_id: item.task_id, title: item.title, file: item.file, sources: item.sources,
+            size: item.files && item.files[0] ? item.files[0].bytes : null,
+            mtimeMs: null,
             at: new Date().toISOString(),
         }));
-        // 保留這次沒出現的舊項目：資料夾名字留在清單裡，同名新歌才不會併進別人的資料夾。
+        // 保留這次沒出現的舊項目：檔名留在清單裡，同名新歌才不會搶走既有檔案。
         const current = new Set(nextItems.map((item) => item.task_id));
         for (const item of prevItems) {
             if (current.has(item.task_id)) continue;
+            // v1（一首一資料夾）的舊紀錄已經清掉，不再保留；只留平鋪母帶的紀錄。
+            if (typeof item.file !== 'string' || !item.file) continue;
             nextItems.push({ ...item, retained: true });
         }
         await writeJson(manifestPath, {
@@ -234,15 +309,22 @@ export async function collectFavorites({
             generatedAt: new Date().toISOString(),
             root,
             folder,
+            layout: 'flat-wav',
             sources: {
                 site: { revision: sources.site.revision, fetchedAt: sources.site.fetchedAt, count: sources.site.count },
                 panel: { savedAt: sources.panel.savedAt, count: sources.panel.count },
             },
             total: report.total,
+            noWav: report.noWav,
             items: nextItems,
         });
     }
     report.ok = report.failed.length === 0;
     report.finishedAt = new Date().toISOString();
     return report;
+}
+
+/** 舊清單（v1）用資料夾名當檔名基礎；新清單（v2）直接用檔名。 */
+function legacyDirBase(item) {
+    return item && typeof item.dir === 'string' && legalFileName(item.dir) ? item.dir : '';
 }
