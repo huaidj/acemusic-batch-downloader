@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { config, replaceFileAtomic } from '../agent/lib/config.mjs';
+import { config, replaceFileAtomic, cacheRead } from '../agent/lib/config.mjs';
 import { buildAudioLibrary } from '../agent/lib/audio-library.mjs';
 import { readSiteLikes, siteLikesView } from '../agent/lib/site-likes.mjs';
 
@@ -282,6 +282,117 @@ export function createPlayerServer(options = {}) {
     return task;
   };
 
+  /** 伺服器自己改狀態（匯入 M3U 等）：與前端 CAS 共用同一條寫入鏈，不接受外部 expectedRevision。 */
+  const mutateState = (mutator) => {
+    const task = writeChain.then(async () => {
+      const current = await loadState();
+      const draft = await mutator(current);
+      const next = validateState({ ...draft, revision: current.revision + 1 });
+      await atomicWrite(stateFile, next);
+      savedState = next;
+      return next;
+    });
+    writeChain = task.catch(() => {});
+    return task;
+  };
+
+  // 音頻屬性（BPM／調性／能量）來自整理管線的分析快取；缺失不代表失敗，只是這個播放器沒資料。
+  const readAnalysisCache = options.readAnalysis || (async () => {
+    try { return await cacheRead('audio-analysis', { cfg }); } catch { return null; }
+  });
+  const analysisResponse = async () => {
+    const [indexed, cache] = await Promise.all([library(), readAnalysisCache()]);
+    const items = cache && object(cache.items) ? cache.items : {};
+    const byLowerPath = new Map();
+    for (const [key, record] of Object.entries(items)) byLowerPath.set(key.toLowerCase(), record);
+    // 只回前端看得到的檔案 ID（library.files）；alias／hardlink 的別名不必多送一萬筆。
+    const visible = new Set((indexed.library.files || []).map((file) => file.id));
+    const out = {};
+    for (const [fileId, file] of indexed.filesById) {
+      if (visible.size && !visible.has(fileId)) continue;
+      if (!file || typeof file.absolutePath !== 'string') continue;
+      const record = items[file.absolutePath] || byLowerPath.get(file.absolutePath.toLowerCase());
+      if (!record || record.ok !== true) continue;
+      out[fileId] = {
+        bpm: Number.isFinite(Number(record.bpm)) ? Number(record.bpm) : null,
+        key: typeof record.key === 'string' ? record.key : null,
+        camelot: typeof record.camelot === 'string' ? record.camelot : null,
+        energy: Number.isFinite(Number(record.energy)) ? Number(record.energy) : null,
+        duration: Number.isFinite(Number(record.duration)) ? Number(record.duration) : null,
+      };
+    }
+    return { ok: true, items: out, thresholds: cache && object(cache.thresholds) ? cache.thresholds : null };
+  };
+
+  const playlistById = (id) => {
+    const list = savedState?.playlists?.find((item) => item.id === id);
+    if (!list) throw failure(404, '找不到這張播放清單', 'PLAYLIST_NOT_FOUND');
+    return list;
+  };
+
+  /** M3U8：DJ 軟體（Rekordbox／Serato／Mixxx）可直接載入；用絕對路徑，檔名是清單名。 */
+  const playlistM3u = async (id) => {
+    await loadState();
+    const list = playlistById(id);
+    const { filesById } = await library();
+    const lines = ['#EXTM3U', `#PLAYLIST:${list.name}`];
+    for (const fileId of list.fileIds) {
+      const file = filesById.get(fileId);
+      if (!file || typeof file.absolutePath !== 'string') continue;
+      const seconds = Math.max(0, Math.round(Number(file.duration) || 0));
+      const title = String(file.title || file.name || path.basename(file.absolutePath)).replace(/[\r\n]/g, ' ');
+      lines.push(`#EXTINF:${seconds},${title}`);
+      lines.push(file.absolutePath);
+    }
+    return { name: list.name, text: lines.join('\r\n') + '\r\n', count: list.fileIds.length };
+  };
+
+  /** 匯入 M3U：路徑先比對絕對路徑（不分大小寫），再退回唯一檔名；找不到的行照實回報，不亂塞。 */
+  const importM3u = async (name, text) => {
+    if (typeof text !== 'string' || !text.trim()) throw failure(400, 'M3U 內容是空的', 'INVALID_M3U');
+    if (text.length > 200000) throw failure(413, 'M3U 內容過大', 'BODY_TOO_LARGE');
+    if (typeof name !== 'string' || !name.trim() || name.length > 120 || /[\x00-\x1f\x7f]/.test(name)) throw failure(400, '播放清單名稱不正確', 'INVALID_M3U');
+    const { filesById } = await library();
+    const byPath = new Map();
+    const byBase = new Map();
+    for (const [fileId, file] of filesById) {
+      if (!file || typeof file.absolutePath !== 'string') continue;
+      const pathKey = file.absolutePath.toLowerCase();
+      const existing = byPath.get(pathKey);
+      // 同一路徑可能有多個不透明 ID（正常檔／待核對／損壞）；匯入一定要挑可播的那一個。
+      if (!existing || (file.validity === 'valid' && filesById.get(existing)?.validity !== 'valid')) byPath.set(pathKey, fileId);
+      const base = path.basename(file.absolutePath).toLowerCase();
+      const seen = byBase.get(base);
+      if (!seen) byBase.set(base, { pathKey, fileId });
+      // 同名但不同路徑 → 無法只憑檔名判斷，寧可不用
+      else if (seen.pathKey !== pathKey) byBase.set(base, null);
+    }
+    const fileIds = [];
+    const unmatched = [];
+    const seen = new Set();
+    for (const rawLine of text.split(/\r?\n/)) {
+      let line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      if (/^file:\/\//i.test(line)) {
+        try { line = decodeURIComponent(line.replace(/^file:\/\/\/?/i, '').replace(/\//g, path.sep)); } catch { /* keep raw */ }
+      }
+      if (process.platform === 'win32' && /^[A-Za-z]:\//.test(line)) line = line.replace(/\//g, '\\');
+      const normalized = line.replace(/\//g, '\\').replace(/\\\\+/g, '\\').toLowerCase();
+      // 先比絕對路徑；路徑失效（搬過歌）才退回唯一檔名，同名不同資料夾時不猜。
+      const baseMatch = byBase.get(path.basename(normalized));
+      const match = byPath.get(normalized) || (baseMatch && baseMatch.fileId) || null;
+      if (!match) { if (unmatched.length < 50) unmatched.push(rawLine.trim().slice(0, 300)); continue; }
+      if (seen.has(match)) continue;
+      seen.add(match);
+      fileIds.push(match);
+      if (fileIds.length >= 10000) break;
+    }
+    if (!fileIds.length) throw failure(422, 'M3U 裡的檔案都不在目前曲庫；請先確認路徑或刷新曲庫', 'M3U_NO_MATCH');
+    const created = { id: crypto.randomUUID(), name: name.trim(), fileIds };
+    const next = await mutateState((current) => ({ ...current, playlists: [...current.playlists, created] }));
+    return { ok: true, playlist: created, matched: fileIds.length, unmatched, revision: next.revision };
+  };
+
   const knownFile = async (fileId) => {
     if (!validId(fileId)) throw failure(404, '找不到這個音檔', 'FILE_NOT_FOUND');
     const { filesById } = await library();
@@ -357,6 +468,32 @@ export function createPlayerServer(options = {}) {
       }
       if (url.pathname === '/api/state' && method === 'GET') return json(res, 200, await loadState());
       if (url.pathname === '/api/state' && method === 'PUT') return json(res, 200, await updateState(await readBody(req)));
+      if (url.pathname === '/api/analysis' && method === 'GET') {
+        if (url.search) throw failure(400, '音頻屬性查詢不接受參數', 'INVALID_REQUEST');
+        return json(res, 200, await analysisResponse());
+      }
+      const playlistExport = /^\/api\/playlists\/([^/]+)\/m3u$/.exec(url.pathname);
+      if (playlistExport && method === 'GET') {
+        if (url.search) throw failure(400, 'M3U 匯出不接受參數', 'INVALID_REQUEST');
+        let id;
+        try { id = decodeURIComponent(playlistExport[1]); } catch { throw failure(400, '播放清單 ID 格式不正確', 'INVALID_REQUEST'); }
+        if (!validId(id)) throw failure(400, '播放清單 ID 格式不正確', 'INVALID_REQUEST');
+        const { name, text } = await playlistM3u(id);
+        const safeName = String(name || 'playlist').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, 80) || 'playlist';
+        const payload = Buffer.from(text, 'utf8');
+        res.writeHead(200, {
+          'Content-Type': 'audio/x-mpegurl; charset=utf-8',
+          'Content-Length': payload.length,
+          'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(safeName)}.m3u8`,
+          'Cache-Control': 'no-store',
+        });
+        return res.end(payload);
+      }
+      if (url.pathname === '/api/playlists/import' && method === 'POST') {
+        const body = await readBody(req);
+        if (Object.keys(body).some((key) => !['name', 'text'].includes(key))) throw failure(400, '只接受 name 與 text', 'INVALID_REQUEST');
+        return json(res, 200, await importM3u(body.name, body.text));
+      }
       if (url.pathname === '/api/reveal' && method === 'POST') {
         const body = await readBody(req);
         if (Object.keys(body).some((key) => key !== 'fileId')) throw failure(400, '只接受音檔 ID', 'INVALID_REQUEST');

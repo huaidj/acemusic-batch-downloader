@@ -326,3 +326,58 @@ test('library cache serves the last snapshot instantly while one background rebu
   const refreshed = await request(port, '/api/library?refresh=1');
   assert.equal(refreshed.json.revision, 'rev-3', 'an explicit refresh waits for fresh data');
 });
+
+test('player analysis maps audio-analysis cache to opaque file IDs and skips failed records', async (t) => {
+  const f = await fixture(t);
+  const cache = {
+    thresholds: { low: 0.3, high: 0.66 },
+    items: {
+      [f.audioPath.toUpperCase()]: { ok: true, bpm: 124.5, key: 'A minor', camelot: '8A', energy: 0.42, duration: 212 },
+      '/not/in/library.wav': { ok: true, bpm: 90, key: 'C major', camelot: '8B', energy: 0.1, duration: 100 },
+      '/failed/record.wav': { ok: false, error: 'analyzer failed' },
+    },
+  };
+  const { port } = await f.start({ readAnalysis: async () => cache });
+  const response = await request(port, '/api/analysis');
+  assert.equal(response.status, 200);
+  const meta = response.json.items[f.good.id];
+  assert.equal(meta.bpm, 124.5);
+  assert.equal(meta.camelot, '8A');
+  assert.equal(meta.key, 'A minor');
+  assert.equal(meta.energy, 0.42);
+  assert.equal(response.json.items['/not/in/library.wav'], undefined, '只回曲庫裡的檔案');
+  assert.deepEqual(response.json.thresholds, { low: 0.3, high: 0.66 });
+  assert.equal((await request(port, '/api/analysis?x=1')).status, 400);
+});
+
+test('player exports a playlist as M3U8 with absolute paths and rejects unknown ids', async (t) => {
+  const f = await fixture(t), { port } = await f.start();
+  const saved = await request(port, '/api/state', { method: 'PUT', body: { expectedRevision: 0, playlists: [{ id: 'set-a', name: 'Set A', fileIds: [f.good.id] }] } });
+  assert.equal(saved.status, 200);
+  const exported = await request(port, '/api/playlists/set-a/m3u');
+  assert.equal(exported.status, 200);
+  assert.equal(exported.headers['content-type'], 'audio/x-mpegurl; charset=utf-8');
+  assert.match(String(exported.headers['content-disposition']), /attachment/);
+  const text = exported.buffer.toString('utf8');
+  assert.ok(text.startsWith('#EXTM3U'), text);
+  assert.match(text, /#PLAYLIST:Set A/);
+  assert.ok(text.includes(f.audioPath), 'M3U 要有絕對路徑');
+  assert.equal((await request(port, '/api/playlists/missing/m3u')).status, 404);
+});
+
+test('player imports M3U into a new playlist and reports unmatched paths', async (t) => {
+  const f = await fixture(t), { port } = await f.start();
+  const imported = await request(port, '/api/playlists/import', { method: 'POST', body: { name: '匯入測試', text: '#EXTM3U\r\n#EXTINF:1,Fixture\r\n' + f.audioPath + '\r\nC:\\not\\in\\library.wav\r\n' } });
+  assert.equal(imported.status, 200);
+  assert.equal(imported.json.matched, 1);
+  assert.deepEqual(imported.json.unmatched.length, 1);
+  assert.equal(imported.json.playlist.name, '匯入測試');
+  const state = (await request(port, '/api/state')).json;
+  assert.equal(state.playlists.length, 1);
+  assert.deepEqual(state.playlists[0].fileIds, [f.good.id]);
+  assert.equal(state.revision, 1, '匯入也要走版本遞增');
+
+  assert.equal((await request(port, '/api/playlists/import', { method: 'POST', body: { name: 'x', text: 'C:\\nope\\missing.wav\r\n' } })).status, 422);
+  assert.equal((await request(port, '/api/playlists/import', { method: 'POST', body: { name: 'x', text: '', } })).status, 400);
+  assert.equal((await request(port, '/api/playlists/import', { method: 'POST', body: { name: 'x', text: f.audioPath, extra: 1 } })).status, 400);
+});

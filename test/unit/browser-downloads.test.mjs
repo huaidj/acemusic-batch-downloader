@@ -222,7 +222,7 @@ test('播放器順序cursor：alias收斂後兩個相同fileId位置仍各播一
 
 test('播放器待核對篩選不把已有來源紀錄的正常下載混成未確認', () => {
   const sample = ['verified','recorded','uncertain'].map(status=>({id:status,title:status,status,files:[]}));
-  const context=vm.createContext({library:{tracks:sample,files:sample},view:'library',query:'',statusFilter:'uncertain',formatFilter:'all',sort:{key:'order'},isPlaylistView:()=>false,favorite:()=>false,formatStatus:(track,kind)=>({status:kind==='mp3'?track.status:'unsupported'}),validityOf:file=>file.status,formatOf:()=> 'mp3',files:new Map(),state:{history:[]}});
+  const context=vm.createContext({library:{tracks:sample,files:sample},view:'library',query:'',statusFilter:'uncertain',formatFilter:'all',bpmFilter:'all',keyFilter:'all',sort:{key:'order'},isPlaylistView:()=>false,favorite:()=>false,formatStatus:(track,kind)=>({status:kind==='mp3'?track.status:'unsupported'}),validityOf:file=>file.status,formatOf:()=> 'mp3',files:new Map(),state:{history:[]},analysisOfTrack:()=>null,analysisOfFile:()=>null,bpmMatches:()=>true,keyMatches:()=>true});
   vm.runInContext(PLAYER.slice(PLAYER.indexOf('  function rowsForView('),PLAYER.indexOf('  function sortValue(')),context);
   assert.deepEqual(Array.from(vm.runInContext('rowsForView().map(row=>row.id)',context)),['uncertain']);
   context.view='local';

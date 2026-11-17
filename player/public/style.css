@@ -183,3 +183,16 @@ body.compact-mode .seek-line { margin-top: 20px; }
 body.compact-mode .player-settings { display: flex; flex-direction: row; align-items: center; justify-content: space-between; width: 100%; }
 body.compact-mode .format-choice > span { display: inline; }
 body.compact-mode .volume-line input { width: 130px; }
+
+/* 1.9.0：音頻屬性、佇列排序、快捷鍵說明、睡眠計時 */
+.bpm-cell, .key-cell { width: 64px; font: 11px var(--font-mono); color: var(--muted); white-space: nowrap; }
+.key-cell { width: 56px; color: var(--text); }
+.analysis-meta { margin-top: 6px; }
+.analysis-meta span { font: 11px var(--font-mono); color: var(--muted); }
+.queue-order { display: inline-flex; gap: 2px; margin-left: auto; }
+.queue-order .icon-button { width: 24px; height: 24px; }
+.shortcut-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.shortcut-table th { text-align: left; width: 112px; color: var(--muted); font: 11px var(--font-mono); padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); }
+.shortcut-table td { padding: 6px 0; border-bottom: 1px solid var(--line); }
+#help-dialog { width: 440px; }
+#sleep-timer { min-width: 76px; }

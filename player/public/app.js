@@ -47,6 +47,13 @@
   let query = '';
   let statusFilter = 'all';
   let formatFilter = 'all';
+  let bpmFilter = 'all';
+  let keyFilter = 'all';
+  // 音頻屬性（BPM／調性／能量）來自整理管線的分析快取；沒有資料只是顯示「未分析」，不影響播放。
+  let analysis = new Map();
+  let analysisKeys = [];
+  let sleepUntil = 0;
+  let sleepTicker = 0;
   let preferredFormat = 'auto';
   let initialized = false;
   let loading = false;
@@ -178,8 +185,71 @@
     const format = preferredFormat === 'auto' ? 'mp3' : preferredFormat;
     return available.find((item) => formatOf(item) === format) || (preferredFormat === 'auto' ? preferred || available[0] : null) || null;
   }
-  function toast(message) {
-    $('toast').textContent = message;
+  function analysisOfFile(file) { return file ? analysis.get(file.id) || null : null; }
+  function analysisOfTrack(track) {
+    if (!track) return null;
+    const own = [...(track.files || []), ...((track.stems && track.stems.files) || [])].map((item) => files.get(item.id) || item);
+    // 播放格式偏好可能是沒被分析的 MP3、WAV 才有分析；先找偏好檔，再找這首歌其他檔案。
+    const candidates = [preferredFile(track), ...own].filter(Boolean);
+    for (const file of candidates) {
+      const meta = analysisOfFile(file);
+      if (meta) return meta;
+    }
+    return null;
+  }
+  function analysisOfRow(row) { return row.track ? analysisOfTrack(row.track) : analysisOfFile(row.file); }
+  function bpmBucket(bpm) {
+    const value = Number(bpm);
+    if (!Number.isFinite(value)) return 'unknown';
+    if (value < 100) return 'lt100';
+    if (value < 115) return '100-115';
+    if (value < 130) return '115-130';
+    if (value < 145) return '130-145';
+    return '145+';
+  }
+  function bpmMatches(meta) {
+    if (bpmFilter === 'all') return true;
+    if (bpmFilter === 'unknown') return !meta || !Number.isFinite(Number(meta.bpm));
+    return !!meta && Number.isFinite(Number(meta.bpm)) && bpmBucket(meta.bpm) === bpmFilter;
+  }
+  function keyMatches(meta) {
+    if (keyFilter === 'all') return true;
+    return !!meta && (meta.camelot === keyFilter || meta.key === keyFilter);
+  }
+  function bpmCell(meta) {
+    const value = Number(meta && meta.bpm);
+    return Number.isFinite(value) ? String(Math.round(value * 10) / 10) : '—';
+  }
+  function keyCell(meta) {
+    if (!meta) return '—';
+    return meta.camelot || meta.key || '—';
+  }
+  function energyCell(meta) {
+    const value = Number(meta && meta.energy);
+    return Number.isFinite(value) ? value.toFixed(2) : '—';
+  }
+  async function loadAnalysis() {
+    try {
+      const data = await request('/api/analysis', { signal: AbortSignal.timeout(8000) });
+      const next = new Map();
+      const keys = new Set();
+      for (const [fileId, meta] of Object.entries(data.items || {})) {
+        next.set(fileId, meta);
+        if (meta && meta.camelot) keys.add(meta.camelot);
+      }
+      analysis = next;
+      analysisKeys = [...keys].sort((a, b) => String(a).localeCompare(String(b), 'en', { numeric: true }));
+      renderKeyFilter();
+    } catch (_) { /* 分析快取不存在或暫時讀不到：播放器照常運作，只是不顯示 BPM／調性。 */ }
+  }
+  function renderKeyFilter() {
+    const select = $('key-filter');
+    const previous = keyFilter;
+    select.innerHTML = '<option value="all">所有調性</option>' + analysisKeys.map((key) => `<option value="${esc(key)}">${esc(key)}</option>`).join('');
+    if (analysisKeys.includes(previous)) select.value = previous;
+    else { select.value = 'all'; keyFilter = 'all'; }
+  }
+  function toast(message) {    $('toast').textContent = message;
     $('toast').hidden = false;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { $('toast').hidden = true; }, 4200);
@@ -503,6 +573,7 @@
       if (quiet && (next.revision === library.revision || saving || saveConflict || document.querySelector('dialog[open]') || document.activeElement?.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"]),dialog'))) return;
       indexLibrary(next);
       applyLibraryFileAliases();
+      await loadAnalysis();
       if (!quiet && !saveConflict) notice('');
       if (selection && !(selection.kind === 'track' ? tracks : files).has(selection.id)) selection = null;
       renderAll();
@@ -544,15 +615,19 @@
         if (statusFilter === 'available' && !preferredFile(track)) return false;
         if (formatFilter === 'stem' && !track.stems?.count) return false;
         if (['mp3', 'wav'].includes(formatFilter) && statusFilter !== 'missing' && !formatStatus(track, formatFilter).count) return false;
+        const meta = analysisOfTrack(track);
+        if (!bpmMatches(meta) || !keyMatches(meta)) return false;
       } else {
         const file = row.file;
-        if (!file) return !needle && statusFilter !== 'available';
+        if (!file) return !needle && statusFilter !== 'available' && bpmFilter === 'all' && keyFilter === 'all';
         if (needle && ![file.title, file.name, file.relativePath].some((text) => String(text || '').toLocaleLowerCase().includes(needle))) return false;
         if (formatFilter === 'stem' ? file.kind !== 'stem' : formatFilter !== 'all' && formatOf(file) !== formatFilter) return false;
         if (statusFilter === 'missing') return false;
         if (statusFilter === 'uncertain' && validityOf(file) !== 'uncertain') return false;
         if (statusFilter === 'damaged' && validityOf(file) !== 'damaged') return false;
         if (statusFilter === 'available' && !playable(file)) return false;
+        const meta = analysisOfFile(file);
+        if (!bpmMatches(meta) || !keyMatches(meta)) return false;
       }
       return true;
     });
@@ -572,6 +647,8 @@
     if (key === 'stems') return Number(row.track?.stems?.count) || 0;
     if (key === 'format') return formatOf(row.file);
     if (key === 'path') return entry.relativePath || '';
+    if (key === 'bpm') return Number(analysisOfRow(row)?.bpm) || 0;
+    if (key === 'key') return analysisOfRow(row)?.camelot || analysisOfRow(row)?.key || '';
     return entry.title || entry.name || '';
   }
   function actionButton(action, id, title, glyph, extra = '') {
@@ -593,7 +670,7 @@
     const fileView = ['local', 'history'].includes(view) || isPlaylistView();
     $('library-table').classList.toggle('file-table', fileView);
     const head = (key, label, cls = '') => `<th class="${cls}" aria-sort="${sort.key === key ? sort.direction === 1 ? 'ascending' : 'descending' : 'none'}"><button data-sort="${key}" class="${sort.key === key ? 'sort-active' : ''}">${label}${sort.key === key ? sort.direction === 1 ? ' ↑' : ' ↓' : ''}</button></th>`;
-    $('table-head').innerHTML = `<tr><th class="play-cell">${fileView ? '' : `<button data-sort="created" class="site-order ${sort.key === 'created' ? 'sort-active' : ''}" title="與 acemusic.ai 相同：最新在前" aria-pressed="${sort.key === 'created'}">${sort.key === 'created' ? (sort.direction === -1 ? '新↓' : '舊↓') : '新'}</button>`}</th>${head('title', fileView ? '檔案' : '曲名', 'title-cell')}${head('duration', '長度', 'duration-cell')}${fileView ? `${head('format', '格式')}${head('bytes', '大小')}<th>狀態</th>${isPlaylistView() ? '<th>順序</th>' : ''}` : `${head('mp3', 'MP3', 'status-cell')}${head('wav', 'WAV', 'status-cell')}${head('stems', '分軌', 'status-cell')}`}<th class="row-actions"></th></tr>`;
+    $('table-head').innerHTML = `<tr><th class="play-cell">${fileView ? '' : `<button data-sort="created" class="site-order ${sort.key === 'created' ? 'sort-active' : ''}" title="與 acemusic.ai 相同：最新在前" aria-pressed="${sort.key === 'created'}">${sort.key === 'created' ? (sort.direction === -1 ? '新↓' : '舊↓') : '新'}</button>`}</th>${head('title', fileView ? '檔案' : '曲名', 'title-cell')}${head('duration', '長度', 'duration-cell')}${fileView ? `${head('format', '格式')}${head('bytes', '大小')}<th>狀態</th>${isPlaylistView() ? '<th>順序</th>' : ''}` : `${head('bpm', 'BPM', 'bpm-cell')}${head('key', '調', 'key-cell')}${head('mp3', 'MP3', 'status-cell')}${head('wav', 'WAV', 'status-cell')}${head('stems', '分軌', 'status-cell')}`}<th class="row-actions"></th></tr>`;
     $('table-body').innerHTML = rows.map((row) => {
       const file = row.file || preferredFile(row.track);
       const title = row.track?.title || row.file?.title || row.file?.name || '檔案已不存在';
@@ -602,13 +679,13 @@
       const playing = activeFileId && (fileView ? activeFileId === row.id : ownTrack && currentTrack(activeFileId)?.id === ownTrack.id);
       const subtitle = fileView ? row.file?.relativePath || '清單仍保留此項目，可移除' : row.track?.siteOnly ? '網站點讚 · 尚無本機音檔' : file?.name || (formatStatus(row.track, 'mp3').status === 'uncertain' || formatStatus(row.track, 'wav').status === 'uncertain' ? '本機檔案來源待核對' : '尚無可播放的本機音檔');
       const rowId = `${row.kind}:${row.id}`;
-      const buttons = file ? actionButton('queue-add', file.id, '加入播放佇列', 'plus') : '';
-      return `<tr data-row="${esc(rowId)}" data-index="${row.index ?? ''}" class="${selected ? 'selected' : ''} ${playing ? 'playing' : ''}" tabindex="0" aria-selected="${!!selected}"><td class="play-cell">${actionButton('row-play', rowId, `播放 ${title}`, 'play', playable(file) ? '' : 'disabled')}</td><td class="title-cell"><span class="song-title" title="${esc(title)}">${esc(title)}</span><span class="song-subtitle" title="${esc(subtitle)}">${esc(subtitle)}</span></td><td class="duration-cell">${time(row.track?.duration || row.file?.duration)}</td>${fileView ? `<td>${esc(formatOf(row.file).toUpperCase() || '—')}</td><td class="duration-cell">${row.file ? size(row.file.bytes) : '—'}</td><td class="status-cell">${row.file ? fileStatusBadge(row.file) : statusBadge('missing')}</td>${isPlaylistView() ? `<td class="order-cell">${actionButton('playlist-up', row.index, '向上移動', 'up', row.index === 0 ? 'disabled' : '')}${actionButton('playlist-down', row.index, '向下移動', 'down', row.index === activePlaylist().fileIds.length - 1 ? 'disabled' : '')}${actionButton('playlist-remove', row.index, '從清單移除', 'close')}</td>` : ''}` : `<td class="status-cell">${statusBadge(formatStatus(row.track, 'mp3').status, formatStatus(row.track, 'mp3').count)}</td><td class="status-cell">${statusBadge(formatStatus(row.track, 'wav').status, formatStatus(row.track, 'wav').count)}</td><td class="status-cell">${statusBadge(row.track.stems?.status || 'missing', row.track.stems?.count)}</td>`}<td class="row-actions">${buttons}${ownTrack ? actionButton('favorite', ownTrack.id, favorite(ownTrack.id) ? '取消收藏' : '收藏', 'heart', `aria-pressed="${favorite(ownTrack.id)}"`) : ''}</td></tr>`;
+      const buttons = file ? actionButton('queue-add', file.id, '加入播放佇列', 'plus') + actionButton('queue-next', file.id, '下一首播放', 'next') : '';
+      return `<tr data-row="${esc(rowId)}" data-index="${row.index ?? ''}" class="${selected ? 'selected' : ''} ${playing ? 'playing' : ''}" tabindex="0" aria-selected="${!!selected}"><td class="play-cell">${actionButton('row-play', rowId, `播放 ${title}`, 'play', playable(file) ? '' : 'disabled')}</td><td class="title-cell"><span class="song-title" title="${esc(title)}">${esc(title)}</span><span class="song-subtitle" title="${esc(subtitle)}">${esc(subtitle)}</span></td><td class="duration-cell">${time(row.track?.duration || row.file?.duration)}</td>${fileView ? `<td>${esc(formatOf(row.file).toUpperCase() || '—')}</td><td class="duration-cell">${row.file ? size(row.file.bytes) : '—'}</td><td class="status-cell">${row.file ? fileStatusBadge(row.file) : statusBadge('missing')}</td>${isPlaylistView() ? `<td class="order-cell">${actionButton('playlist-up', row.index, '向上移動', 'up', row.index === 0 ? 'disabled' : '')}${actionButton('playlist-down', row.index, '向下移動', 'down', row.index === activePlaylist().fileIds.length - 1 ? 'disabled' : '')}${actionButton('playlist-remove', row.index, '從清單移除', 'close')}</td>` : ''}` : `<td class="bpm-cell">${esc(bpmCell(analysisOfRow(row)))}</td><td class="key-cell">${esc(keyCell(analysisOfRow(row)))}</td><td class="status-cell">${statusBadge(formatStatus(row.track, 'mp3').status, formatStatus(row.track, 'mp3').count)}</td><td class="status-cell">${statusBadge(formatStatus(row.track, 'wav').status, formatStatus(row.track, 'wav').count)}</td><td class="status-cell">${statusBadge(row.track.stems?.status || 'missing', row.track.stems?.count)}</td>`}<td class="row-actions">${buttons}${ownTrack ? actionButton('favorite', ownTrack.id, favorite(ownTrack.id) ? '取消收藏' : '收藏', 'heart', `aria-pressed="${favorite(ownTrack.id)}"`) : ''}</td></tr>`;
     }).join('');
     $('scope-count').textContent = `顯示 ${rows.length} ${fileView ? '個檔案' : '首歌曲'}${query || statusFilter !== 'all' || formatFilter !== 'all' ? ' · 已篩選' : ''}`;
     const actions = [];
     if (rows.some((row) => playable(row.file || preferredFile(row.track)))) actions.push('<button data-command="play-visible">播放目前清單</button>');
-    if (isPlaylistView()) actions.push('<button data-command="rename-playlist">改名</button><button data-command="delete-playlist">刪除清單</button>');
+    if (isPlaylistView()) actions.push('<button data-command="rename-playlist">改名</button><button data-command="delete-playlist">刪除清單</button><button data-command="export-m3u">匯出 M3U</button><button data-command="import-m3u">匯入 M3U</button>');
     if (view === 'history' && state.history.length) actions.push('<button data-command="clear-history">清除歷史</button>');
     if (view === 'site-likes') actions.push(`<span class="site-likes-status" role="status">${esc(siteLikeStatusText())}</span><button data-command="sync-site-likes" ${siteLikesSyncing ? 'disabled' : ''}>同步網站點讚</button>`);
     $('view-actions').innerHTML = actions.join('');
@@ -637,7 +714,9 @@
       const title = selectedTrack?.title || selectedFile?.title || selectedFile?.name || '檔案已不存在';
       const fullFiles = selection.kind === 'file' ? selectedFile ? [selectedFile] : [] : selectedTrack?.files || [];
       const stemFiles = selection.kind === 'track' ? selectedTrack?.stems?.files || [] : [];
-      $('detail-content').innerHTML = `<h2>${esc(title)}</h2><div class="detail-kicker">${time(selectedTrack?.duration || selectedFile?.duration)} · ${selection.kind === 'file' ? '本機檔案' : '歌曲與本機音檔'}</div><div class="detail-actions"><button class="primary" data-action="file-play" data-id="${esc(selectedFile?.id || '')}" ${playable(selectedFile) ? '' : 'disabled'}>播放</button><button data-action="add-to-playlist" data-id="${esc(selectedFile?.id || '')}" ${selectedFile ? '' : 'disabled'}>加入清單</button>${selectedTrack ? `<button data-action="favorite" data-id="${esc(selectedTrack.id)}">${favorite(selectedTrack.id) ? '已收藏' : '收藏'}</button>` : ''}</div>${selectedTrack ? `<div class="file-meta">MP3 ${statusBadge(formatStatus(selectedTrack, 'mp3').status)} · WAV ${statusBadge(formatStatus(selectedTrack, 'wav').status)}</div>` : ''}<div class="section-caption"><span>本機檔案</span><span>${fullFiles.length}</span></div>${fullFiles.map((file) => fileCard(files.get(file.id) || file)).join('') || '<p class="muted">尚未找到可對應的本機音檔。</p>'}${stemFiles.length ? `<div class="section-caption"><span>分軌檔案</span><span>${stemFiles.length} 軌</span></div>${stemFiles.map((file) => fileCard(files.get(file.id) || file, file.name)).join('')}` : ''}`;
+      const meta = selection.kind === 'track' ? analysisOfTrack(selectedTrack) : analysisOfFile(selectedFile);
+      const metaLine = `<div class="file-meta analysis-meta"><span>BPM ${esc(bpmCell(meta))}</span><span>調性 ${esc(keyCell(meta))}</span><span>能量 ${esc(energyCell(meta))}</span></div>`;
+      $('detail-content').innerHTML = `<h2>${esc(title)}</h2><div class="detail-kicker">${time(selectedTrack?.duration || selectedFile?.duration)} · ${selection.kind === 'file' ? '本機檔案' : '歌曲與本機音檔'}</div><div class="detail-actions"><button class="primary" data-action="file-play" data-id="${esc(selectedFile?.id || '')}" ${playable(selectedFile) ? '' : 'disabled'}>播放</button><button data-action="add-to-playlist" data-id="${esc(selectedFile?.id || '')}" ${selectedFile ? '' : 'disabled'}>加入清單</button>${selectedTrack ? `<button data-action="favorite" data-id="${esc(selectedTrack.id)}">${favorite(selectedTrack.id) ? '已收藏' : '收藏'}</button>` : ''}</div>${selectedTrack ? `<div class="file-meta">MP3 ${statusBadge(formatStatus(selectedTrack, 'mp3').status)} · WAV ${statusBadge(formatStatus(selectedTrack, 'wav').status)}</div>` : ''}${metaLine}<div class="section-caption"><span>本機檔案</span><span>${fullFiles.length}</span></div>${fullFiles.map((file) => fileCard(files.get(file.id) || file)).join('') || '<p class="muted">尚未找到可對應的本機音檔。</p>'}${stemFiles.length ? `<div class="section-caption"><span>分軌檔案</span><span>${stemFiles.length} 軌</span></div>${stemFiles.map((file) => fileCard(files.get(file.id) || file, file.name)).join('')}` : ''}`;
     }
     renderQueue();
   }
@@ -646,7 +725,7 @@
     $('clear-queue').disabled = !state.queue.length;
     $('queue-list').innerHTML = state.queue.map((id, index) => {
       const file = files.get(id);
-      return `<li class="queue-row ${id === state.currentFileId ? 'current' : ''}"><span class="queue-number">${index + 1}</span><button class="queue-name" data-action="queue-play" data-id="${esc(id)}" ${playable(file) ? '' : 'disabled'}>${esc(currentTrack(id)?.title || file?.title || file?.name || '檔案已不存在')}<small>${esc(formatOf(file).toUpperCase())}${file?.duration ? ` · ${time(file.duration)}` : ''}</small></button>${actionButton('queue-remove', index, '移出播放佇列', 'close')}</li>`;
+      return `<li class="queue-row ${id === state.currentFileId ? 'current' : ''}"><span class="queue-number">${index + 1}</span><button class="queue-name" data-action="queue-play" data-id="${esc(id)}" ${playable(file) ? '' : 'disabled'}>${esc(currentTrack(id)?.title || file?.title || file?.name || '檔案已不存在')}<small>${esc(formatOf(file).toUpperCase())}${file?.duration ? ` · ${time(file.duration)}` : ''}</small></button><span class="queue-order">${actionButton('queue-up', index, '在佇列中上移', 'up', index === 0 ? 'disabled' : '')}${actionButton('queue-down', index, '在佇列中下移', 'down', index === state.queue.length - 1 ? 'disabled' : '')}</span>${actionButton('queue-remove', index, '移出播放佇列', 'close')}</li>`;
     }).join('') || '<li class="inspector-empty queue-empty">佇列還是空的。按歌曲旁的 ＋ 加入。</li>';
   }
   function renderTransport() {
@@ -752,6 +831,25 @@
     renderQueue();
     preloadNext();
     toast('已加入播放佇列');
+  }
+  function queueNext(id) {
+    if (!playable(files.get(id))) return toast('此檔案目前無法播放');
+    const existing = state.queue.indexOf(id);
+    if (existing >= 0) state.queue.splice(existing, 1);
+    const current = state.currentFileId ? state.queue.indexOf(state.currentFileId) : -1;
+    state.queue.splice(current + 1, 0, id);
+    changed();
+    renderQueue();
+    preloadNext();
+    toast('排為下一首播放');
+  }
+  function moveQueue(index, direction) {
+    const target = index + direction;
+    if (!Number.isInteger(index) || target < 0 || target >= state.queue.length) return;
+    [state.queue[index], state.queue[target]] = [state.queue[target], state.queue[index]];
+    changed();
+    renderQueue();
+    preloadNext();
   }
   function visibleFileIds() { return rowsForView().map((row) => row.file || preferredFile(row.track)).filter(playable).map((file) => file.id); }
   function playFromTable(kind, id) {
@@ -1045,6 +1143,8 @@
     if (action === 'row-play') { const split = id.indexOf(':'); playFromTable(id.slice(0, split), id.slice(split + 1)); }
     else if (action === 'file-play' || action === 'queue-play') { if (!state.queue.includes(id)) state.queue.push(id); playFile(id); }
     else if (action === 'queue-add') queueAdd(id);
+    else if (action === 'queue-next') queueNext(id);
+    else if (action === 'queue-up' || action === 'queue-down') moveQueue(Number(id), action === 'queue-up' ? -1 : 1);
     else if (action === 'favorite') toggleFavorite(id);
     else if (action === 'queue-remove') { state.queue.splice(Number(id), 1); changed(); renderQueue(); preloadNext(); }
     else if (action === 'reveal') { try { await request('/api/reveal', { method: 'POST', body: JSON.stringify({ fileId: id }) }); } catch (error) { toast(`無法開啟資料夾：${error.message}`); } }
@@ -1068,6 +1168,15 @@
       if (list && confirm(`刪除播放清單「${list.name}」？本機音檔會保留。`)) { state.playlists = state.playlists.filter((item) => item.id !== list.id); changed(); switchView('library'); }
     } else if (command === 'clear-history') { state.history = []; changed(); renderAll(); }
     else if (command === 'sync-site-likes') syncSiteLikesNow();
+    else if (command === 'export-m3u') {
+      const list = activePlaylist();
+      if (!list) return;
+      if (!list.fileIds.length) return toast('這張清單還沒有曲目');
+      const link = document.createElement('a');
+      link.href = '/api/playlists/' + encodeURIComponent(list.id) + '/m3u';
+      link.download = '';
+      document.body.appendChild(link); link.click(); link.remove();
+    } else if (command === 'import-m3u') { $('m3u-file').click(); }
   });
   $('table-body').addEventListener('dblclick', (event) => {
     if (event.target.closest('button')) return;
@@ -1080,6 +1189,12 @@
   $('search').addEventListener('input', (event) => { query = event.target.value; renderTable(); });
   $('status-filter').addEventListener('change', (event) => { statusFilter = event.target.value; renderTable(); });
   $('format-filter').addEventListener('change', (event) => { formatFilter = event.target.value; renderTable(); });
+  $('bpm-filter').addEventListener('change', (event) => { bpmFilter = event.target.value; renderTable(); });
+  $('key-filter').addEventListener('change', (event) => { keyFilter = event.target.value; renderTable(); });
+  $('sleep-timer').addEventListener('change', (event) => armSleepTimer(event.target.value));
+  $('shortcuts-help').addEventListener('click', showShortcuts);
+  $('close-help').addEventListener('click', () => $('help-dialog').close());
+  $('m3u-file').addEventListener('change', onImportM3u);
   $('play-format').addEventListener('change', (event) => {
     preferredFormat = event.target.value;
     try { localStorage.setItem('huaidj-player-format', preferredFormat); } catch (_) { /* Local UI preferences are optional. */ }
@@ -1087,8 +1202,67 @@
     toast('播放格式已更新；目前播放保持不變');
   });
   $('refresh-library').addEventListener('click', () => initialized ? loadLibrary(true) : start());
-  function compactMode(enabled) {
-    document.body.classList.toggle('compact-mode', enabled);
+  function toggleMute() {
+    if (state.volume) { previousVolume = state.volume; state.volume = 0; }
+    else state.volume = previousVolume || .8;
+    audio.volume = state.volume;
+    changed();
+    renderTransport();
+  }
+  function armSleepTimer(minutes) {
+    clearInterval(sleepTicker);
+    sleepTicker = 0;
+    const value = Number(minutes) || 0;
+    if (!value) { sleepUntil = 0; return toast('睡眠計時已關閉'); }
+    sleepUntil = Date.now() + value * 60000;
+    const at = new Date(sleepUntil).toLocaleTimeString('zh-Hant', { hour: '2-digit', minute: '2-digit' });
+    toast(`睡眠計時 ${value} 分鐘（約 ${at} 停止）`);
+    sleepTicker = setInterval(() => {
+      if (!sleepUntil || Date.now() < sleepUntil) return;
+      clearInterval(sleepTicker);
+      sleepTicker = 0;
+      sleepUntil = 0;
+      $('sleep-timer').value = '0';
+      if (!audio.paused) audio.pause();
+      toast('睡眠計時結束，已暫停播放');
+    }, 15000);
+  }
+  function seekBy(delta) {
+    if (!activeFileId || !Number.isFinite(audio.duration) || !audio.duration) return;
+    audio.currentTime = Math.min(audio.duration, Math.max(0, audio.currentTime + delta));
+    state.currentTime = audio.currentTime;
+    changed();
+    updateTime();
+  }
+  function toggleQueuePane() {
+    document.body.classList.add('inspector-open');
+    $('toggle-inspector').setAttribute('aria-expanded', 'true');
+    inspectorTab = inspectorTab === 'queue' ? 'details' : 'queue';
+    renderInspector();
+  }
+  function showShortcuts() {
+    const dialog = $('help-dialog');
+    if (dialog.open) dialog.close();
+    else dialog.showModal();
+  }
+  async function onImportM3u(event) {
+    const input = event.target;
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const name = String(file.name || '匯入清單').replace(/\.m3u8?$/i, '').slice(0, 120) || '匯入清單';
+      const created = await request('/api/playlists/import', { method: 'POST', body: JSON.stringify({ name, text }) });
+      await reloadState();
+      renderAll();
+      const missing = Array.isArray(created.unmatched) ? created.unmatched.length : 0;
+      toast(`已匯入「${created.playlist?.name || name}」 ${created.matched} 首${missing ? `；${missing} 個路徑不在曲庫` : ''}`);
+    } catch (error) {
+      toast(`匯入 M3U 失敗：${error.message}`);
+    }
+  }
+  function compactMode(enabled) {    document.body.classList.toggle('compact-mode', enabled);
     document.body.classList.remove('inspector-open');
     $('toggle-inspector').setAttribute('aria-expanded', 'false');
     try { localStorage.setItem('huaidj-player-compact', String(enabled)); } catch (_) { /* This presentation choice is optional. */ }
@@ -1151,7 +1325,7 @@
   $('repeat').addEventListener('click', () => { state.repeat = ({ off: 'all', all: 'one', one: 'off' })[state.repeat]; changed(); renderTransport(); preloadNext(); });
   $('now-favorite').addEventListener('click', () => { const track = currentTrack(); if (track) toggleFavorite(track.id); });
   $('volume').addEventListener('input', (event) => { state.volume = Number(event.target.value) / 100; audio.volume = state.volume; changed(); renderTransport(); });
-  $('mute').addEventListener('click', () => { if (state.volume) { previousVolume = state.volume; state.volume = 0; } else state.volume = previousVolume || .8; audio.volume = state.volume; changed(); renderTransport(); });
+  $('mute').addEventListener('click', toggleMute);
   $('seek').addEventListener('input', (event) => { const duration = Number.isFinite(audio.duration) ? audio.duration : 0; $('elapsed').textContent = time(Number(event.target.value) / 1000 * duration); });
   $('seek').addEventListener('change', (event) => { if (Number.isFinite(audio.duration)) { audio.currentTime = Number(event.target.value) / 1000 * audio.duration; state.currentTime = audio.currentTime; changed(); updateTime(); } });
   audio.addEventListener('loadedmetadata', () => { if (pendingSeek && Number.isFinite(audio.duration)) audio.currentTime = Math.min(pendingSeek, Math.max(0, audio.duration - .1)); pendingSeek = 0; restoringAudio = false; updateTime(); });
@@ -1166,9 +1340,18 @@
   audio.addEventListener('ended', () => next(1, true));
   audio.addEventListener('error', handlePlaybackError);
   document.addEventListener('keydown', (event) => {
-    if (event.target.closest('input,textarea,select,[contenteditable="true"],dialog') || event.ctrlKey || event.metaKey) return;
-    if (event.code === 'Space' && !event.altKey && !event.target.closest('button')) { event.preventDefault(); togglePlay(); }
-    if (event.altKey && ['ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); next(event.key === 'ArrowLeft' ? -1 : 1); }
+    // 事件可能來自 document／window（沒有 closest）；不是元素時就當作「不是在輸入框裡」。
+    const target = event.target instanceof Element ? event.target : document.body;
+    if (target.closest('input,textarea,select,[contenteditable="true"],dialog') || event.ctrlKey || event.metaKey) return;
+    if (event.code === 'Space' && !event.altKey && !target.closest('button')) { event.preventDefault(); togglePlay(); return; }
+    if (event.altKey && ['ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); next(event.key === 'ArrowLeft' ? -1 : 1); return; }
+    if (event.key === '/') { event.preventDefault(); $('search').focus(); return; }
+    if (event.key === '?' || (event.key === '/' && event.shiftKey)) { event.preventDefault(); showShortcuts(); return; }
+    const key = String(event.key || '').toLowerCase();
+    if (key === 'j' || key === 'l') { event.preventDefault(); seekBy(key === 'j' ? -5 : 5); return; }
+    if (key === 'm') { event.preventDefault(); toggleMute(); return; }
+    if (key === 'f') { event.preventDefault(); const track = currentTrack(); if (track) toggleFavorite(track.id); return; }
+    if (key === 'q') { event.preventDefault(); toggleQueuePane(); return; }
     if (event.key === 'Escape') { document.body.classList.remove('inspector-open'); $('toggle-inspector').setAttribute('aria-expanded', 'false'); }
   });
   window.addEventListener('pagehide', () => { clearInterval(selectionPoller); clearInterval(libraryPoller); if (!restoringAudio && Number.isFinite(audio.currentTime)) state.currentTime = audio.currentTime; saveVersion += 1; persistPendingJournal(); saveShuffleCycle(); saveLinearCycle(); flushSave(true); });
@@ -1187,6 +1370,7 @@
     try {
       const [libraryData, stateData] = await Promise.all([request('/api/library'), request('/api/state'), loadSiteLikes()]);
       indexLibrary(libraryData);
+      await loadAnalysis();
       state = normalizedState(stateData);
       lastSavedSnapshot = canonicalSnapshot(state);
       initialized = true;
