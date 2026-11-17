@@ -38,6 +38,12 @@ export function config() {
         historyFile: path.join(stateDir, 'history.json'),
         stateFile: path.join(stateDir, 'agent-state.json'),
         logFile: path.join(stateDir, 'agent.log'),
+        // 官方遠端 MCP（https://acemusic.ai/mcp）：OAuth 2.1 授權，跟瀏覽器 session 是兩套。
+        // 站點 session 失效時用它兜底（歌單、狀態、生成、mp3/wav/midi 下載）；分軌與 MusicXML 仍需 session。
+        officialAuthFile: process.env.ACE_OFFICIAL_AUTH_FILE || path.join(stateDir, 'official-auth.json'),
+        officialMcpUrl: (process.env.ACE_OFFICIAL_MCP_URL || 'https://acemusic.ai/mcp').replace(/\/+$/, ''),
+        officialRedirectPort: Number(process.env.ACE_OFFICIAL_PORT || 8791),
+        officialDisabled: process.env.ACE_OFFICIAL === '0',
     };
 }
 

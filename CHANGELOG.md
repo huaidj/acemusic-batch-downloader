@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.10.0 — 2026-11-18（官方遠端 MCP 兜底：session 失效也能列歌／下載 mp3-wav-midi）
+
+- 新增官方通道 `agent/lib/official.mjs`：接 [acemusic.ai 官方 MCP](https://acemusic.ai/mcp)（Streamable HTTP + OAuth 2.1）。用 Dynamic Client Registration + PKCE S256 + 127.0.0.1 回呼取得授權，token 存 `<stateDir>\official-auth.json`（只存本機），access token 快到期時用 refresh_token 自動續約，不需要盯著重登。
+- **站點 session 失效（沒匯出／401）時自動兜底**，不會整輪下載直接中止：
+  - 歌單：`list`／`listSongs` 改列官方歌單（416 首同樣看得到），標記 `official: true`、`stems: null`。
+  - 檔案：mp3／wav／midi（`midi_full`）改用官方下載連結；封面用官方 `cover_url`。
+  - 分軌（stems）與 MusicXML 官方沒有 → 明確標成「不支援／需站點 session」，不會假裝成功、也不會亂扣額度（官方歌單沒有分軌任務，planner 不會排分軌）。
+- **FLAC 不冒充 WAV**：官方（與站點）對以 FLAC 儲存的歌回的是 FLAC，現在偵測檔頭後標成 `WAV_UNSUPPORTED` 跳過，不會把 FLAC 寫成 `.wav` 進曲庫。
+- 修正：下載準備階段改以 `prepDone` 判斷（原本用 `source === 'url'`），官方來源的 url 型檔案不會再讓整輪卡在等待。
+- CLI 新增 `official status|login|logout|refresh|list|get|download|create|skill|test`；`doctor` 與 `probe` 都回報官方通道狀態（授權、方案、額度）。
+- 下載目的地不變：`<stateDir>\config.json` 的 `downloadDir`（本機 `E:\`）＋根資料夾 `ai音樂` → `E:\ai音樂\<歌名>\`；硬連結檢視（`音頻分類`）仍由既有一鍵整理／分類流程產生。
+
 ## 1.9.5 — 2026-11-17（保護 `節目` 資料夾）
 
 - 修正：`節目\`（電臺節目／母帶）被一鍵整理當成「未分類音檔」搬進 `_未對應\音頻分類找回`、並在 `音頻分類` 建立硬連結檢視。

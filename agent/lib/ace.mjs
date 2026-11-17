@@ -24,6 +24,7 @@ export { localDownloadIndex } from './local-index-service.mjs';
 export { startPlayer } from './player-process.mjs';
 import { assertDirectGenerationPermission } from './provider-policy.mjs';
 import * as SiteLikes from './site-likes.mjs';
+import * as Official from './official.mjs';
 import { acquireTidyRun, releaseTidyRun, takePendingTidyRun, peekTidyRun, markTidyPending } from './tidy-guard.mjs';
 
 const { N, P, PR } = loadShared();
@@ -71,6 +72,8 @@ export async function sessionStatus(cfg = config(), { force = false, ttlMs = Num
     } catch (err) {
         status.error = err.message;
     }
+    // 官方 MCP 是另一套授權（OAuth），只做唯讀狀態回報、不連網；面板／doctor 可據此提示登入。
+    status.official = await Official.officialStatus(cfg).catch(() => ({ enabled: false }));
     // 失敗（尤其 401）只快取很短，讓使用者重新匯出後能立刻生效
     const cacheTtl = status.authenticated ? ttlMs : Math.min(ttlMs, 15000);
     await cacheWrite(cacheKey, { status, ttlMs: cacheTtl, sessionMtimeMs }, cfg).catch(() => {});
@@ -637,6 +640,8 @@ export async function probeSite(cfg = config()) {
         out.status = { error: String((err && err.message) || err) };
     }
     if (session) out.session = { ok: !!(out.status && out.status.loggedIn), exportedAt: session.savedAt ? new Date(session.savedAt).toISOString() : null };
+    // 官方 MCP：只讀本機授權檔（不連網、不佔 probe 的請求）；額度查詢交給 CLI／面板另外按需呼叫。
+    out.official = await Official.officialStatus(cfg).catch(() => ({ enabled: false }));
     out.elapsedMs = Date.now() - started;
     return out;
 }
@@ -690,6 +695,26 @@ function withKnown(songs, known) {
     return [...map.values()];
 }
 
+/** 官方 MCP 歌單兜底：站點沒有 session／登入過期時仍能列出歌（官方視角欄位，分軌一律沒有） */
+async function officialSongFallback(cfg, { maxPages = 20, limit = 30, refresh = false } = {}) {
+    if (!(await Official.officialReady(cfg))) return null;
+    if (!refresh) {
+        const cached = await cachePeek('official-songs', { ttlMs: 5 * 60 * 1000, cfg });
+        if (cached.fresh && cached.data && Array.isArray(cached.data.songs) && cached.data.songs.length) return cached.data.songs;
+    }
+    const rows = [];
+    let cursor = '';
+    for (let page = 0; page < maxPages; page += 1) {
+        const data = await Official.officialListSongs(cfg, { limit, cursor });
+        rows.push(...data.songs);
+        cursor = data.nextCursor;
+        if (!cursor) break;
+    }
+    const songs = Official.officialRowsToSongs(rows);
+    if (songs.length) await cacheWrite('official-songs', { songs }, cfg).catch(() => {});
+    return songs;
+}
+
 export async function listSongs(cfg = config(), { pageLimit = 50, maxPages = 40, refresh = false, includeKnown = false } = {}) {
     const SONGS_TTL_MS = 10 * 60 * 1000;
     const cached = await cacheRead('songs', { maxAgeMs: SONGS_TTL_MS, cfg });
@@ -717,6 +742,15 @@ export async function listSongs(cfg = config(), { pageLimit = 50, maxPages = 40,
         if (old && Array.isArray(old.songs) && old.songs.length) {
             process.stderr.write(`[ace] ${reason}，暫用快取歌單（${old.songs.length} 首）\n`);
             return includeKnown && Array.isArray(old.known) ? old.known : old.songs;
+        }
+        // 本機快照都沒有才問官方 MCP：站點 session 沒了也還能列歌（官方只有歌單／狀態／mp3-wav-midi）
+        const official = await officialSongFallback(cfg, { maxPages: Math.min(maxPages, 20), refresh }).catch((officialErr) => {
+            process.stderr.write(`[ace] 官方 MCP 歌單也不可用：${officialErr.code || officialErr.message}\n`);
+            return null;
+        });
+        if (official && official.length) {
+            process.stderr.write(`[ace] ${reason}，改用官方 MCP 歌單（${official.length} 首）\n`);
+            return official;
         }
         throw err;
     };
@@ -1070,7 +1104,7 @@ async function createApiFile(cfg, session, songId, kind) {
         if (res.ok && data && data.url) return absolutize(cfg, data.url);
         const detail = siteErrorDetail(data, res.status);
         const code = data && data.error && data.error.code;
-        if (res.status === 401 || /log ?in|login/i.test(detail)) throw new Error('登入已過期，請重新整理頁面並按「同步 Agent」');
+        if (res.status === 401 || /log ?in|login/i.test(detail)) throw Object.assign(new Error('登入已過期，請重新整理頁面並按「同步 Agent」'), { code: 'AUTH_EXPIRED' });
         if (res.status === 404 && code === 'no_download') {
             const err = new Error('站點不提供此檔案（no_download）');
             err.code = 'NOT_AVAILABLE';
@@ -1101,7 +1135,7 @@ async function resolveFileUrl(cfg, session, songId, kind) {
     }
     if (!res.ok) {
         if (res.status === 402) throw new Error('目前方案不含 ' + kind + ' 下載（HTTP 402）');
-        if (res.status === 401) throw new Error('登入已過期，請重新整理頁面再試');
+        if (res.status === 401) throw Object.assign(new Error('登入已過期，請重新整理頁面再試'), { code: 'AUTH_EXPIRED' });
         if (kind === 'wav' && (res.status === 404 || res.status === 400)) { const err = new Error('站點暫時找不到 WAV（HTTP ' + res.status + '），保留待補'); err.code = 'FILE_NOT_READY'; throw err; }
         return direct;
     }
@@ -1129,6 +1163,13 @@ async function downloadToFile(cfg, session, url, relPath) {
     const buffer = Buffer.from(await res.arrayBuffer());
     if (!buffer.length) throw new Error('檔案為空');
     const extension = path.extname(relPath).slice(1).toLowerCase();
+    // 官方連結（與站點）對「以 FLAC 儲存」的歌回的是 FLAC：不能冒充 WAV 寫進曲庫，
+    // 明確標成 WAV_UNSUPPORTED 讓上層記為跳過（下次可改用 MP3 或等站點補 WAV）。
+    if (extension === 'wav' && buffer.length >= 4 && buffer.toString('ascii', 0, 4) === 'fLaC') {
+        const err = new Error('這首歌在站點以 FLAC 儲存，下載回來是 FLAC 不是 WAV；已跳過（可改下 MP3）');
+        err.code = 'WAV_UNSUPPORTED';
+        throw err;
+    }
     if (extension === 'wav' || extension === 'mp3') validateAudioBuffer(buffer, extension);
     // WAV downloads from ACE can carry LIST/INFO (IART/ICMT/ISFT) with the generator
     // name, creation time and account id. Strip it before the file ever lands in the library.
@@ -1347,7 +1388,17 @@ export async function fillMissing(cfg = config(), { types = FILL_TYPES, root = '
 export async function runDownload({ songs, options = {}, concurrency = 4, onProgress = null, isCancelled = null, cfg = config() }) {
     if (!hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => runDownload(...arguments), { isCancelled });
     const notifyProgress = (value) => { try { onProgress?.(value); } catch { /* Display failures do not undo completed file writes. */ } };
-    const session = await loadSession(cfg);
+    // 站點 session 沒了不再直接炸整輪：官方 MCP 能接手的（歌單／mp3／wav／midi）照走，
+    // 只有分軌與 MusicXML 會因為沒有 session 而失敗，錯誤會標在那一項上。
+    let session = null;
+    try {
+        session = await loadSession(cfg);
+    } catch (err) {
+        if (!(await Official.officialReady(cfg))) throw err;
+        process.stderr.write(`[ace] 站點沒有登入狀態，改用官方 MCP 兜底（${err.code || err.message}）；分軌／MusicXML 仍需重新同步登入\n`);
+        session = {};
+    }
+    const officialSongById = new Map((songs || []).filter((song) => song && song.official && song.task_id).map((song) => [song.task_id, song]));
     const { plan, state } = await buildPlanForSongs(cfg, songs, options);
     const runId = crypto.randomUUID();
     const log = (event, fields = {}) => appendLog(JSON.stringify({ event, runId, ...fields }), cfg);
@@ -1366,37 +1417,69 @@ export async function runDownload({ songs, options = {}, concurrency = 4, onProg
 
     const entries = [];
     for (const task of plan.tasks) {
+        const officialSong = officialSongById.get(task.task_id) || null;
         for (const file of task.files) {
-            if (!file.skip) entries.push({ task, file, prepDone: file.source === 'url', prepError: null, url: '' });
+            // 官方來源的歌即使是「url」類型也不能直接抓站點路徑（沒有 cookie），一律進準備階段換官方連結
+            if (!file.skip) entries.push({ task, file, officialSong, prepDone: file.source === 'url' && !officialSong, prepError: null, url: file.source === 'url' && !officialSong ? file.sourceUrl : '' });
         }
     }
-    entries.sort((a, b) => (a.file.source === 'url' ? 0 : 1) - (b.file.source === 'url' ? 0 : 1));
+    entries.sort((a, b) => (a.prepDone ? 0 : 1) - (b.prepDone ? 0 : 1));
 
-    const prepEntries = entries.filter((e) => e.file.source !== 'url');
+    // 需要準備階段的＝還沒拿到最終 url 的（含官方來源、站點授權後才給 url 的）
+    const prepEntries = entries.filter((e) => !e.prepDone);
     let prepCursor = 0;
     const prepLimit = Math.min(3, Math.max(1, prepEntries.length));
     const prepProgress = { active: 0 };
     const startedAt = Date.now();
 
     const cancelled = () => !!(isCancelled && isCancelled());
+    const isSiteAuthError = (err) => !!err
+        && (err.code === 'AUTH_EXPIRED' || err.code === 'NO_SESSION' || /登入已過期|請重新|HTTP 401/i.test(String(err.message || '')));
+    /** 官方通道取檔案連結：封面直接給 cover URL；分軌／MusicXML 明確標不支援 */
+    const officialFileUrl = async (song, kind) => {
+        if (kind === 'cover') {
+            if (song && song.local_cover) return song.local_cover;
+            throw Official.officialError('OFFICIAL_UNSUPPORTED_KIND', '官方沒有這首歌的封面連結。');
+        }
+        if (!Official.officialFormatForKind(kind)) {
+            throw Official.officialError('OFFICIAL_UNSUPPORTED_KIND', `官方 MCP 不提供 ${kind}（分軌／MusicXML 仍需站點 session）。`);
+        }
+        const { url } = await Official.officialDownloadUrl(cfg, song.task_id, kind);
+        return url;
+    };
     const prepWorker = async () => {
         while (true) {
             if (cancelled()) return;
             const index = prepCursor++;
             if (index >= prepEntries.length) return;
             const entry = prepEntries[index];
+            const file = entry.file;
             prepProgress.active += 1;
             try {
-                // 站點 MIDI 生成有速率限制：MIDI 間隔 2.5 秒
-                if (entry.file.source === 'api') await sleep(entry.file.apiKind === 'full' || entry.file.apiKind === 'midi' ? 2500 : 600);
-                entry.url =
-                    entry.file.source === 'api'
-                        ? await createApiFile(cfg, session, entry.task.task_id, entry.file.apiKind)
-                        : entry.file.sourceUrl && !/\/api\/songs\/[^/]+\/file\?kind=(mp3|wav)\b/i.test(entry.file.sourceUrl)
-                            ? entry.file.sourceUrl
-                            : await resolveFileUrl(cfg, session, entry.task.task_id, entry.file.kind);
+                if (entry.officialSong) {
+                    entry.url = await officialFileUrl(entry.officialSong, file.kind);
+                } else {
+                    // 站點 MIDI 生成有速率限制：MIDI 間隔 2.5 秒
+                    if (file.source === 'api') await sleep(file.apiKind === 'full' || file.apiKind === 'midi' ? 2500 : 600);
+                    entry.url =
+                        file.source === 'api'
+                            ? await createApiFile(cfg, session, entry.task.task_id, file.apiKind)
+                            : file.sourceUrl && !/\/api\/songs\/[^/]+\/file\?kind=(mp3|wav)\b/i.test(file.sourceUrl)
+                                ? file.sourceUrl
+                                : await resolveFileUrl(cfg, session, entry.task.task_id, file.kind);
+                }
             } catch (err) {
-                entry.prepError = err;
+                // 站點授權失效：官方能接手的類型改走官方連結（分軌／MusicXML 留下明確原因）
+                if (!entry.officialSong && Official.officialFormatForKind(file.kind) && isSiteAuthError(err)) {
+                    try {
+                        entry.url = await officialFileUrl({ task_id: entry.task.task_id }, file.kind);
+                        process.stderr.write(`[ace] 站點授權失效，${entry.task.task_id} 的 ${file.kind} 改用官方 MCP\n`);
+                    } catch (officialErr) {
+                        entry.prepError = officialErr;
+                    }
+                } else {
+                    entry.prepError = err;
+                }
             } finally {
                 entry.prepDone = true;
                 prepProgress.active -= 1;
@@ -1428,7 +1511,7 @@ export async function runDownload({ songs, options = {}, concurrency = 4, onProg
                     await sleep(100);
                 }
                 if (entry.prepError) throw entry.prepError;
-                const url = file.source === 'url' ? file.sourceUrl : entry.url;
+                const url = entry.url || file.sourceUrl;
                 const result = await downloadToFile(cfg, session, url, file.path);
                 done += 1;
                 bytes += result.bytes;
@@ -1535,9 +1618,16 @@ function songTitleFile(song) {
 
 /** 取得一首歌「完整成品」的音檔 URL；生成歌曲走 kind=mp3，上傳歌曲回退 local_audio */
 export async function resolveFullAudioUrl(cfg, session, song) {
+    // 官方來源的歌：站點路徑沒有 cookie 抓不到，直接換官方 mp3 連結
+    if (song && song.official && Official.officialFormatForKind('mp3') && (await Official.officialReady(cfg))) {
+        try {
+            const { url } = await Official.officialDownloadUrl(cfg, song.task_id, 'mp3', { waitMs: 0 });
+            return url;
+        } catch { /* 官方失敗再試站點，最後才報錯 */ }
+    }
     const direct = `/api/songs/${encodeURIComponent(song.task_id)}/file?kind=mp3`;
     try {
-        const res = await aceFetch(cfg, session, `${direct}&as=parts`, { headers: { Accept: 'application/json' } });
+        const res = await aceFetch(cfg, session || {}, `${direct}&as=parts`, { headers: { Accept: 'application/json' } });
         if (res.ok) {
             const data = await res.json().catch(() => null);
             if (data && typeof data === 'object') {
@@ -1547,10 +1637,18 @@ export async function resolveFullAudioUrl(cfg, session, song) {
             }
             return direct;
         }
+        if (res.status === 401 && (await Official.officialReady(cfg))) {
+            const { url } = await Official.officialDownloadUrl(cfg, song.task_id, 'mp3', { waitMs: 0 });
+            return url;
+        }
     } catch {
         /* fall through */
     }
     if (song.local_audio) return absolutize(cfg, song.local_audio);
+    if (await Official.officialReady(cfg)) {
+        const { url } = await Official.officialDownloadUrl(cfg, song.task_id, 'mp3', { waitMs: 0 });
+        return url;
+    }
     throw new Error('沒有成品音檔可下載（kind=mp3 不可用且沒有 local_audio）');
 }
 
@@ -1571,7 +1669,14 @@ export async function extractFullMp3s({
     cfg = config(),
 } = {}) {
     if (!hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => extractFullMp3s(...arguments), { isCancelled });
-    const session = await loadSession(cfg);
+    // 站點 session 失效時靠官方 MCP 取 mp3；兩邊都沒有才放棄
+    let session = {};
+    try {
+        session = await loadSession(cfg);
+    } catch (err) {
+        if (!(await Official.officialReady(cfg))) throw err;
+        process.stderr.write(`[ace] 站點沒有登入狀態，成品 MP3 改用官方 MCP 連結（${err.code || err.message}）\n`);
+    }
     const all = songs || (await listSongs(cfg));
     const completed = all.filter((song) => song && song.task_id && P.isDone(song));
     const nativeOnly = (song) => song.capability !== 'music_generate' && /\.(?:wav|flac|m4a|ogg|aif|aiff|aifc)$/i.test(String(song.local_audio || '').split(/[?#]/)[0]);

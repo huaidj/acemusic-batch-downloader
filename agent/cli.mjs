@@ -3,6 +3,7 @@
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import * as ACE from './lib/ace.mjs';
+import * as Official from './lib/official.mjs';
 import { config, readJson, writeJson, exists } from './lib/config.mjs';
 import { hubJson, hubRequest } from './lib/hubclient.mjs';
 import fs from 'node:fs/promises';
@@ -22,7 +23,7 @@ async function hubTry(pathname, { method = 'GET', body, timeoutMs = 1200 } = {})
     }
 }
 function usage() {
-    console.log(`ACE Music 批量下載器 CLI  v1.9.5
+    console.log(`ACE Music 批量下載器 CLI  v1.10.0
 
 用法：
   node cli.mjs create capabilities            Create 頁面完整 API 參數契約
@@ -45,6 +46,12 @@ function usage() {
   node cli.mjs events [--since seq] [--type t]  中樞事件（新歌、自動下載、下載完成）
   node cli.mjs wait [--timeout 秒]             等待下一首新歌（需 Hub＋開著站點分頁）
   node cli.mjs probe                           站點健康（唯讀）
+  node cli.mjs official status                 官方遠端 MCP 授權狀態（OAuth，站點 session 失效時的兜底）
+  node cli.mjs official login [--no-open]      授權官方 MCP（瀏覽器按一次同意；token 存 <stateDir>\\official-auth.json）
+  node cli.mjs official list [--limit N]       官方歌單（不需要瀏覽器 session）
+  node cli.mjs official download --song <id> [--format mp3|wav|midi|midi_full]  官方下載連結
+  node cli.mjs official get --ids a,b [--score] / create --input x.json / skill --name lyrics
+  node cli.mjs official test                   授權＋額度＋歌單煙霧測試
   node cli.mjs generate --request song.json [--json]  預覽 v1.1 提示詞與費用（預設不生成）
   node cli.mjs generate --request song.json --commit --confirm-credit-spend --max-credits 4 --idempotency-key <key>  單次生成（需 Hub）
   node cli.mjs generation-status --task-ids id1,id2 [--song <task_id>] [--json]  唯讀查生成結果
@@ -259,6 +266,82 @@ async function main() {
         return printJson(result);
     }
 
+    if (cmd === 'official') {
+        const action = args._[0] || 'status';
+        const json = !!args.flags.json;
+        const ids = [...(args.multi.song || []), ...String(args.flags.ids || args.flags.song || '').split(',').map((value) => value.trim()).filter(Boolean)];
+        if (action === 'status') {
+            const status = await Official.officialStatus(cfg);
+            if (status.authenticated) status.account = await Official.officialAccount(cfg).catch((err) => ({ error: String(err.code || err.message) }));
+            if (json) return printJson(status);
+            console.log('ACE Music 官方 MCP（' + status.url + '）');
+            console.log('  通道            :', !status.enabled ? '已關閉（ACE_OFFICIAL=0）' : status.authenticated ? '✅ 已授權' : '⚠️ 未授權 — node cli.mjs official login');
+            console.log('  授權檔          :', status.authFile);
+            if (status.hasToken) console.log('  Access token    :', status.expiresAt ? `到 ${status.expiresAt}` : '無到期時間', status.hasRefreshToken ? '（有 refresh_token，快到期會自動續約）' : '（沒有 refresh_token，過期要重新登入）');
+            if (status.account && !status.account.error) console.log('  方案／額度      :', status.account.plan_name || status.account.plan || '-', status.account.credits ?? '-', 'credits');
+            if (status.account && status.account.error) console.log('  額度查詢        :', status.account.error);
+            return;
+        }
+        if (action === 'login') {
+            const result = await Official.officialLogin(cfg, { open: args.flags['no-open'] !== true });
+            const status = await Official.officialStatus(cfg);
+            if (json) return printJson({ ok: true, ...result, status });
+            console.log('✅ 官方 MCP 已授權');
+            console.log('  授權檔          :', status.authFile);
+            console.log('  有效期          :', result.expiresInSeconds ? Math.round(result.expiresInSeconds / 60) + ' 分鐘（之後自動續約）' : '未知');
+            return;
+        }
+        if (action === 'logout') return printJson({ ok: await Official.officialLogout(cfg) });
+        if (action === 'refresh') return printJson({ ok: true, token: await Official.officialRefresh(cfg) });
+        if (action === 'list') {
+            const limit = Number(args.flags.limit || 20);
+            const songs = [];
+            let cursor = '';
+            for (let page = 0; page < 20 && songs.length < limit; page += 1) {
+                const data = await Official.officialListSongs(cfg, { limit: Math.min(30, limit - songs.length), cursor });
+                songs.push(...data.songs);
+                cursor = data.nextCursor;
+                if (!cursor) break;
+            }
+            const rows = Official.officialRowsToSongs(songs);
+            if (json) return printJson({ count: rows.length, songs: rows });
+            for (const song of rows) console.log(`${song.task_id}  ${song.status === 'succeeded' ? '完成' : song.status}  ${song.meta.title}  ${song.result.duration_sec ? song.result.duration_sec + 's' : ''}  ${song.model || ''}`);
+            return;
+        }
+        if (action === 'get') {
+            if (!ids.length) throw new Error('official get 需要 --ids a,b 或 --song <id>');
+            return printJson(await Official.officialGetSongs(cfg, ids, { includeScore: args.flags.score === true }));
+        }
+        if (action === 'download') {
+            if (!ids.length) throw new Error('official download 需要 --song <id>');
+            const format = String(args.flags.format || 'mp3');
+            const result = await Official.officialDownloadUrl(cfg, ids[0], format, { waitMs: Number(args.flags.wait || 90) * 1000 });
+            if (json) return printJson(result);
+            console.log(result.url);
+            return;
+        }
+        if (action === 'create') {
+            if (!args.flags.input) throw new Error('official create 需要 --input file.json（style 必填）');
+            const body = JSON.parse(await fs.readFile(String(args.flags.input), 'utf8'));
+            return printJson(await Official.officialCreateSong(cfg, body));
+        }
+        if (action === 'skill') {
+            const name = String(args.flags.name || args._[1] || 'lyrics');
+            const text = await Official.officialSkill(cfg, name);
+            if (json) return printJson({ name, text });
+            console.log(typeof text === 'string' ? text : JSON.stringify(text, null, 2));
+            return;
+        }
+        if (action === 'test') {
+            const status = await Official.officialStatus(cfg);
+            if (!status.authenticated) throw new Error('官方 MCP 尚未授權：node cli.mjs official login');
+            const account = await Official.officialAccount(cfg, { fresh: true });
+            const list = await Official.officialListSongs(cfg, { limit: 1 });
+            return printJson({ ok: true, url: status.url, plan: account.plan_name || account.plan, credits: account.credits, sample: list.songs[0] ? Official.officialSongToSite(list.songs[0]) : null });
+        }
+        throw new Error('未知 official 操作；可用：status, login, logout, refresh, list, get, download, create, skill, test');
+    }
+
     if (cmd === 'doctor') {
         const status = await ACE.sessionStatus(cfg, { force: !!args.flags.refresh });
         const history = await readJson(cfg.historyFile, null);
@@ -274,6 +357,7 @@ async function main() {
             rememberedSongs: Object.keys(state.folderByTask).length,
             rememberedFiles: Object.values(state.history).reduce((n, item) => n + Object.keys((item && item.files) || {}).length, 0),
             page: await ACE.pageChannelStatus(cfg),
+            official: await Official.officialStatus(cfg),
         };
         if (args.flags.json) return printJson(report);
         console.log('ACE Music 批量下載器 CLI — 環境檢查');
@@ -287,6 +371,7 @@ async function main() {
         console.log('  已記住歌曲/檔案 :', report.rememberedSongs, '/', report.rememberedFiles);
         const pg = report.page;
         console.log('  頁面快照        :', pg.savedAt ? ` 首，${pg.savedAt}（${pg.fresh ? '新鮮' : '過舊，開一次 acemusic.ai/create 頁面即可更新'}）；不可用紀錄 ${pg.unavailable}` : '尚未收到（開 acemusic.ai/create 頁面，面板會自動送出）');
+        console.log('  官方 MCP        :', report.official.enabled ? (report.official.authenticated ? '✅ 已授權（站點失效時兜底歌單／mp3-wav-midi）' : '⚠️ 未授權 — node cli.mjs official login') : '已關閉（ACE_OFFICIAL=0）');
         return;
     }
 
@@ -341,6 +426,9 @@ async function main() {
         console.log(`  登入：${st.loggedIn ? '是' : '否'}${st.plan ? '　方案：' + st.plan : ''}`);
         if (st.models) console.log('  模型：' + st.models.join('、'));
         if (st.error) console.log('  錯誤：' + st.error);
+        const official = result.official || {};
+        if (official.authenticated) official.account = await Official.officialAccount(cfg).catch(() => null);
+        console.log(`  官方 MCP：${official.enabled === false ? '已關閉' : official.authenticated ? '✅ 已授權' + (official.account ? `（${official.account.plan_name || official.account.plan || '-'}，${official.account.credits ?? '-'} credits）` : '') : '⚠️ 未授權 — node cli.mjs official login'}`);
         return;
     }
 

@@ -35,7 +35,7 @@ function sandbox(name, baseUrl = 'http://127.0.0.1:9') {
   const downloadDir = path.join(base, 'downloads');
   fs.mkdirSync(path.join(stateDir, 'cache'), { recursive: true });
   fs.mkdirSync(downloadDir, { recursive: true });
-  const cfg = { ...config(), stateDir, downloadDir, baseUrl, sessionFile: path.join(stateDir, 'session.json'), historyFile: path.join(stateDir, 'history.json'), stateFile: path.join(stateDir, 'agent-state.json') };
+  const cfg = { ...config(), stateDir, downloadDir, baseUrl, sessionFile: path.join(stateDir, 'session.json'), historyFile: path.join(stateDir, 'history.json'), stateFile: path.join(stateDir, 'agent-state.json'), officialAuthFile: path.join(stateDir, 'official-auth.json') };
   const write = (rel, data) => {
     const file = path.join(stateDir, rel);
     fs.mkdirSync(path.dirname(file), { recursive: true });

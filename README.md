@@ -24,6 +24,7 @@
 - **獨立播放器**：可拖動及調整大小的視窗；本機曲庫、搜尋、下載狀態、**BPM／Camelot 調性欄位與篩選**、佇列（下一首／排序）、播放清單 **M3U8 匯出／匯入**、收藏、歷史、**睡眠計時**、**鍵盤快捷鍵**（Space／Alt+←→／J L／M／F／Q／／／?）與系統媒體鍵。[播放器說明](player/README.md)
 - **命名爐（預設顯示）**：面板「維護 → 命名爐」打開雙語命名裝置；同一首歌的分軌／版本共用一個名字，可連接 ai音樂 資料夾後直接套用改名，套用後自動重建本機索引。
 - **Agent 中樞**：CLI、MCP（含 `ace_locate` 找最新歌曲真實路徑、`ace_download_index`、`ace_player`、`ace_wait_new_song` 等新歌、`ace_generate` 預覽及明確提交 v1.1）、常駐 Agent Hub（127.0.0.1:8788，既有查詢熱路徑 <2 ms）
+- **官方 MCP 兜底**：站點 session 沒了（沒匯出／過期）也不會整輪中止——歌單、mp3／wav／midi、封面改走 [官方遠端 MCP](https://acemusic.ai/mcp)（OAuth 2.1，一次授權、自動續約）；分軌與 MusicXML 仍需要站點 session，會明確標示而不是假裝成功
 - **HuaiDJ 創作中樞**：音樂意圖、版本化詞典、提示詞編譯、有限授權生成、產物回收與人評、DeepSeek 研究候選（`music_*`、`ace_create_*` 工具；預設不提交付費生成）
 - 完整說明：[docs/GUIDE.md](docs/GUIDE.md)｜開發規範：[docs/CONVENTIONS.md](docs/CONVENTIONS.md)｜設計系統：[docs/DESIGN-SYSTEM.md](docs/DESIGN-SYSTEM.md)
 - **可選本機工具**：native messaging host 負責改名／搬檔／叫用 CLI（不裝也能下載）
@@ -50,7 +51,7 @@
 
 1. 面板勾選要的檔案類型（分軌／MIDI／MusicXML／MP3／封面），選歌或全選
 2. 按「下載選中」；面板顯示目前檔案與完成／跳過／失敗數
-3. 完成後檔案在 `%USERPROFILE%\Downloads\ai音樂\<歌名>\`
+3. 完成後檔案在 `<downloadDir>\ai音樂\<歌名>\`（預設 `%USERPROFILE%\Downloads`；本機用 `<stateDir>\config.json` 的 `"downloadDir": "E:\\"` 指到 `E:\ai音樂\`，硬連結檢視也建在同一顆磁碟）
 
 進階選項：強制重下、依類型分層、根資料夾、下載完自動整理、背景自動整理、只看未下載、清自訂重複。
 
@@ -66,6 +67,28 @@ node agent\cli.mjs favorites --dry-run   # 點讚／愛心歌的 WAV 母帶 → 
 ```
 
 MCP（stdio）：`node <repo>\agent\mcp.mjs`，工具包含 `ace_overview`、`ace_list_songs`、`ace_download`、`ace_job_status`、`ace_organize`、`ace_warm`、`ace_hub_status` 等。
+
+### 官方 MCP 兜底（站點 session 失效時）
+
+站點登入（面板「同步 Agent」匯出的 cookie）失效時，能走的就改走 [官方遠端 MCP](https://acemusic.ai/mcp)：OAuth 2.1 授權一次，之後自動續約（token 存在 `<stateDir>\official-auth.json`）。
+
+```powershell
+node agent\cli.mjs official login      # 瀏覽器按一次同意
+node agent\cli.mjs official status     # 授權、方案、額度
+node agent\cli.mjs official list       # 不用瀏覽器 session 也能列歌
+node agent\cli.mjs official download --song so_xxx --format mp3
+```
+
+| 能力 | 站點 session | 官方 MCP | 兩邊都沒有時 |
+|---|---|---|---|
+| 歌單／單曲狀態 | ✅ | ✅（兜底） | 用頁面快照／舊快取，仍失敗才報錯 |
+| mp3／wav／midi | ✅ | ✅（兜底） | 該項失敗並記原因 |
+| 分軌（stems） | ✅ | ❌ | 明確標「需要站點 session」 |
+| MusicXML | ✅ | ❌ | 同上 |
+| 生成（v1.1） | ✅ | ✅（`official create`） | — |
+
+以 FLAC 儲存的歌，官方與站點都會回 FLAC，下載器會判定成 `WAV_UNSUPPORTED` 跳過（不會把 FLAC 存成 `.wav`）。官方通道可用 `ACE_OFFICIAL=0` 關閉。
+
 
 本機直接生成 v1.1：`ace_generate` 預設只預覽；實際提交需明確額度上限、防重送 key 與支援生成的 Hub。`ace_generation_status` 查詢音訊進度與實際模型。沿用已同步的本機登入，不使用第三方代理；參數與驗證邊界見 [直接生成說明](agent/DIRECT-GENERATION.md)。
 
