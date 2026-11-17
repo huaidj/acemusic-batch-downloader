@@ -11,8 +11,11 @@ import { hasLibraryWriteLease, withLibraryWriteLease } from './library-lease.mjs
 import { invalidateLocalIndex } from './local-index-service.mjs';
 import { sameFileContent, moveFileSafely, recordRelocations } from './file-ops.mjs';
 import { collectFavorites, DEFAULT_FAVORITES_FOLDER } from './favorites.mjs';
+import { collectLikedSongs } from './liked-folder.mjs';
+export { collectLikedSongs, LIKED_MAP_FILE } from './liked-folder.mjs';
 import { stripFingerprints, stripMp3TagBuffer } from './fingerprints.mjs';
 import { copyCollectedWavs, DEFAULT_WAV_FOLDER, OUTPUT_FOLDER } from './wav-names.mjs';
+import { COPY_FOLDERS, isCopyFolderName } from './copy-folders.mjs';
 export { collectFavorites, readFavoriteTargets, DEFAULT_FAVORITES_FOLDER, FAVORITES_MANIFEST } from './favorites.mjs';
 export { stripFingerprints, restoreFingerprints } from './fingerprints.mjs';
 export { copyCollectedWavs, DEFAULT_WAV_FOLDER, OUTPUT_FOLDER } from './wav-names.mjs';
@@ -414,7 +417,7 @@ export async function libraryOverview(cfg = config(), { withSizes = false } = {}
         }
         groups.set(key, entry);
     }
-    const KNOWN = ['成品MP3', '成品WAV', DEFAULT_FAVORITES_FOLDER, OUTPUT_FOLDER, '採樣包', '採樣包WAV', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他', '音頻分類', '俱樂部版'];
+    const KNOWN = ['成品MP3', '成品WAV', ...COPY_FOLDERS, '採樣包', '採樣包WAV', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他', '音頻分類', '俱樂部版'];
     const categories = [...groups.values()];
     for (const cat of categories) if (!KNOWN.includes(cat.category)) songFolders += 1;
     categories.sort((a, b) => {
@@ -802,11 +805,9 @@ export async function collectDownloadIndex(cfg = config(), { refresh = false } =
     }
     // 上限必須高於 Downloads 實際檔數，否則索引被截斷 → 誤判「未下載」→ 重複下載／重複資料夾
     // 收藏 是複本資料夾：不進檔案索引，否則 locate／曲庫總覽會把同一首歌的檔算兩次
-    const favoritesName = DEFAULT_FAVORITES_FOLDER.toLowerCase();
-    const outputName = OUTPUT_FOLDER.toLowerCase();
     const files = walkFiles(cfg.downloadDir, 3, [], 200000).filter((full) => {
         const parts = path.relative(cfg.downloadDir, full).split(path.sep).map((part) => part.toLowerCase());
-        return !(parts.length >= 3 && [favoritesName, outputName].includes(parts[1]));
+        return !(parts.length >= 3 && isCopyFolderName(parts[1]));
     });
     const rel = new Set();
     const names = new Set();
@@ -1816,7 +1817,7 @@ export async function collectFullWavs({ root = 'ai音樂', folder = '成品WAV',
     const rootDir = path.join(cfg.downloadDir, toWin(root)), outDir = path.join(rootDir, folder);
     const report = { ok: true, total: 0, moved: 0, skipped: 0, duplicates: 0, failed: [], outDir, startedAt: new Date().toISOString() };
     if (!exists(rootDir)) return { ...report, ok: false, error: '找不到 ' + rootDir };
-    const protectedTop = new Set([...DEDUPE_CATEGORY_DIRS, folder, DEFAULT_FAVORITES_FOLDER, OUTPUT_FOLDER, '_未對應', ...DEDUPE_CUSTOM_TOP]);
+    const protectedTop = new Set([...DEDUPE_CATEGORY_DIRS, folder, ...COPY_FOLDERS, '_未對應', ...DEDUPE_CUSTOM_TOP]);
     const roles = new Set([...Object.values(N.STEM_TYPE_NAMES), 'Piano', 'Percussion', 'Melody', 'Other'].map((value) => String(value).toLowerCase()));
     const files = walkFiles(rootDir, 4, [], 60000).filter((file) => {
         if (!/\.wav$/i.test(file)) return false;
@@ -1859,7 +1860,7 @@ export async function collectSamples({ root = 'ai音樂', folder = '採樣包', 
     const rootDir = path.join(cfg.downloadDir, toWin(root)), outDir = path.join(rootDir, folder), wavOutDir = path.join(rootDir, '採樣包WAV');
     await fsp.mkdir(outDir, { recursive: true });
     const roles = new Map([...Object.values(N.STEM_TYPE_NAMES), 'Piano', 'Percussion', 'Melody', 'Other'].map((value) => [String(value).toLowerCase(), String(value)]));
-    const excluded = new Set([folder, DEFAULT_FAVORITES_FOLDER, OUTPUT_FOLDER, '採樣包WAV', '_成品MP3', '_未對應', 'sample', 'WAI', 'WAMI', '俱樂部版', '舊版對照', '成品MP3', '成品WAV', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他', '音頻分類']);
+    const excluded = new Set([folder, ...COPY_FOLDERS, '採樣包WAV', '_成品MP3', '_未對應', 'sample', 'WAI', 'WAMI', '俱樂部版', '舊版對照', '成品MP3', '成品WAV', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他', '音頻分類']);
     const report = { ok: true, folder: outDir, total: 0, copied: 0, skipped: 0, migrated: 0, failed: [], bytes: 0 };
     const manifestPath = path.join(outDir, '_manifest.json'), previous = await readJson(manifestPath).catch(() => null), manifest = new Map();
     for (const entry of previous && Array.isArray(previous.items) ? previous.items : []) if (entry && entry.file) manifest.set((entry.container || folder) + '/' + (entry.type || '') + '/' + entry.file, entry);
@@ -1912,7 +1913,7 @@ export async function classifyByAttributes({ root = 'ai音樂', move = true, cfg
     const { moveFileSafely, copyFileSafely, recordRelocations } = await import('./file-ops.mjs');
     const rootDir = path.join(cfg.downloadDir, toWin(root));
     const categories = { mid: 'MIDI', midi: 'MIDI', musicxml: 'MusicXML', jpg: '封面', jpeg: '封面', png: '封面', webp: '封面', gif: '封面', avif: '封面', zip: '壓縮檔', rar: '壓縮檔', '7z': '壓縮檔', asd: '其他', als: '其他', amxd: '其他', pdf: '其他' };
-    const excluded = new Set([...Object.values(categories), '成品MP3', '成品WAV', DEFAULT_FAVORITES_FOLDER, OUTPUT_FOLDER, '採樣包', '採樣包WAV', '採樣', '_未對應', 'sample', 'WAI', 'WAMI', '俱樂部版', '音頻分類']);
+    const excluded = new Set([...Object.values(categories), '成品MP3', '成品WAV', ...COPY_FOLDERS, '採樣包', '採樣包WAV', '採樣', '_未對應', 'sample', 'WAI', 'WAMI', '俱樂部版', '音頻分類']);
     const byCategory = new Map();
     for (const full of walkFiles(rootDir, 3, [], 30000)) {
         const ext = path.extname(full).slice(1).toLowerCase(), category = categories[ext], parts = path.relative(rootDir, full).split(path.sep);
@@ -2040,12 +2041,10 @@ export async function classifyByAudio({ root = 'ai音樂', folder = '音頻分�
     const rootDir = path.join(cfg.downloadDir, toWin(root));
     if (!exists(rootDir)) return { ok: false, total: 0, error: '找不到 ' + rootDir };
     const outDir = path.join(rootDir, folder);
-    const favoritesPrefix = path.join(rootDir, DEFAULT_FAVORITES_FOLDER).toLowerCase() + path.sep;
-    const outputPrefix = path.join(rootDir, OUTPUT_FOLDER).toLowerCase() + path.sep;
     const files = walkFiles(rootDir, 3, [], 30000).filter((file) => {
         if (!/\.(mp3|wav|flac)$/i.test(file)) return false;
         const lower = file.toLowerCase();
-        return !lower.startsWith(outDir.toLowerCase()) && !lower.startsWith(favoritesPrefix) && !lower.startsWith(outputPrefix);
+        return !lower.startsWith(outDir.toLowerCase()) && !isCopyFolderName(path.relative(rootDir, file).split(path.sep)[0]);
     });
     const unique = [...new Set(files.map((file) => path.resolve(file)))];
     const selected = Number(limit) > 0 ? unique.slice(0, Number(limit)) : unique;
@@ -2294,7 +2293,7 @@ export async function dedupeSongCopies({ root = 'ai音樂', commit = true, cfg =
     }
     const report = { ok: true, commit, removed: 0, archived: 0, savedBytes: 0, failed: [], scanned: 0, candidates: [] };
     const relocations = [];
-    const skipTop = new Set([...CATEGORY_DIRS, DEFAULT_FAVORITES_FOLDER, OUTPUT_FOLDER, '音頻分類', '_未對應', 'sample', 'WAI', '俱樂部版', '舊版對照']);
+    const skipTop = new Set([...CATEGORY_DIRS, ...COPY_FOLDERS, '音頻分類', '_未對應', 'sample', 'WAI', '俱樂部版', '舊版對照']);
     for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
         if (!entry.isDirectory() || skipTop.has(entry.name)) continue;
         const songDir = path.join(rootDir, entry.name);
@@ -2324,7 +2323,7 @@ export async function dedupeSongCopies({ root = 'ai音樂', commit = true, cfg =
 }
 
 const DEDUPE_CATEGORY_DIRS = ['成品MP3', '成品WAV', '採樣包', '採樣包WAV', 'MIDI', 'MusicXML', '封面', '壓縮檔', '其他', '音頻分類'];
-const DEDUPE_PROTECTED_TOP = new Set([...DEDUPE_CATEGORY_DIRS, DEFAULT_FAVORITES_FOLDER, OUTPUT_FOLDER, '_未對應']);
+const DEDUPE_PROTECTED_TOP = new Set([...DEDUPE_CATEGORY_DIRS, ...COPY_FOLDERS, '_未對應']);
 // 使用者手動整理的自訂資料夾：預設不動，--include-custom 才納入
 const DEDUPE_CUSTOM_TOP = new Set(['sample', 'WAI', 'WAMI', '俱樂部版', '舊版對照']);
 const CONTENT_KEEPER_PRIORITY = { 成品WAV: 0, 成品MP3: 0, 採樣包: 1, 採樣包WAV: 2, _未對應: 3 };
@@ -2444,7 +2443,7 @@ export async function dedupeContent({ root = 'ai音樂', commit = false, include
     if (commit && !hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => dedupeContent(...arguments));
     const rootDir = path.join(cfg.downloadDir, toWin(root));
     if (!exists(rootDir)) return { ok: false, total: 0, error: '找不到 ' + rootDir };
-    const excludedTop = new Set(['音頻分類', DEFAULT_FAVORITES_FOLDER, OUTPUT_FOLDER, ...(includeCustom ? [] : DEDUPE_CUSTOM_TOP)]);
+    const excludedTop = new Set(['音頻分類', ...COPY_FOLDERS, ...(includeCustom ? [] : DEDUPE_CUSTOM_TOP)]);
     const files = walkFiles(rootDir, 6, [], 200000).filter((file) => {
         const rel = path.relative(rootDir, file);
         return !!rel && !excludedTop.has(rel.split(path.sep)[0]);
@@ -2838,6 +2837,23 @@ export async function tidyAll({ root = 'ai音樂', concurrency = 4, onProgress =
         fingerprintsFailed = 1;
         steps.push({ name: 'fingerprints', failed: 1, error: String(error.message || error).slice(0, 300) });
     }
+    // 已點讚：網站拇指向上的歌，成品 MP3／WAV 複製到 <root>/已點讚/，DeepSeek 取名（上限 US$0.50、名字記在對照表）。
+    // 放在指紋清除之後：新複本直接來自已清除的來源。點讚快照不完整時整步跳過，不會誤判取消點讚。
+    emit('liked');
+    let likedFailed = 0;
+    try {
+        const likedResult = await collectLikedSongs({
+            root,
+            cfg,
+            index: libraryIndex,
+            onProgress: (progress) => emit('liked', { done: progress.done, total: progress.total, current: progress.current || '' }),
+        });
+        likedFailed = likedResult.ok || likedResult.error ? likedResult.failed.length : 1;
+        steps.push({ name: 'liked', liked: likedResult.liked, copied: likedResult.copied, already: likedResult.already, renamed: likedResult.renamed, unlikedMoved: likedResult.unlikedMoved, aiNamed: likedResult.aiNamed, spentUsd: likedResult.spentUsd, skipped: likedResult.error || null, failed: likedFailed });
+    } catch (error) {
+        likedFailed = 1;
+        steps.push({ name: 'liked', failed: 1, error: String(error.message || error).slice(0, 300) });
+    }
     clearFsCaches(cfg);
     const result = {
         ok:
@@ -2849,7 +2865,7 @@ export async function tidyAll({ root = 'ai音樂', concurrency = 4, onProgress =
             dedupeResult.failed.length === 0 &&
             contentResult.errors.length === 0 &&
             foldersResult.errors.length === 0 &&
-            audioResult.failed.length === 0 && indexFailed === 0 && favoritesFailed === 0 && wavNamesFailed === 0 && fingerprintsFailed === 0,
+            audioResult.failed.length === 0 && indexFailed === 0 && favoritesFailed === 0 && wavNamesFailed === 0 && fingerprintsFailed === 0 && likedFailed === 0,
         root,
         startedAt,
         finishedAt: new Date().toISOString(),
@@ -2998,11 +3014,9 @@ export async function organize({ dryRun = true, root = 'ai音樂', typeFolders =
     const files = walkFiles(cfg.downloadDir, 3, []);
     const stemLabelSet = new Set(STEM_LABELS);
     const stemLabelLookup = new Map(Object.values(N.STEM_TYPE_NAMES).map((v) => [String(v).toLowerCase(), v]));
-    const favoritesPrefix = path.join(rootAbs, DEFAULT_FAVORITES_FOLDER).toLowerCase() + path.sep;
-    const outputPrefix = path.join(rootAbs, OUTPUT_FOLDER).toLowerCase() + path.sep;
     for (const full of files) {
         if (seenFrom.has(full)) continue;
-        if (full.toLowerCase().startsWith(favoritesPrefix) || full.toLowerCase().startsWith(outputPrefix)) continue;
+        if (isCopyFolderName(path.relative(rootAbs, full).split(path.sep)[0])) continue;
         const base = path.basename(full);
         const lower = base.toLowerCase();
         let handled = false;

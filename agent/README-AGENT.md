@@ -2,6 +2,7 @@
 
 給 AI agent（Claude Code、Codex、DSH、Cursor…）用的無頭介面。agent 可以直接：
 
+新增 `ace_liked_folder`：把網站拇指點讚的歌（成品 MP3／WAV）複製到 `ai音樂/已點讚/`，以 DeepSeek（deepseek-flash，非思考模式）取雙語名字；累計費用上限預設 US$0.50，名字與花費記在 `_命名對照.json`，重跑不重複付費；取消點讚的副本移到 `_已取消點讚/`、不刪除。CLI：`liked-folder [--dry-run] [--no-ai] [--budget]`。
 新增 `ace_fill_missing`：依可信本機索引補齊缺的 MP3／WAV／封面，預設只預覽（`dry_run: false` 才下載），不碰可能扣額度的 MIDI／MusicXML；站點沒有來源的歌列在 `noSource`。CLI：`fill-missing [--types] [--commit]`。
 新增唯讀工具 `ace_site_likes`：讀取 ACE 網頁原生拇指點讚（`meta.rating === "good"`）快照，`sync: true` 唯讀抓取全部分頁；任何一頁失敗都保留上次完整資料，不改網站上的讚。它不是面板心形收藏（`ace_favorites`），也不是播放器本機收藏。CLI：`site-likes [--sync]`。
 新增唯讀工具 `ace_download_index`：按歌曲 ID、下載來源及實存檔案核對，區分已下載、待核對、缺檔。

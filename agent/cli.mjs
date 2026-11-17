@@ -22,7 +22,7 @@ async function hubTry(pathname, { method = 'GET', body, timeoutMs = 1200 } = {})
     }
 }
 function usage() {
-    console.log(`ACE Music 批量下載器 CLI  v1.8.7
+    console.log(`ACE Music 批量下載器 CLI  v1.8.8
 
 用法：
   node cli.mjs create capabilities            Create 頁面完整 API 參數契約
@@ -38,6 +38,7 @@ function usage() {
   node cli.mjs library [--sizes] [--json]      曲庫分類總覽（成品MP3/WAV、採樣包各樂器、MIDI…）
   node cli.mjs local-index [--root 名稱] [--full] [--json] 按歌曲ID核對真實檔案，不猜同名
   node cli.mjs site-likes [--sync]   ACE 網頁原生拇指點讚快照；--sync 唯讀抓取全部分頁，不改網站上的讚
+  node cli.mjs liked-folder [--dry-run] [--no-ai] [--budget 0.5]  點讚歌的成品 MP3／WAV 複製到 已點讚，DeepSeek 雙語命名（費用上限預設 US$0.50）
   node cli.mjs player [--background] [--json] 啟動獨立本機播放器
   node cli.mjs player --restart [--force]    升級後把執行中的舊播放器服務換成新版（會中斷目前播放；--force 版本號相同也重啟）
   node cli.mjs events [--since seq] [--type t]  中樞事件（新歌、自動下載、下載完成）
@@ -474,6 +475,21 @@ async function main() {
         if (result.failed.length) {
             for (const fail of result.failed.slice(0, 10)) console.log(`  ✗ ${fail.file}：${fail.error}`);
         }
+        return;
+    }
+
+    if (cmd === 'liked-folder' || cmd === 'liked') {
+        const capUsd = args.flags.budget !== undefined ? Number(args.flags.budget) : undefined;
+        if (capUsd !== undefined && !(capUsd >= 0 && capUsd <= 5)) throw new Error('--budget 需介於 0 到 5（USD）');
+        const result = await ACE.collectLikedSongs({ cfg, root: args.flags.root || 'ai音樂', dryRun: !!args.flags['dry-run'], ai: !args.flags['no-ai'], ...(capUsd !== undefined ? { capUsd } : {}) });
+        if (args.flags.json) return printJson(result);
+        if (result.error) { console.log('已點讚：' + result.error); process.exitCode = 1; return; }
+        const cost = result.dryRun ? `預估 AI 費用 US$${result.estimatedUsd ?? 0}` : `AI 命名 ${result.aiNamed}、用網站歌名 ${result.titleNamed}；累計花費 US$${result.spentUsd}／上限 US$${result.capUsd}`;
+        console.log(`已點讚：${result.dryRun ? '預覽' : '完成'}（${result.folder}）`);
+        console.log(`  點讚 ${result.liked} 首；需要命名 ${result.needsNaming}；${cost}`);
+        if (!result.dryRun) console.log(`  複製 ${result.copied}、已存在 ${result.already}、改名 ${result.renamed}、更新 ${result.refreshed}、取消點讚移出 ${result.unlikedMoved}；沒有本機成品音檔 ${result.missingAudio.length} 首${result.aiStopped ? '；AI 停止原因：' + result.aiStopped : ''}`);
+        for (const item of (result.items || []).slice(0, 10)) console.log(`  - ${item.name}  [${item.files.join('/')}]`);
+        for (const f of result.failed.slice(0, 10)) console.log(`  ✗ ${f.task_id || ''} ${f.error}`);
         return;
     }
 

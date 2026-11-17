@@ -8,7 +8,7 @@ import { hubJson, hubRequest, canFallbackHubWrite, HUB_URL } from './lib/hubclie
 import { MUSIC_CONTRACT, MUSIC_TOOLS, validateMusicInput } from './lib/music-contract.mjs';
 import { CREATE_CONTRACT, CREATE_TOOLS } from './lib/create-tools.mjs';
 
-const SERVER = { name: 'ace-music-downloader', version: '1.8.7' };
+const SERVER = { name: 'ace-music-downloader', version: '1.8.8' };
 const jobs = new Map();
 let jobSeq = 0;
 const hubJobs = new Set();
@@ -85,6 +85,11 @@ const TOOLS = [
         name: 'ace_site_likes',
         description: '讀取 ACE 網頁原生「拇指向上」點讚（meta.rating=good）快照；sync=true 時唯讀抓取全部分頁，完整才替換，不修改網站上的讚。與面板心形收藏、播放器本機收藏不同。',
         inputSchema: { type: 'object', properties: { sync: { type: 'boolean' } }, additionalProperties: false },
+    },
+    {
+        name: 'ace_liked_folder',
+        description: '把網站拇指點讚的歌（成品 MP3／WAV）複製到 ai音樂/已點讚/，用 DeepSeek 取雙語名字（累計費用上限預設 US$0.50，名字記在 _命名對照.json、重跑不重複付費）。dry_run 只預估；ai=false 用網站歌名。取消點讚的副本移到 _已取消點讚，不刪除。',
+        inputSchema: { type: 'object', properties: { dry_run: { type: 'boolean' }, ai: { type: 'boolean' }, budget_usd: { type: 'number', minimum: 0, maximum: 5 } }, additionalProperties: false },
     },
     {
         name: 'ace_player',
@@ -383,6 +388,7 @@ async function callTool(name, args) {
         }
         case 'ace_site_likes': return args.sync ? ACE.syncSiteLikesFromSite(config()) : ACE.siteLikes(config());
         case 'ace_fill_missing': return ACE.fillMissing(config(), { types: args.types || ACE.FILL_TYPES, dryRun: args.dry_run !== false });
+        case 'ace_liked_folder': return ACE.collectLikedSongs({ cfg: config(), dryRun: !!args.dry_run, ai: args.ai !== false, ...(args.budget_usd !== undefined ? { capUsd: args.budget_usd } : {}) });
         case 'ace_player': return ACE.startPlayer(config(), { songId: args.song_id || '' });
         case 'ace_session_status': {
             const [status, page] = await Promise.all([ACE.sessionStatus(), ACE.pageChannelStatus()]);

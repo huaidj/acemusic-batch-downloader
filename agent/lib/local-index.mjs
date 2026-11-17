@@ -9,6 +9,7 @@ import { inspectAudioFile } from './audio-library.mjs';
 import { fileIdFromStat, physicalFileKey, legacyPathFileId } from './file-id.mjs';
 import { DEFAULT_FAVORITES_FOLDER } from './favorites.mjs';
 import { OUTPUT_FOLDER } from './wav-names.mjs';
+import { isCopyFolderName } from './copy-folders.mjs';
 
 const { P } = loadShared();
 const AUDIO = new Set(['mp3', 'wav', 'flac', 'm4a', 'ogg', 'aac', 'aif', 'aiff', 'aifc']);
@@ -155,7 +156,7 @@ export async function buildLocalDownloadIndex({ cfg = config(), root = 'ai音樂
             if (entry.isSymbolicLink()) { problems.push({ code: 'SYMLINK_SKIPPED', path: slash(path.relative(libraryRoot, absolutePath)) }); continue; }
             if (entry.isDirectory()) {
                 // 收藏 與 整理輸出 都是複本資料夾：不進歌曲索引，否則同一首歌會被算兩次
-                if (dir === libraryRoot && (entry.name === DEFAULT_FAVORITES_FOLDER || entry.name === OUTPUT_FOLDER)) continue;
+                if (dir === libraryRoot && isCopyFolderName(entry.name)) continue;
                 scan(absolutePath); continue;
             }
             const extension = path.extname(entry.name).slice(1).toLowerCase();
