@@ -1,6 +1,6 @@
 {
- "version": 1,
- "builtAt": "2026-11-17T12:38:08.554Z",
+ "version": 2,
+ "builtAt": "2026-11-17T13:58:08.667Z",
  "sources": {
   "night": "夜城人物事典.html",
   "elec": "靈感電子百科大全.html"
@@ -14,128 +14,141 @@
     "主舞台",
     "企業割據",
     "2023 核爆"
-   ]
+   ],
+   "faction": "自由市"
   },
   {
    "zh": "沃森區",
    "en": "Watson",
    "tags": [
-    "夜城",
     "居住區",
     "歌舞伎",
     "小中國",
     "虎鉤眾",
-    "起點"
-   ]
+    "起點",
+    "夜城"
+   ],
+   "faction": "夜城"
   },
   {
    "zh": "市中心",
    "en": "City Center",
    "tags": [
-    "夜城",
     "企業",
     "企業廣場",
     "荒坂塔",
-    "門面"
-   ]
+    "門面",
+    "夜城"
+   ],
+   "faction": "夜城"
   },
   {
    "zh": "日本街",
    "en": "Japantown",
    "tags": [
-    "夜城",
-    "威斯布魯克",
     "虎鉤眾",
     "霓虹",
     "超夢",
-    "遊行"
-   ]
+    "遊行",
+    "夜城"
+   ],
+   "faction": "夜城"
   },
   {
    "zh": "海伍德",
    "en": "Heywood",
    "tags": [
-    "夜城",
     "拉丁裔",
     "瓦倫提諾",
     "街頭",
-    "傑基"
-   ]
+    "傑基",
+    "夜城"
+   ],
+   "faction": "夜城"
   },
   {
    "zh": "聖多明哥",
    "en": "Santo Domingo",
    "tags": [
-    "夜城",
     "工業",
     "電廠",
     "六街幫",
-    "工人階級"
-   ]
+    "工人階級",
+    "夜城"
+   ],
+   "faction": "夜城"
   },
   {
    "zh": "太平洲",
    "en": "Pacifica",
    "tags": [
-    "夜城",
     "海岸",
     "爛尾",
     "巫毒幫",
     "動物幫",
-    "無政府"
-   ]
+    "無政府",
+    "夜城"
+   ],
+   "faction": "夜城"
   },
   {
    "zh": "狗鎮",
    "en": "Dogtown",
    "tags": [
+    "DLC",
+    "Barghest",
     "軍閥",
     "封鎖區",
     "漢森"
-   ]
+   ],
+   "faction": "Barghest"
   },
   {
    "zh": "來生",
    "en": "The Afterlife",
    "tags": [
-    "夜城",
     "酒吧",
     "中間人",
     "傳奇",
-    "羅格"
-   ]
+    "羅格",
+    "夜城"
+   ],
+   "faction": "夜城"
   },
   {
    "zh": "雲頂",
    "en": "Clouds",
    "tags": [
-    "虎鉤眾",
     "人偶館",
+    "虎鉤眾",
     "性交易",
     "茱蒂線"
-   ]
+   ],
+   "faction": "虎鉤眾"
   },
   {
    "zh": "紺碧廣場",
    "en": "Konpeki Plaza",
    "tags": [
-    "荒坂集團",
     "高級飯店",
     "荒坂",
     "偷天換日",
-    "潛入"
-   ]
+    "潛入",
+    "荒坂集團"
+   ],
+   "faction": "荒坂集團"
   },
   {
    "zh": "荒坂塔",
    "en": "Arasaka Tower",
    "tags": [
-    "荒坂集團",
     "企業",
     "總部",
     "2023 核爆",
-    "終局"
-   ]
+    "終局",
+    "荒坂集團"
+   ],
+   "faction": "荒坂集團"
   }
  ],
  "orgs": [
@@ -143,71 +156,74 @@
    "zh": "荒坂集團",
    "en": "Arasaka Corporation",
    "tags": [
-    "跨國巨型企業",
     "企業",
     "日本",
     "安保",
     "靈魂殺手",
     "神輿"
-   ]
+   ],
+   "faction": "跨國巨型企業"
   },
   {
    "zh": "軍武科技",
    "en": "Militech",
    "tags": [
-    "跨國巨型企業",
     "企業",
     "美國",
     "軍火",
-    "私人軍隊"
-   ]
+    "私人軍隊",
+    "NUSA"
+   ],
+   "faction": "跨國巨型企業"
   },
   {
    "zh": "康陶",
    "en": "Kang Tao",
    "tags": [
-    "跨國巨型企業",
     "企業",
     "中國",
     "智慧武器",
     "軍工",
     "安保"
-   ]
+   ],
+   "faction": "跨國巨型企業"
   },
   {
    "zh": "生物科技",
    "en": "Biotechnica",
    "tags": [
-    "跨國巨型企業",
     "企業",
     "生技",
     "製藥",
     "合成燃料",
     "糧食"
-   ]
+   ],
+   "faction": "跨國巨型企業"
   },
   {
    "zh": "新美國聯情局",
    "en": "NUSA Federal Intelligence Agency",
    "tags": [
-    "國家機關",
     "情報機構",
     "新美國",
     "特工",
     "黑色行動",
-    "往日之影"
-   ]
+    "往日之影",
+    "國家機關"
+   ],
+   "faction": "國家機關"
   },
   {
    "zh": "荒坂企業保安",
    "en": "Arasaka Security",
    "tags": [
-    "企業武裝",
     "企業保安",
     "私人軍隊",
     "荒坂",
-    "特種部隊"
-   ]
+    "特種部隊",
+    "企業武裝"
+   ],
+   "faction": "企業武裝"
   },
   {
    "zh": "漩渦幫",
@@ -216,9 +232,9 @@
     "幫派",
     "沃森",
     "北區",
-    "義體",
-    "賽博精神病"
-   ]
+    "義體"
+   ],
+   "faction": "幫派"
   },
   {
    "zh": "虎爪幫",
@@ -229,7 +245,8 @@
     "極道",
     "超夢",
     "人口販運"
-   ]
+   ],
+   "faction": "幫派"
   },
   {
    "zh": "瓦倫蒂諾幫",
@@ -240,7 +257,8 @@
     "拉丁裔",
     "家族",
     "宗教"
-   ]
+   ],
+   "faction": "幫派"
   },
   {
    "zh": "六街幫",
@@ -251,7 +269,8 @@
     "退伍軍人",
     "槍械",
     "社區"
-   ]
+   ],
+   "faction": "幫派"
   },
   {
    "zh": "動物幫",
@@ -262,7 +281,8 @@
     "類固醇",
     "打手",
     "地下格鬥"
-   ]
+   ],
+   "faction": "幫派"
   },
   {
    "zh": "巫毒幫",
@@ -273,7 +293,8 @@
     "竄網使",
     "黑牆",
     "海地"
-   ]
+   ],
+   "faction": "幫派"
   },
   {
    "zh": "莫克斯幫",
@@ -284,7 +305,8 @@
     "性工作者",
     "自衛",
     "麗姿酒吧"
-   ]
+   ],
+   "faction": "幫派"
   },
   {
    "zh": "拾荒者",
@@ -294,7 +316,8 @@
     "器官走私",
     "綁架",
     "黑市義體"
-   ]
+   ],
+   "faction": "幫派"
   },
   {
    "zh": "阿德卡多",
@@ -305,7 +328,8 @@
     "車隊",
     "家族",
     "走私"
-   ]
+   ],
+   "faction": "遊牧民族"
   },
   {
    "zh": "蠻牛幫",
@@ -314,33 +338,33 @@
     "幫派",
     "狗鎮",
     "民兵",
-    "黑市",
-    "庫爾特·漢森"
-   ]
+    "黑市"
+   ],
+   "faction": "幫派"
   },
   {
    "zh": "夜城警局",
    "en": "Night City Police Department",
    "tags": [
-    "治安機關",
     "治安",
     "警察",
     "貪腐",
     "夜城",
-    "暴恐機動隊"
-   ]
+    "治安機關"
+   ],
+   "faction": "治安機關"
   },
   {
    "zh": "暴恐機動隊",
    "en": "MaxTac",
    "tags": [
-    "治安機關",
     "治安",
     "特種部隊",
-    "賽博精神病",
     "夜城警局",
-    "菁英"
-   ]
+    "菁英",
+    "治安機關"
+   ],
+   "faction": "治安機關"
   }
  ],
  "concepts": [
@@ -348,999 +372,991 @@
    "zh": "義體",
    "en": "Cyberware",
    "tags": [
-    "全夜城",
     "改造",
     "開膛手",
     "黑市零件",
-    "肉身極限"
-   ]
+    "肉身極限",
+    "全夜城"
+   ],
+   "faction": "全夜城"
   },
   {
    "zh": "超夢",
    "en": "Braindance",
    "tags": [
-    "夜城娛樂圈",
+    "BD",
     "剪輯",
+    "XBD",
     "地下產業"
-   ]
+   ],
+   "faction": "夜城娛樂圈"
   },
   {
    "zh": "聖物",
    "en": "Relic",
    "tags": [
-    "荒坂集團",
     "荒坂",
     "生物晶片",
     "強尼",
-    "偷天換日"
-   ]
+    "偷天換日",
+    "荒坂集團"
+   ],
+   "faction": "荒坂集團"
   },
   {
    "zh": "神輿",
    "en": "Mikoshi",
    "tags": [
-    "荒坂集團",
     "荒坂",
     "靈魂殺手",
     "數位意識",
-    "永生計畫"
-   ]
+    "永生計畫",
+    "荒坂集團"
+   ],
+   "faction": "荒坂集團"
   },
   {
    "zh": "靈魂殺手",
    "en": "Soulkiller",
    "tags": [
-    "荒坂集團",
     "荒坂",
     "奧特",
     "意識抽取",
-    "永生計畫"
-   ]
+    "永生計畫",
+    "荒坂集團"
+   ],
+   "faction": "荒坂集團"
   },
   {
    "zh": "黑牆",
    "en": "Blackwall",
    "tags": [
-    "NetWatch 監控",
     "舊網路",
-    "禁區"
-   ]
+    "AI",
+    "NetWatch",
+    "禁區",
+    "NetWatch 監控"
+   ],
+   "faction": "NetWatch 監控"
   },
   {
    "zh": "竄網使",
    "en": "Netrunner",
    "tags": [
-    "全夜城",
     "駭客",
     "快速破解",
-    "神經介面"
-   ]
+    "ICE",
+    "神經介面",
+    "全夜城"
+   ],
+   "faction": "全夜城"
   },
   {
    "zh": "神機錯亂",
    "en": "Cyberpsychosis",
    "tags": [
-    "全夜城",
     "義體排斥",
+    "MAX-TAC",
     "幻覺",
-    "失控"
-   ]
+    "失控",
+    "全夜城"
+   ],
+   "faction": "全夜城"
   },
   {
    "zh": "創傷小組",
    "en": "Trauma Team",
    "tags": [
-    "民營醫療企業",
     "訂閱制",
     "浮空載具",
     "武裝救護",
     "階級"
-   ]
+   ],
+   "faction": "民營醫療企業"
   },
   {
    "zh": "中間人",
    "en": "Fixer",
    "tags": [
-    "街頭",
     "委託",
     "抽成",
     "地盤",
-    "信譽"
-   ]
+    "信譽",
+    "街頭"
+   ],
+   "faction": "街頭"
   },
   {
    "zh": "企業戰爭",
    "en": "Corporate War",
    "tags": [
-    "巨型企業",
     "荒坂",
     "軍武科技",
     "廢墟",
-    "冷戰"
-   ]
+    "冷戰",
+    "巨型企業"
+   ],
+   "faction": "巨型企業"
   },
   {
    "zh": "意識備份",
    "en": "Engram",
    "tags": [
-    "荒坂集團",
     "意識",
     "靈魂殺手",
     "永生計畫",
-    "複製"
-   ]
+    "複製",
+    "荒坂集團"
+   ],
+   "faction": "荒坂集團"
   },
   {
    "zh": "邊緣行者",
    "en": "Edgerunner",
    "tags": [
-    "街頭",
     "傭兵",
     "委託",
     "動畫",
-    "傳奇"
-   ]
+    "傳奇",
+    "街頭"
+   ],
+   "faction": "街頭"
   },
   {
    "zh": "全身義體化",
    "en": "Full Body Conversion",
    "tags": [
-    "全夜城",
     "全義體",
     "軍用改造",
     "亞當·碎骨",
-    "心理評估"
-   ]
+    "心理評估",
+    "全夜城"
+   ],
+   "faction": "全夜城"
   }
  ],
  "weapons": [
   {
    "zh": "野心",
    "en": "Ambition",
-   "tags": []
+   "cat": "pistol",
+   "tech": "tech",
+   "iconic": true
   },
   {
    "zh": "特赦",
    "en": "Amnesty",
-   "tags": []
+   "cat": "revolver",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "幻影",
    "en": "Apparition",
-   "tags": []
+   "cat": "pistol",
+   "tech": "tech",
+   "iconic": true
   },
   {
    "zh": "大天使",
    "en": "Archangel",
-   "tags": []
+   "cat": "revolver",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "千禧世代",
    "en": "Baby Boomer",
-   "tags": []
+   "cat": "club2",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "八星銃",
    "en": "Ba Xing Chong",
-   "tags": []
+   "cat": "shotgun",
+   "tech": "smart",
+   "iconic": true
   },
   {
    "zh": "黑獨角獸",
    "en": "Black Unicorn",
-   "tags": []
-  },
-  {
-   "zh": "血腥瑪麗亞",
-   "en": "Bloody Maria",
-   "tags": []
+   "cat": "blade",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "青牙",
    "en": "Blue Fang",
-   "tags": []
+   "cat": "blade",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "突破",
    "en": "Breakthrough",
-   "tags": []
-  },
-  {
-   "zh": "屠夫的切肉刀",
-   "en": "Butcher's Cleaver",
-   "tags": []
+   "cat": "sniper",
+   "tech": "tech",
+   "iconic": true
   },
   {
    "zh": "電鋸",
    "en": "Buzzsaw",
-   "tags": []
+   "cat": "smg",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "白虎",
    "en": "Byakko",
-   "tags": []
-  },
-  {
-   "zh": "管理員的鏟子",
-   "en": "Caretaker's Spade",
-   "tags": []
+   "cat": "blade",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "混亂",
    "en": "Chaos",
-   "tags": []
+   "cat": "pistol",
+   "tech": "tech",
+   "iconic": true
   },
   {
    "zh": "獵豹",
    "en": "Cheetah",
-   "tags": []
+   "cat": "pistol",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "雞尾酒棒",
    "en": "Cocktail Stick",
-   "tags": []
+   "cat": "blade",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "大木大木",
    "en": "Comrade's Hammer",
-   "tags": []
+   "cat": "revolver",
+   "tech": "tech",
+   "iconic": true
   },
   {
    "zh": "棉口蛇",
    "en": "Cottonmouth",
-   "tags": []
+   "cat": "blunt",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "碰撞",
    "en": "Crash",
-   "tags": []
+   "cat": "revolver",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "萬象靈",
    "en": "Crimestopper",
-   "tags": []
-  },
-  {
-   "zh": "DR5 新星",
-   "en": "DR5 Nova",
-   "tags": []
-  },
-  {
-   "zh": "死亡與稅收",
-   "en": "Death and Taxes",
-   "tags": []
+   "cat": "pistol",
+   "tech": "smart",
+   "iconic": true
   },
   {
    "zh": "要戰便戰",
    "en": "Divided We Stand",
-   "tags": []
+   "cat": "rifle",
+   "tech": "smart",
+   "iconic": true
   },
   {
    "zh": "終夜",
    "en": "Dying Night",
-   "tags": []
+   "cat": "pistol",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "補牢",
    "en": "Errata",
-   "tags": []
+   "cat": "blade",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "芬里爾",
    "en": "Fenrir",
-   "tags": []
+   "cat": "smg",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "源二郎",
    "en": "Genjiroh",
-   "tags": []
-  },
-  {
-   "zh": "鍍金棒球棍",
-   "en": "Gold-Plated Baseball Bat",
-   "tags": []
+   "cat": "pistol",
+   "tech": "smart",
+   "iconic": true
   },
   {
    "zh": "勇氣",
    "en": "Guts",
-   "tags": []
+   "cat": "shotgun",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "飛鷹",
    "en": "Hawk",
-   "tags": []
+   "cat": "rifle",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "獵頭",
    "en": "Headhunter",
-   "tags": []
+   "cat": "blade",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "女王陛下",
    "en": "Her Majesty",
-   "tags": []
+   "cat": "pistol",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "超臨界",
    "en": "Hypercritical",
-   "tags": []
+   "cat": "precision",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "盡忠丸",
    "en": "Jinchu-Maru",
-   "tags": []
+   "cat": "blade",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "金剛",
    "en": "Kongou",
-   "tags": []
-  },
-  {
-   "zh": "金色狠婆娘",
-   "en": "La Chingona Dorada",
-   "tags": []
-  },
-  {
-   "zh": "萊克星頓 X-Mod2",
-   "en": "Lexington X-Mod2",
-   "tags": []
+   "cat": "pistol",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "麗姿",
    "en": "Lizzie",
-   "tags": []
+   "cat": "pistol",
+   "tech": "tech",
+   "iconic": true
   },
   {
    "zh": "毒番石榴",
    "en": "Mancinella",
-   "tags": []
+   "cat": "revolver",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "莫倫拉貝",
    "en": "Moron Labe",
-   "tags": []
+   "cat": "rifle",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "莫克斯幫",
    "en": "Mox",
-   "tags": []
+   "cat": "shotgun",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "莫非定律",
    "en": "Murphy's Law",
-   "tags": []
+   "cat": "club1",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "涅槃",
    "en": "Nehan",
-   "tags": []
+   "cat": "blade",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "零五",
    "en": "O'Five",
-   "tags": []
+   "cat": "sniper",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "守望",
    "en": "Overwatch",
-   "tags": []
+   "cat": "sniper",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "退路",
    "en": "Plan B",
-   "tags": []
+   "cat": "pistol",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "皮茲德茨",
    "en": "Pizdets",
-   "tags": []
-  },
-  {
-   "zh": "大火 X-Mod2",
-   "en": "Pozhar X-Mod2",
-   "tags": []
+   "cat": "smg",
+   "tech": "smart",
+   "iconic": true
   },
   {
    "zh": "傲慢",
    "en": "Pride",
-   "tags": []
-  },
-  {
-   "zh": "問題解決者",
-   "en": "Problem Solver",
-   "tags": []
-  },
-  {
-   "zh": "詩篇 11:6",
-   "en": "Psalm 11:6",
-   "tags": []
+   "cat": "pistol",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "羅剎",
    "en": "Rasetsu",
-   "tags": []
+   "cat": "sniper",
+   "tech": "tech",
+   "iconic": true
   },
   {
    "zh": "羅斯科",
    "en": "Rosco",
-   "tags": []
-  },
-  {
-   "zh": "野人王的大錘",
-   "en": "Sasquatch's Hammer",
-   "tags": []
+   "cat": "revolver",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "手術刀",
    "en": "Scalpel",
-   "tags": []
+   "cat": "blade",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "熾天使",
    "en": "Seraph",
-   "tags": []
+   "cat": "pistol",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "藤津偽器",
    "en": "Sir John Phallustiff",
-   "tags": []
+   "cat": "blunt",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "四季寶",
    "en": "Skippy",
-   "tags": []
+   "cat": "pistol",
+   "tech": "smart",
+   "iconic": true
   },
   {
    "zh": "主權",
    "en": "Sovereign",
-   "tags": []
+   "cat": "db",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "刺針",
    "en": "Stinger",
-   "tags": []
+   "cat": "blade",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "劊子手",
    "en": "The Headsman",
-   "tags": []
+   "cat": "shotgun",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "小叮噹",
    "en": "Tinker Bell",
-   "tags": []
+   "cat": "blunt",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "歐古",
    "en": "Ogou",
-   "tags": []
+   "cat": "pistol",
+   "tech": "smart",
+   "iconic": true
   },
   {
    "zh": "風險",
    "en": "Riskit",
-   "tags": []
+   "cat": "pistol",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "狼王",
    "en": "Volkodav",
-   "tags": []
-  },
-  {
-   "zh": "寡婦製造者",
-   "en": "Widow Maker",
-   "tags": []
+   "cat": "blade",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "應龍",
    "en": "Yinglong",
-   "tags": []
+   "cat": "smg",
+   "tech": "smart",
+   "iconic": true
   },
   {
    "zh": "魔爪",
    "en": "Agaou",
-   "tags": []
+   "cat": "axe",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "阿拉拜",
    "en": "Alabai",
-   "tags": []
+   "cat": "shotgun",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "卡門",
    "en": "Carmen",
-   "tags": []
+   "cat": "rifle",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "逃兵",
    "en": "Dezerter",
-   "tags": []
+   "cat": "db",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "獠牙",
    "en": "Fang",
-   "tags": []
-  },
-  {
-   "zh": "大力神 3AX",
-   "en": "Hercules 3AX",
-   "tags": []
-  },
-  {
-   "zh": "九尾 X-MOD2",
-   "en": "Kyubi x-MOD2",
-   "tags": []
+   "cat": "knife",
+   "tech": "melee",
+   "iconic": true
   },
   {
    "zh": "徠卡",
    "en": "Laika",
-   "tags": []
+   "cat": "revolver",
+   "tech": "tech",
+   "iconic": true
   },
   {
    "zh": "老可靠",
    "en": "Ol' Reliable",
-   "tags": []
+   "cat": "revolver",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "偏見",
    "en": "Prejudice",
-   "tags": []
+   "cat": "rifle",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "烏鴉",
    "en": "Rook",
-   "tags": []
+   "cat": "pistol",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "電火花",
    "en": "Sparky",
-   "tags": []
+   "cat": "sniper",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "泰崗",
    "en": "Taigan",
-   "tags": []
-  },
-  {
-   "zh": "DB-4 帕利卡",
-   "en": "DB-4 Palica",
-   "tags": []
-  },
-  {
-   "zh": "TKI-20 信玄",
-   "en": "TKI-20 Shingen",
-   "tags": []
-  },
-  {
-   "zh": "M-179E 阿基里斯",
-   "en": "M-179E Achilles",
-   "tags": []
-  },
-  {
-   "zh": "JKE-X2 謙信",
-   "en": "JKE-X2 Kenshin",
-   "tags": []
-  },
-  {
-   "zh": "D5 響尾蛇",
-   "en": "D5 Sidewinder",
-   "tags": []
-  },
-  {
-   "zh": "L-69 卓式",
-   "en": "L-69 Zhuo",
-   "tags": []
-  },
-  {
-   "zh": "A-22B 超式",
-   "en": "A-22B Chao",
-   "tags": []
+   "cat": "revolver",
+   "tech": "power",
+   "iconic": true
   },
   {
    "zh": "棒球棍",
    "en": "Baseball Bat",
-   "tags": []
-  },
-  {
-   "zh": "D5 銅斑蛇",
-   "en": "D5 Copperhead",
-   "tags": []
-  },
-  {
-   "zh": "DB-2 薩塔拉",
-   "en": "DB-2 Satara",
-   "tags": []
+   "cat": "blunt",
+   "tech": "melee",
+   "iconic": false
   },
   {
    "zh": "防禦者",
    "en": "Defender",
-   "tags": []
-  },
-  {
-   "zh": "DS1 脈衝星",
-   "en": "DS1 Pulsar",
-   "tags": []
-  },
-  {
-   "zh": "電擊警棍 Gamma",
-   "en": "Electric Baton Gamma",
-   "tags": []
+   "cat": "lmg",
+   "tech": "power",
+   "iconic": false
   },
   {
    "zh": "鐵鎚",
    "en": "Hammer",
-   "tags": []
-  },
-  {
-   "zh": "HJSH-18 正宗",
-   "en": "HJSH-18 Masamune",
-   "tags": []
+   "cat": "blunt",
+   "tech": "melee",
+   "iconic": false
   },
   {
    "zh": "武士刀",
    "en": "Katana",
-   "tags": []
+   "cat": "blade",
+   "tech": "melee",
+   "iconic": false
   },
   {
    "zh": "小刀",
    "en": "Knife",
-   "tags": []
-  },
-  {
-   "zh": "M-10AF 萊克星頓",
-   "en": "M-10AF Lexington",
-   "tags": []
-  },
-  {
-   "zh": "M2038 戰術家",
-   "en": "M2038 Tactician",
-   "tags": []
+   "cat": "knife",
+   "tech": "melee",
+   "iconic": false
   },
   {
    "zh": "開山刀",
    "en": "Machete",
-   "tags": []
+   "cat": "blade",
+   "tech": "melee",
+   "iconic": false
   },
   {
    "zh": "貓又",
    "en": "Nekomata",
-   "tags": []
+   "cat": "sniper",
+   "tech": "tech",
+   "iconic": false
   },
   {
    "zh": "序曲",
    "en": "Overture",
-   "tags": []
+   "cat": "revolver",
+   "tech": "power",
+   "iconic": false
   },
   {
    "zh": "統一",
    "en": "Unity",
-   "tags": []
+   "cat": "pistol",
+   "tech": "power",
+   "iconic": false
   },
   {
    "zh": "碾碎者",
    "en": "Crusher",
-   "tags": []
-  },
-  {
-   "zh": "M-76E 奧馬哈",
-   "en": "M-76E Omaha",
-   "tags": []
-  },
-  {
-   "zh": "M251S 阿賈克斯",
-   "en": "M251S AJAX",
-   "tags": []
-  },
-  {
-   "zh": "DB-2 泰斯特拉",
-   "en": "DB-2 Testera",
-   "tags": []
+   "cat": "shotgun",
+   "tech": "power",
+   "iconic": false
   },
   {
    "zh": "戰斧",
    "en": "Tomahawk",
-   "tags": []
+   "cat": "axe",
+   "tech": "melee",
+   "iconic": false
   },
   {
    "zh": "自由",
    "en": "Liberty",
-   "tags": []
-  },
-  {
-   "zh": "SPT32 冰暴",
-   "en": "SPT32 Grad",
-   "tags": []
-  },
-  {
-   "zh": "電擊警棍 Beta",
-   "en": "Electric Baton Beta",
-   "tags": []
-  },
-  {
-   "zh": "神經毒小刀",
-   "en": "Neurotoxin Knife",
-   "tags": []
-  },
-  {
-   "zh": "DR12 類星體",
-   "en": "DR12 Quasar",
-   "tags": []
-  },
-  {
-   "zh": "M221 薩拉托加",
-   "en": "M221 Saratoga",
-   "tags": []
-  },
-  {
-   "zh": "RT-46 風暴",
-   "en": "RT-46 Burya",
-   "tags": []
-  },
-  {
-   "zh": "HJKE-11 幸村",
-   "en": "HJKE-11 Yukimura",
-   "tags": []
+   "cat": "pistol",
+   "tech": "power",
+   "iconic": false
   },
   {
    "zh": "屠殺",
    "en": "Carnage",
-   "tags": []
-  },
-  {
-   "zh": "Mk.31 重機槍",
-   "en": "Mk.31 HMG",
-   "tags": []
+   "cat": "shotgun",
+   "tech": "power",
+   "iconic": false
   },
   {
    "zh": "鋼管",
    "en": "Pipe",
-   "tags": []
+   "cat": "blunt",
+   "tech": "melee",
+   "iconic": false
   },
   {
    "zh": "撬棍",
    "en": "Crowbar",
-   "tags": []
+   "cat": "blunt",
+   "tech": "melee",
+   "iconic": false
   },
   {
    "zh": "扳手",
    "en": "Wrench",
-   "tags": []
+   "cat": "blunt",
+   "tech": "melee",
+   "iconic": false
   },
   {
    "zh": "撬胎棒",
    "en": "Tire Iron",
-   "tags": []
-  },
-  {
-   "zh": "卡帕 x-MOD2",
-   "en": "Kappa x-MOD2",
-   "tags": []
+   "cat": "blunt",
+   "tech": "melee",
+   "iconic": false
   }
  ],
  "devices": [
   {
    "zh": "尾燈光軌",
-   "from": "阿基拉"
+   "en": "",
+   "work": "阿基拉",
+   "themes": [
+    "力量的失控與代價",
+    "國家機密與軍事實驗",
+    "東京毀滅與原爆記憶",
+    "毀滅之後的再生"
+   ],
+   "short": "光軌",
+   "shortEn": "Light Trail"
   },
   {
    "zh": "手繪的光",
-   "from": "阿基拉"
-  },
-  {
-   "zh": "紅與綠的色彩經濟",
-   "from": "阿基拉"
+   "en": "",
+   "work": "阿基拉",
+   "themes": [
+    "力量的失控與代價",
+    "國家機密與軍事實驗",
+    "東京毀滅與原爆記憶",
+    "毀滅之後的再生"
+   ],
+   "short": "手繪",
+   "shortEn": "Hand-Drawn Light"
   },
   {
    "zh": "低周波音",
-   "from": "機動警察"
+   "en": "",
+   "work": "機動警察",
+   "themes": [
+    "看不見的技術",
+    "被製造出來的和平",
+    "機械的日常勞動",
+    "資訊即戰場"
+   ],
+   "short": "低周波",
+   "shortEn": "Subsonic"
   },
   {
    "zh": "新聞嵌片",
-   "from": "機動警察"
-  },
-  {
-   "zh": "用 1992 年的頂級 CG 去畫劇中的螢幕",
-   "from": "機動警察"
-  },
-  {
-   "zh": "下町近景與超高層遠景",
-   "from": "機動警察"
+   "en": "",
+   "work": "機動警察",
+   "themes": [
+    "看不見的技術",
+    "被製造出來的和平",
+    "機械的日常勞動",
+    "資訊即戰場"
+   ],
+   "short": "嵌片",
+   "shortEn": "News Insert"
   },
   {
    "zh": "熱光學迷彩",
-   "from": "攻殼機動隊"
-  },
-  {
-   "zh": "幽靈潛航（腦內視野）",
-   "from": "攻殼機動隊"
-  },
-  {
-   "zh": "低機位廣角與 layout 精度",
-   "from": "攻殼機動隊"
-  },
-  {
-   "zh": "組裝蒙太奇（shelling sequence）",
-   "from": "攻殼機動隊"
-  },
-  {
-   "zh": "水面與鏡的虛像",
-   "from": "攻殼機動隊"
-  },
-  {
-   "zh": "長定鏡（Stillness）",
-   "from": "新世紀福音戰士"
-  },
-  {
-   "zh": "白線自剖（線稿現形）",
-   "from": "新世紀福音戰士"
-  },
-  {
-   "zh": "文字卡與雙語標題",
-   "from": "新世紀福音戰士"
-  },
-  {
-   "zh": "逆光剪影與印刷顆粒",
-   "from": "新世紀福音戰士"
-  },
-  {
-   "zh": "實拍侵入（Live-action intrusion）",
-   "from": "新世紀福音戰士"
-  },
-  {
-   "zh": "資訊過載的城市拼貼",
-   "from": "押井守"
+   "en": "",
+   "work": "攻殼機動隊",
+   "themes": [
+    "自我同一性",
+    "幽靈與殼",
+    "量產的身體",
+    "網路中的新物種"
+   ],
+   "short": "迷彩",
+   "shortEn": "Thermal Camo"
   },
   {
    "zh": "靜止長鏡",
-   "from": "押井守"
-  },
-  {
-   "zh": "巨物與小人的比例",
-   "from": "押井守"
-  },
-  {
-   "zh": "光學迷彩的負形",
-   "from": "押井守"
-  },
-  {
-   "zh": "雨與積水的鏡像",
-   "from": "押井守"
+   "en": "",
+   "work": "押井守",
+   "themes": [
+    "義體與自我的邊界",
+    "記憶、複製與 ghost",
+    "城市即資訊堆積",
+    "看不懂的技術就是魔法"
+   ],
+   "short": "長鏡",
+   "shortEn": "Long Take"
   },
   {
    "zh": "黑底白字字卡",
-   "from": "庵野秀明"
+   "en": "",
+   "work": "庵野秀明",
+   "themes": [
+    "看不懂的技術就是魔法",
+    "命名與資訊的咒術",
+    "靜止中的時間",
+    "自我與他者的邊界"
+   ],
+   "short": "字卡",
+   "shortEn": "Title Card"
   },
   {
    "zh": "固定長鏡",
-   "from": "庵野秀明"
+   "en": "",
+   "work": "庵野秀明",
+   "themes": [
+    "看不懂的技術就是魔法",
+    "命名與資訊的咒術",
+    "靜止中的時間",
+    "自我與他者的邊界"
+   ],
+   "short": "長鏡",
+   "shortEn": "Long Take"
   },
   {
    "zh": "資訊洪水快切",
-   "from": "庵野秀明"
-  },
-  {
-   "zh": "鉛筆線畫的內心白場",
-   "from": "庵野秀明"
+   "en": "",
+   "work": "庵野秀明",
+   "themes": [
+    "看不懂的技術就是魔法",
+    "命名與資訊的咒術",
+    "靜止中的時間",
+    "自我與他者的邊界"
+   ],
+   "short": "快切",
+   "shortEn": "Fast Cut"
   }
  ],
  "themes": [
   {
    "zh": "力量的失控與代價",
-   "from": "阿基拉"
+   "work": "阿基拉"
   },
   {
    "zh": "國家機密與軍事實驗",
-   "from": "阿基拉"
+   "work": "阿基拉"
   },
   {
    "zh": "東京毀滅與原爆記憶",
-   "from": "阿基拉"
+   "work": "阿基拉"
   },
   {
    "zh": "毀滅之後的再生",
-   "from": "阿基拉"
+   "work": "阿基拉"
   },
   {
    "zh": "暴走族共同體與青春",
-   "from": "阿基拉"
+   "work": "阿基拉"
   },
   {
    "zh": "光即力量：技術的黑箱",
-   "from": "阿基拉"
+   "work": "阿基拉"
   },
   {
    "zh": "看不見的技術",
-   "from": "機動警察"
+   "work": "機動警察"
   },
   {
    "zh": "被製造出來的和平",
-   "from": "機動警察"
+   "work": "機動警察"
   },
   {
    "zh": "機械的日常勞動",
-   "from": "機動警察"
+   "work": "機動警察"
   },
   {
    "zh": "資訊即戰場",
-   "from": "機動警察"
+   "work": "機動警察"
   },
   {
    "zh": "平行世界的多重正史",
-   "from": "機動警察"
+   "work": "機動警察"
   },
   {
    "zh": "自我同一性",
-   "from": "攻殼機動隊"
+   "work": "攻殼機動隊"
   },
   {
    "zh": "幽靈與殼",
-   "from": "攻殼機動隊"
+   "work": "攻殼機動隊"
   },
   {
    "zh": "量產的身體",
-   "from": "攻殼機動隊"
+   "work": "攻殼機動隊"
   },
   {
    "zh": "網路中的新物種",
-   "from": "攻殼機動隊"
+   "work": "攻殼機動隊"
   },
   {
    "zh": "融合作為婚禮",
-   "from": "攻殼機動隊"
+   "work": "攻殼機動隊"
   },
   {
    "zh": "溝通的不可能",
-   "from": "新世紀福音戰士"
+   "work": "新世紀福音戰士"
   },
   {
    "zh": "他者與自我的邊界",
-   "from": "新世紀福音戰士"
+   "work": "新世紀福音戰士"
   },
   {
    "zh": "補完：融合的誘惑",
-   "from": "新世紀福音戰士"
+   "work": "新世紀福音戰士"
   },
   {
    "zh": "逃避與留下",
-   "from": "新世紀福音戰士"
+   "work": "新世紀福音戰士"
   },
   {
    "zh": "媒介自省：動畫解剖自己",
-   "from": "新世紀福音戰士"
+   "work": "新世紀福音戰士"
   },
   {
    "zh": "義體與自我的邊界",
-   "from": "押井守"
+   "work": "押井守"
   },
   {
    "zh": "記憶、複製與 ghost",
-   "from": "押井守"
+   "work": "押井守"
   },
   {
    "zh": "城市即資訊堆積",
-   "from": "押井守"
+   "work": "押井守"
   },
   {
    "zh": "看不懂的技術就是魔法",
-   "from": "押井守"
+   "work": "押井守"
   },
   {
    "zh": "官僚機器與孤獨個體",
-   "from": "押井守"
+   "work": "押井守"
   },
   {
    "zh": "命名與資訊的咒術",
-   "from": "庵野秀明"
+   "work": "庵野秀明"
   },
   {
    "zh": "靜止中的時間",
-   "from": "庵野秀明"
+   "work": "庵野秀明"
   },
   {
    "zh": "自我與他者的邊界",
-   "from": "庵野秀明"
+   "work": "庵野秀明"
   },
   {
    "zh": "手繪線條的物質性",
-   "from": "庵野秀明"
+   "work": "庵野秀明"
   }
  ],
  "tags": [
@@ -1352,6 +1368,9 @@
   },
   {
    "zh": "企業割據"
+  },
+  {
+   "zh": "2023 核爆"
   },
   {
    "zh": "居住區"
@@ -1367,6 +1386,9 @@
   },
   {
    "zh": "起點"
+  },
+  {
+   "zh": "夜城"
   },
   {
    "zh": "企業"
@@ -1471,6 +1493,9 @@
    "zh": "潛入"
   },
   {
+   "zh": "荒坂集團"
+  },
+  {
    "zh": "總部"
   },
   {
@@ -1534,10 +1559,16 @@
    "zh": "往日之影"
   },
   {
+   "zh": "國家機關"
+  },
+  {
    "zh": "企業保安"
   },
   {
    "zh": "特種部隊"
+  },
+  {
+   "zh": "企業武裝"
   },
   {
    "zh": "幫派"
@@ -1651,7 +1682,7 @@
    "zh": "貪腐"
   },
   {
-   "zh": "夜城"
+   "zh": "治安機關"
   },
   {
    "zh": "夜城警局"
@@ -1670,6 +1701,9 @@
   },
   {
    "zh": "肉身極限"
+  },
+  {
+   "zh": "全夜城"
   },
   {
    "zh": "剪輯"
@@ -1700,6 +1734,9 @@
   },
   {
    "zh": "禁區"
+  },
+  {
+   "zh": "NetWatch 監控"
   },
   {
    "zh": "駭客"
@@ -1753,6 +1790,9 @@
    "zh": "冷戰"
   },
   {
+   "zh": "巨型企業"
+  },
+  {
    "zh": "意識"
   },
   {
@@ -1771,16 +1811,1632 @@
    "zh": "軍用改造"
   },
   {
+   "zh": "亞當·碎骨"
+  },
+  {
    "zh": "心理評估"
   }
  ],
+ "works": [
+  {
+   "zh": "阿基拉",
+   "en": "Akira"
+  },
+  {
+   "zh": "機動警察",
+   "en": "Mobile Police Patlabor"
+  },
+  {
+   "zh": "攻殼機動隊",
+   "en": "Ghost in the Shell"
+  },
+  {
+   "zh": "新世紀福音戰士",
+   "en": "Neon Genesis Evangelion"
+  },
+  {
+   "zh": "押井守",
+   "en": "Mamoru Oshii"
+  },
+  {
+   "zh": "庵野秀明",
+   "en": "Hideaki Anno"
+  }
+ ],
+ "themeCores": [
+  {
+   "zh": "力量",
+   "work": "阿基拉",
+   "theme": "力量的失控與代價"
+  },
+  {
+   "zh": "失控",
+   "work": "阿基拉",
+   "theme": "力量的失控與代價"
+  },
+  {
+   "zh": "代價",
+   "work": "阿基拉",
+   "theme": "力量的失控與代價"
+  },
+  {
+   "zh": "國家機密",
+   "work": "阿基拉",
+   "theme": "國家機密與軍事實驗"
+  },
+  {
+   "zh": "軍事實驗",
+   "work": "阿基拉",
+   "theme": "國家機密與軍事實驗"
+  },
+  {
+   "zh": "東京毀滅",
+   "work": "阿基拉",
+   "theme": "東京毀滅與原爆記憶"
+  },
+  {
+   "zh": "原爆記憶",
+   "work": "阿基拉",
+   "theme": "東京毀滅與原爆記憶"
+  },
+  {
+   "zh": "毀滅之後",
+   "work": "阿基拉",
+   "theme": "毀滅之後的再生"
+  },
+  {
+   "zh": "再生",
+   "work": "阿基拉",
+   "theme": "毀滅之後的再生"
+  },
+  {
+   "zh": "青春",
+   "work": "阿基拉",
+   "theme": "暴走族共同體與青春"
+  },
+  {
+   "zh": "光即力量",
+   "work": "阿基拉",
+   "theme": "光即力量：技術的黑箱"
+  },
+  {
+   "zh": "技術",
+   "work": "阿基拉",
+   "theme": "光即力量：技術的黑箱"
+  },
+  {
+   "zh": "黑箱",
+   "work": "阿基拉",
+   "theme": "光即力量：技術的黑箱"
+  },
+  {
+   "zh": "看不見",
+   "work": "機動警察",
+   "theme": "看不見的技術"
+  },
+  {
+   "zh": "機械",
+   "work": "機動警察",
+   "theme": "機械的日常勞動"
+  },
+  {
+   "zh": "日常勞動",
+   "work": "機動警察",
+   "theme": "機械的日常勞動"
+  },
+  {
+   "zh": "平行世界",
+   "work": "機動警察",
+   "theme": "平行世界的多重正史"
+  },
+  {
+   "zh": "多重正史",
+   "work": "機動警察",
+   "theme": "平行世界的多重正史"
+  },
+  {
+   "zh": "幽靈",
+   "work": "攻殼機動隊",
+   "theme": "幽靈與殼"
+  },
+  {
+   "zh": "量產",
+   "work": "攻殼機動隊",
+   "theme": "量產的身體"
+  },
+  {
+   "zh": "身體",
+   "work": "攻殼機動隊",
+   "theme": "量產的身體"
+  },
+  {
+   "zh": "網路中",
+   "work": "攻殼機動隊",
+   "theme": "網路中的新物種"
+  },
+  {
+   "zh": "新物種",
+   "work": "攻殼機動隊",
+   "theme": "網路中的新物種"
+  },
+  {
+   "zh": "溝通",
+   "work": "新世紀福音戰士",
+   "theme": "溝通的不可能"
+  },
+  {
+   "zh": "不可能",
+   "work": "新世紀福音戰士",
+   "theme": "溝通的不可能"
+  },
+  {
+   "zh": "他者",
+   "work": "新世紀福音戰士",
+   "theme": "他者與自我的邊界"
+  },
+  {
+   "zh": "自我",
+   "work": "新世紀福音戰士",
+   "theme": "他者與自我的邊界"
+  },
+  {
+   "zh": "邊界",
+   "work": "新世紀福音戰士",
+   "theme": "他者與自我的邊界"
+  },
+  {
+   "zh": "補完",
+   "work": "新世紀福音戰士",
+   "theme": "補完：融合的誘惑"
+  },
+  {
+   "zh": "融合",
+   "work": "新世紀福音戰士",
+   "theme": "補完：融合的誘惑"
+  },
+  {
+   "zh": "誘惑",
+   "work": "新世紀福音戰士",
+   "theme": "補完：融合的誘惑"
+  },
+  {
+   "zh": "逃避",
+   "work": "新世紀福音戰士",
+   "theme": "逃避與留下"
+  },
+  {
+   "zh": "留下",
+   "work": "新世紀福音戰士",
+   "theme": "逃避與留下"
+  },
+  {
+   "zh": "媒介自省",
+   "work": "新世紀福音戰士",
+   "theme": "媒介自省：動畫解剖自己"
+  },
+  {
+   "zh": "義體",
+   "work": "押井守",
+   "theme": "義體與自我的邊界"
+  },
+  {
+   "zh": "記憶",
+   "work": "押井守",
+   "theme": "記憶、複製與 ghost"
+  },
+  {
+   "zh": "複製",
+   "work": "押井守",
+   "theme": "記憶、複製與 ghost"
+  },
+  {
+   "zh": "看不懂",
+   "work": "押井守",
+   "theme": "看不懂的技術就是魔法"
+  },
+  {
+   "zh": "官僚機器",
+   "work": "押井守",
+   "theme": "官僚機器與孤獨個體"
+  },
+  {
+   "zh": "孤獨個體",
+   "work": "押井守",
+   "theme": "官僚機器與孤獨個體"
+  },
+  {
+   "zh": "命名",
+   "work": "庵野秀明",
+   "theme": "命名與資訊的咒術"
+  },
+  {
+   "zh": "資訊",
+   "work": "庵野秀明",
+   "theme": "命名與資訊的咒術"
+  },
+  {
+   "zh": "咒術",
+   "work": "庵野秀明",
+   "theme": "命名與資訊的咒術"
+  },
+  {
+   "zh": "靜止中",
+   "work": "庵野秀明",
+   "theme": "靜止中的時間"
+  },
+  {
+   "zh": "時間",
+   "work": "庵野秀明",
+   "theme": "靜止中的時間"
+  },
+  {
+   "zh": "手繪線條",
+   "work": "庵野秀明",
+   "theme": "手繪線條的物質性"
+  },
+  {
+   "zh": "物質性",
+   "work": "庵野秀明",
+   "theme": "手繪線條的物質性"
+  }
+ ],
+ "sceneCores": [
+  {
+   "zh": "暴走",
+   "work": "阿基拉"
+  },
+  {
+   "zh": "俺命令",
+   "work": "阿基拉"
+  },
+  {
+   "zh": "衛星射擊",
+   "work": "阿基拉"
+  },
+  {
+   "zh": "肉塊",
+   "work": "阿基拉"
+  },
+  {
+   "zh": "奇異點",
+   "work": "阿基拉"
+  },
+  {
+   "zh": "東南亞",
+   "work": "機動警察"
+  },
+  {
+   "zh": "小隊",
+   "work": "機動警察"
+  },
+  {
+   "zh": "業餘錄影",
+   "work": "機動警察"
+  },
+  {
+   "zh": "無害",
+   "work": "機動警察"
+  },
+  {
+   "zh": "毒氣",
+   "work": "機動警察"
+  },
+  {
+   "zh": "誕生",
+   "work": "攻殼機動隊"
+  },
+  {
+   "zh": "夜海潛水",
+   "work": "攻殼機動隊"
+  },
+  {
+   "zh": "街上",
+   "work": "攻殼機動隊"
+  },
+  {
+   "zh": "另一個我",
+   "work": "攻殼機動隊"
+  },
+  {
+   "zh": "決戰",
+   "work": "攻殼機動隊"
+  },
+  {
+   "zh": "幽靈潛航",
+   "work": "攻殼機動隊"
+  },
+  {
+   "zh": "融合",
+   "work": "攻殼機動隊"
+  },
+  {
+   "zh": "紅海上",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "兩個人",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "黑底白線",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "第話",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "啤酒杯",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "菸灰缸",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "鉛筆線稿",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "行走",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "義體誕生",
+   "work": "押井守"
+  },
+  {
+   "zh": "片頭字幕",
+   "work": "押井守"
+  },
+  {
+   "zh": "戰車死鬥",
+   "work": "押井守"
+  },
+  {
+   "zh": "少女義體",
+   "work": "押井守"
+  },
+  {
+   "zh": "最後俯望",
+   "work": "押井守"
+  },
+  {
+   "zh": "方舟崩壞",
+   "work": "押井守"
+  },
+  {
+   "zh": "電梯",
+   "work": "庵野秀明"
+  },
+  {
+   "zh": "靜止",
+   "work": "庵野秀明"
+  },
+  {
+   "zh": "紅色海邊",
+   "work": "庵野秀明"
+  },
+  {
+   "zh": "病毒影片",
+   "work": "庵野秀明"
+  }
+ ],
+ "promptCores": [
+  {
+   "zh": "夜路",
+   "work": "阿基拉"
+  },
+  {
+   "zh": "光之河",
+   "work": "阿基拉"
+  },
+  {
+   "zh": "神靈",
+   "work": "阿基拉"
+  },
+  {
+   "zh": "長矛",
+   "work": "阿基拉"
+  },
+  {
+   "zh": "發光",
+   "work": "阿基拉"
+  },
+  {
+   "zh": "少年",
+   "work": "阿基拉"
+  },
+  {
+   "zh": "肉山",
+   "work": "阿基拉"
+  },
+  {
+   "zh": "白洞",
+   "work": "阿基拉"
+  },
+  {
+   "zh": "低頻之神",
+   "work": "機動警察"
+  },
+  {
+   "zh": "新聞畫面",
+   "work": "機動警察"
+  },
+  {
+   "zh": "假戰爭",
+   "work": "機動警察"
+  },
+  {
+   "zh": "用最貴",
+   "work": "機動警察"
+  },
+  {
+   "zh": "看不見",
+   "work": "攻殼機動隊"
+  },
+  {
+   "zh": "獵人",
+   "work": "攻殼機動隊"
+  },
+  {
+   "zh": "組裝之身",
+   "work": "攻殼機動隊"
+  },
+  {
+   "zh": "淹水",
+   "work": "攻殼機動隊"
+  },
+  {
+   "zh": "博物館",
+   "work": "攻殼機動隊"
+  },
+  {
+   "zh": "另一個我",
+   "work": "攻殼機動隊"
+  },
+  {
+   "zh": "紅海邊",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "兩塊礦石",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "被釘住",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "巨人",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "一圈小人",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "黑石上",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "白線巫者",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "讀不懂",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "板子",
+   "work": "新世紀福音戰士"
+  },
+  {
+   "zh": "霓虹",
+   "work": "押井守"
+  },
+  {
+   "zh": "岩壁",
+   "work": "押井守"
+  },
+  {
+   "zh": "黑石字卡",
+   "work": "庵野秀明"
+  },
+  {
+   "zh": "石槽電梯",
+   "work": "庵野秀明"
+  },
+  {
+   "zh": "記號洪水",
+   "work": "庵野秀明"
+  },
+  {
+   "zh": "白場拍手",
+   "work": "庵野秀明"
+  }
+ ],
+ "inspiration": {
+  "abstract": [
+   {
+    "zh": "失控",
+    "gloss": ""
+   },
+   {
+    "zh": "隱形",
+    "gloss": ""
+   },
+   {
+    "zh": "日常",
+    "gloss": ""
+   },
+   {
+    "zh": "勞動",
+    "gloss": ""
+   },
+   {
+    "zh": "資訊",
+    "gloss": ""
+   },
+   {
+    "zh": "終戰",
+    "gloss": ""
+   },
+   {
+    "zh": "再生",
+    "gloss": ""
+   },
+   {
+    "zh": "奇異點",
+    "gloss": ""
+   },
+   {
+    "zh": "共同體",
+    "gloss": ""
+   },
+   {
+    "zh": "青春",
+    "gloss": ""
+   },
+   {
+    "zh": "黑箱",
+    "gloss": ""
+   },
+   {
+    "zh": "機密",
+    "gloss": ""
+   },
+   {
+    "zh": "代價",
+    "gloss": ""
+   },
+   {
+    "zh": "神格",
+    "gloss": ""
+   },
+   {
+    "zh": "預言",
+    "gloss": ""
+   },
+   {
+    "zh": "平行",
+    "gloss": ""
+   },
+   {
+    "zh": "記憶",
+    "gloss": ""
+   },
+   {
+    "zh": "政變",
+    "gloss": ""
+   },
+   {
+    "zh": "負形",
+    "gloss": ""
+   },
+   {
+    "zh": "低周波",
+    "gloss": ""
+   },
+   {
+    "zh": "名咒",
+    "gloss": ""
+   },
+   {
+    "zh": "補完",
+    "gloss": ""
+   },
+   {
+    "zh": "無體",
+    "gloss": ""
+   },
+   {
+    "zh": "幻肢感",
+    "gloss": ""
+   },
+   {
+    "zh": "延遲",
+    "gloss": ""
+   },
+   {
+    "zh": "缺席",
+    "gloss": ""
+   },
+   {
+    "zh": "擬態",
+    "gloss": ""
+   },
+   {
+    "zh": "重描",
+    "gloss": ""
+   },
+   {
+    "zh": "減速",
+    "gloss": ""
+   },
+   {
+    "zh": "他者",
+    "gloss": ""
+   },
+   {
+    "zh": "神啟",
+    "gloss": ""
+   },
+   {
+    "zh": "過載",
+    "gloss": ""
+   },
+   {
+    "zh": "同頻",
+    "gloss": ""
+   },
+   {
+    "zh": "懸置",
+    "gloss": ""
+   },
+   {
+    "zh": "留白",
+    "gloss": ""
+   },
+   {
+    "zh": "沉積",
+    "gloss": ""
+   },
+   {
+    "zh": "幽靈",
+    "gloss": ""
+   },
+   {
+    "zh": "義體",
+    "gloss": ""
+   },
+   {
+    "zh": "量產",
+    "gloss": ""
+   },
+   {
+    "zh": "空殼",
+    "gloss": ""
+   },
+   {
+    "zh": "潛航",
+    "gloss": ""
+   },
+   {
+    "zh": "融合",
+    "gloss": ""
+   },
+   {
+    "zh": "邊界",
+    "gloss": ""
+   },
+   {
+    "zh": "靜止",
+    "gloss": ""
+   },
+   {
+    "zh": "自剖",
+    "gloss": ""
+   },
+   {
+    "zh": "溶解",
+    "gloss": ""
+   },
+   {
+    "zh": "汙染",
+    "gloss": ""
+   },
+   {
+    "zh": "拒絕",
+    "gloss": ""
+   },
+   {
+    "zh": "同步",
+    "gloss": ""
+   },
+   {
+    "zh": "虛像",
+    "gloss": ""
+   },
+   {
+    "zh": "質問",
+    "gloss": ""
+   },
+   {
+    "zh": "單一",
+    "gloss": ""
+   },
+   {
+    "zh": "同一性",
+    "gloss": ""
+   },
+   {
+    "zh": "新物種",
+    "gloss": ""
+   }
+  ],
+  "concrete": [
+   {
+    "zh": "尾燈光軌",
+    "gloss": ""
+   },
+   {
+    "zh": "衛星射擊",
+    "gloss": ""
+   },
+   {
+    "zh": "肉塊",
+    "gloss": ""
+   },
+   {
+    "zh": "低周波",
+    "gloss": ""
+   },
+   {
+    "zh": "同心波紋",
+    "gloss": ""
+   },
+   {
+    "zh": "斜張橋",
+    "gloss": ""
+   },
+   {
+    "zh": "颱風",
+    "gloss": ""
+   },
+   {
+    "zh": "新聞嵌片",
+    "gloss": ""
+   },
+   {
+    "zh": "時間碼",
+    "gloss": ""
+   },
+   {
+    "zh": "無人飛船",
+    "gloss": ""
+   },
+   {
+    "zh": "斷橋",
+    "gloss": ""
+   },
+   {
+    "zh": "掃描線",
+    "gloss": ""
+   },
+   {
+    "zh": "下町",
+    "gloss": ""
+   },
+   {
+    "zh": "廢墟",
+    "gloss": ""
+   },
+   {
+    "zh": "探照燈",
+    "gloss": ""
+   },
+   {
+    "zh": "低溫槽",
+    "gloss": ""
+   },
+   {
+    "zh": "體育場",
+    "gloss": ""
+   },
+   {
+    "zh": "手印",
+    "gloss": ""
+   },
+   {
+    "zh": "值班",
+    "gloss": ""
+   },
+   {
+    "zh": "保養",
+    "gloss": ""
+   },
+   {
+    "zh": "加班",
+    "gloss": ""
+   },
+   {
+    "zh": "記憶體",
+    "gloss": ""
+   },
+   {
+    "zh": "石像",
+    "gloss": ""
+   },
+   {
+    "zh": "自爆",
+    "gloss": ""
+   },
+   {
+    "zh": "義體",
+    "gloss": ""
+   },
+   {
+    "zh": "黑底白字",
+    "gloss": ""
+   },
+   {
+    "zh": "光學迷彩",
+    "gloss": ""
+   },
+   {
+    "zh": "六足",
+    "gloss": ""
+   },
+   {
+    "zh": "水沒博物館",
+    "gloss": ""
+   },
+   {
+    "zh": "海上方舟",
+    "gloss": ""
+   },
+   {
+    "zh": "傘群",
+    "gloss": ""
+   },
+   {
+    "zh": "雨痕",
+    "gloss": ""
+   },
+   {
+    "zh": "白場",
+    "gloss": ""
+   },
+   {
+    "zh": "鉛筆線",
+    "gloss": ""
+   },
+   {
+    "zh": "壓縮雜訊",
+    "gloss": ""
+   },
+   {
+    "zh": "電子觀景窗",
+    "gloss": ""
+   },
+   {
+    "zh": "錳黑",
+    "gloss": ""
+   },
+   {
+    "zh": "赭紅",
+    "gloss": ""
+   },
+   {
+    "zh": "液體槽",
+    "gloss": ""
+   },
+   {
+    "zh": "紅海",
+    "gloss": ""
+   },
+   {
+    "zh": "電梯",
+    "gloss": ""
+   },
+   {
+    "zh": "潛航",
+    "gloss": ""
+   },
+   {
+    "zh": "顆粒感",
+    "gloss": ""
+   },
+   {
+    "zh": "逆光剪影",
+    "gloss": ""
+   },
+   {
+    "zh": "刻痕",
+    "gloss": ""
+   },
+   {
+    "zh": "殘影",
+    "gloss": ""
+   },
+   {
+    "zh": "熱光學迷彩",
+    "gloss": ""
+   },
+   {
+    "zh": "紗幕",
+    "gloss": ""
+   },
+   {
+    "zh": "組裝線",
+    "gloss": ""
+   },
+   {
+    "zh": "骨盆脊椎",
+    "gloss": ""
+   },
+   {
+    "zh": "浮遊博物館",
+    "gloss": ""
+   },
+   {
+    "zh": "淹水展廳",
+    "gloss": ""
+   },
+   {
+    "zh": "演化樹",
+    "gloss": ""
+   },
+   {
+    "zh": "港市船燈",
+    "gloss": ""
+   },
+   {
+    "zh": "夜海氣泡",
+    "gloss": ""
+   },
+   {
+    "zh": "櫥窗假人",
+    "gloss": ""
+   },
+   {
+    "zh": "後頸纜線",
+    "gloss": ""
+   },
+   {
+    "zh": "啤酒杯",
+    "gloss": ""
+   },
+   {
+    "zh": "菸灰缸",
+    "gloss": ""
+   },
+   {
+    "zh": "插入栓",
+    "gloss": ""
+   },
+   {
+    "zh": "白線輪廓",
+    "gloss": ""
+   },
+   {
+    "zh": "印刷顆粒",
+    "gloss": ""
+   },
+   {
+    "zh": "赤紅海",
+    "gloss": ""
+   },
+   {
+    "zh": "沙灘墓碑",
+    "gloss": ""
+   },
+   {
+    "zh": "十字架",
+    "gloss": ""
+   },
+   {
+    "zh": "分鏡紙",
+    "gloss": ""
+   }
+  ],
+  "phrases": [
+   {
+    "zh": "廢墟裡的衛星",
+    "gloss": ""
+   },
+   {
+    "zh": "機械的日常勞動",
+    "gloss": ""
+   },
+   {
+    "zh": "被製造出來的和平",
+    "gloss": ""
+   },
+   {
+    "zh": "看不見的技術",
+    "gloss": ""
+   },
+   {
+    "zh": "光還留在原地",
+    "gloss": ""
+   },
+   {
+    "zh": "點火的人",
+    "gloss": ""
+   },
+   {
+    "zh": "只有光在長大",
+    "gloss": ""
+   },
+   {
+    "zh": "先有工作才有機械",
+    "gloss": ""
+   },
+   {
+    "zh": "聽不見的敵人",
+    "gloss": ""
+   },
+   {
+    "zh": "恐慌就是武器",
+    "gloss": ""
+   },
+   {
+    "zh": "剪輯出來的真相",
+    "gloss": ""
+   },
+   {
+    "zh": "沒有開火的政變",
+    "gloss": ""
+   },
+   {
+    "zh": "弱點在資料裡",
+    "gloss": ""
+   },
+   {
+    "zh": "一條手臂的代價",
+    "gloss": ""
+   },
+   {
+    "zh": "雪中的治安出動",
+    "gloss": ""
+   },
+   {
+    "zh": "多重正史",
+    "gloss": ""
+   },
+   {
+    "zh": "白色的圓洞",
+    "gloss": ""
+   },
+   {
+    "zh": "燈一盞盞爆裂",
+    "gloss": ""
+   },
+   {
+    "zh": "融合作為婚禮",
+    "gloss": ""
+   },
+   {
+    "zh": "沒有消失點",
+    "gloss": ""
+   },
+   {
+    "zh": "沉默變成台詞",
+    "gloss": ""
+   },
+   {
+    "zh": "人可以是製品",
+    "gloss": ""
+   },
+   {
+    "zh": "網路是廣闊的",
+    "gloss": ""
+   },
+   {
+    "zh": "靜止中的時間",
+    "gloss": ""
+   },
+   {
+    "zh": "溝通的不可能",
+    "gloss": ""
+   },
+   {
+    "zh": "量產的身體",
+    "gloss": ""
+   },
+   {
+    "zh": "只有風聲與低頻",
+    "gloss": ""
+   },
+   {
+    "zh": "沒有台詞的三分鐘",
+    "gloss": ""
+   },
+   {
+    "zh": "只剩一次眨眼",
+    "gloss": ""
+   },
+   {
+    "zh": "雨中的第二層光",
+    "gloss": ""
+   },
+   {
+    "zh": "城市在呼吸",
+    "gloss": ""
+   },
+   {
+    "zh": "掌聲比末日響",
+    "gloss": ""
+   },
+   {
+    "zh": "恭喜與世界末日",
+    "gloss": ""
+   },
+   {
+    "zh": "礦物留下的邊",
+    "gloss": ""
+   },
+   {
+    "zh": "颱風逼近前",
+    "gloss": ""
+   },
+   {
+    "zh": "夜海的下潛",
+    "gloss": ""
+   },
+   {
+    "zh": "淹水的博物館",
+    "gloss": ""
+   },
+   {
+    "zh": "街上的另一個我",
+    "gloss": ""
+   },
+   {
+    "zh": "兩具殼的婚禮",
+    "gloss": ""
+   },
+   {
+    "zh": "傀儡師的庇護",
+    "gloss": ""
+   },
+   {
+    "zh": "潛航像溺水",
+    "gloss": ""
+   },
+   {
+    "zh": "二十小時後醒來",
+    "gloss": ""
+   },
+   {
+    "zh": "港市沒有倒影",
+    "gloss": ""
+   },
+   {
+    "zh": "斷線前的祝詞",
+    "gloss": ""
+   },
+   {
+    "zh": "網路裡長出的我",
+    "gloss": ""
+   },
+   {
+    "zh": "紅海上的兩人",
+    "gloss": ""
+   },
+   {
+    "zh": "量產機的十字架",
+    "gloss": ""
+   },
+   {
+    "zh": "黑底上的一條線",
+    "gloss": ""
+   },
+   {
+    "zh": "啤酒杯的兩分鐘",
+    "gloss": ""
+   },
+   {
+    "zh": "補完前的拒絕",
+    "gloss": ""
+   },
+   {
+    "zh": "帶著痛活下去",
+    "gloss": ""
+   },
+   {
+    "zh": "用耳朵看戲",
+    "gloss": ""
+   },
+   {
+    "zh": "空白裡學走路",
+    "gloss": ""
+   },
+   {
+    "zh": "讀不懂的標題",
+    "gloss": ""
+   },
+   {
+    "zh": "校園平行世界",
+    "gloss": ""
+   }
+  ],
+  "absurd": [
+   {
+    "zh": "企業的葬禮",
+    "gloss": ""
+   },
+   {
+    "zh": "量產的告別式",
+    "gloss": ""
+   },
+   {
+    "zh": "政變的尾牙",
+    "gloss": ""
+   },
+   {
+    "zh": "和平的保固期",
+    "gloss": ""
+   },
+   {
+    "zh": "機械的加班費",
+    "gloss": ""
+   },
+   {
+    "zh": "預言的客服",
+    "gloss": ""
+   },
+   {
+    "zh": "低周波的投訴",
+    "gloss": ""
+   },
+   {
+    "zh": "神格化的申請書",
+    "gloss": ""
+   },
+   {
+    "zh": "廢墟的社區管委會",
+    "gloss": ""
+   },
+   {
+    "zh": "末日後的分類回收",
+    "gloss": ""
+   },
+   {
+    "zh": "理賠的世界末日",
+    "gloss": ""
+   },
+   {
+    "zh": "集體暴走的說明會",
+    "gloss": ""
+   },
+   {
+    "zh": "颱風天的政變",
+    "gloss": ""
+   },
+   {
+    "zh": "病毒的年假",
+    "gloss": ""
+   },
+   {
+    "zh": "斷橋的生日",
+    "gloss": ""
+   },
+   {
+    "zh": "末日的退票",
+    "gloss": ""
+   },
+   {
+    "zh": "加班的救世主",
+    "gloss": ""
+   },
+   {
+    "zh": "無害的毒氣",
+    "gloss": ""
+   },
+   {
+    "zh": "對機器說恭喜",
+    "gloss": ""
+   },
+   {
+    "zh": "上班的巨型機械",
+    "gloss": ""
+   },
+   {
+    "zh": "向字卡禱告",
+    "gloss": ""
+   },
+   {
+    "zh": "對深淵開會",
+    "gloss": ""
+   },
+   {
+    "zh": "隱形的人請舉手",
+    "gloss": ""
+   },
+   {
+    "zh": "被自己的禱告淹沒",
+    "gloss": ""
+   },
+   {
+    "zh": "給岩壁打卡",
+    "gloss": ""
+   },
+   {
+    "zh": "替殼上香",
+    "gloss": ""
+   },
+   {
+    "zh": "用低頻敲神門",
+    "gloss": ""
+   },
+   {
+    "zh": "顱骨裡蓋教堂",
+    "gloss": ""
+   },
+   {
+    "zh": "把颱風寫進合約",
+    "gloss": ""
+   },
+   {
+    "zh": "記憶的複印機",
+    "gloss": ""
+   },
+   {
+    "zh": "遺失一顆義眼",
+    "gloss": ""
+   },
+   {
+    "zh": "雨從螢幕裡下",
+    "gloss": ""
+   },
+   {
+    "zh": "空調在唸經",
+    "gloss": ""
+   },
+   {
+    "zh": "全體為雜訊默哀",
+    "gloss": ""
+   },
+   {
+    "zh": "用空白當作證詞",
+    "gloss": ""
+   },
+   {
+    "zh": "義體泡海水",
+    "gloss": ""
+   },
+   {
+    "zh": "我的身體不防水",
+    "gloss": ""
+   },
+   {
+    "zh": "產線自己組出人",
+    "gloss": ""
+   },
+   {
+    "zh": "黑市買來的身體",
+    "gloss": ""
+   },
+   {
+    "zh": "量產的我排在架上",
+    "gloss": ""
+   },
+   {
+    "zh": "兩具殼在雲端結婚",
+    "gloss": ""
+   },
+   {
+    "zh": "駭客申請庇護",
+    "gloss": ""
+   },
+   {
+    "zh": "看不見還在扭",
+    "gloss": ""
+   },
+   {
+    "zh": "假人也長我的臉",
+    "gloss": ""
+   },
+   {
+    "zh": "黑畫面兩分鐘",
+    "gloss": ""
+   },
+   {
+    "zh": "整話只剩字卡",
+    "gloss": ""
+   },
+   {
+    "zh": "用字幕問我是誰",
+    "gloss": ""
+   },
+   {
+    "zh": "掐脖子被摸臉",
+    "gloss": ""
+   },
+   {
+    "zh": "她說我好噁心",
+    "gloss": ""
+   },
+   {
+    "zh": "全世界溶成一鍋",
+    "gloss": ""
+   },
+   {
+    "zh": "我爸要我上機器人",
+    "gloss": ""
+   },
+   {
+    "zh": "用鉛筆畫回自己",
+    "gloss": ""
+   },
+   {
+    "zh": "三色的世界末日",
+    "gloss": ""
+   }
+  ],
+  "verbs": [
+   {
+    "zh": "練習",
+    "gloss": ""
+   },
+   {
+    "zh": "拆除",
+    "gloss": ""
+   },
+   {
+    "zh": "焊接",
+    "gloss": ""
+   },
+   {
+    "zh": "校準",
+    "gloss": ""
+   },
+   {
+    "zh": "接地",
+    "gloss": ""
+   },
+   {
+    "zh": "懺悔",
+    "gloss": ""
+   },
+   {
+    "zh": "超渡",
+    "gloss": ""
+   },
+   {
+    "zh": "灌錄",
+    "gloss": ""
+   },
+   {
+    "zh": "調頻",
+    "gloss": ""
+   },
+   {
+    "zh": "祈禱",
+    "gloss": ""
+   },
+   {
+    "zh": "隱形",
+    "gloss": ""
+   },
+   {
+    "zh": "冷藏",
+    "gloss": ""
+   },
+   {
+    "zh": "備份",
+    "gloss": ""
+   },
+   {
+    "zh": "降噪",
+    "gloss": ""
+   },
+   {
+    "zh": "歸零",
+    "gloss": ""
+   },
+   {
+    "zh": "開光",
+    "gloss": ""
+   },
+   {
+    "zh": "催眠",
+    "gloss": ""
+   },
+   {
+    "zh": "巡邏",
+    "gloss": ""
+   },
+   {
+    "zh": "誦經",
+    "gloss": ""
+   },
+   {
+    "zh": "告解",
+    "gloss": ""
+   }
+  ],
+  "pairs": [
+   {
+    "a": "企業",
+    "b": "葬禮"
+   },
+   {
+    "a": "官僚",
+    "b": "產房"
+   },
+   {
+    "a": "義體",
+    "b": "童年"
+   },
+   {
+    "a": "低周波",
+    "b": "聖歌"
+   },
+   {
+    "a": "熱光學迷彩",
+    "b": "婚紗"
+   },
+   {
+    "a": "伺服器",
+    "b": "祠堂"
+   },
+   {
+    "a": "消防通道",
+    "b": "告解室"
+   },
+   {
+    "a": "演算法",
+    "b": "乩童"
+   },
+   {
+    "a": "軍規",
+    "b": "搖籃曲"
+   },
+   {
+    "a": "電梯",
+    "b": "輪迴"
+   },
+   {
+    "a": "電費單",
+    "b": "遺書"
+   },
+   {
+    "a": "硬碟",
+    "b": "骨灰"
+   },
+   {
+    "a": "監聽耳機",
+    "b": "神諭"
+   },
+   {
+    "a": "產權",
+    "b": "咒語"
+   },
+   {
+    "a": "施工圍籬",
+    "b": "祭壇"
+   },
+   {
+    "a": "停車場",
+    "b": "煉獄"
+   }
+  ]
+ },
  "stats": {
   "places": 12,
   "orgs": 18,
   "concepts": 14,
-  "weapons": 124,
-  "devices": 26,
+  "weapons": 83,
+  "devices": 9,
   "themes": 30,
-  "tags": 143
+  "tags": 152,
+  "works": 6,
+  "themeCores": 47,
+  "sceneCores": 35,
+  "promptCores": 33
  }
 }

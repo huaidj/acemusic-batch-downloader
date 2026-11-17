@@ -92,6 +92,40 @@ function stampOf(ms) {
     return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}${pad2(d.getMinutes())}`;
 }
 
+/** 讀整理管線的音頻分析快取（BPM／調性／能量），取名時依聲音特徵挑詞。 */
+function audioFeatures(cfg) {
+    const map = new Map();
+    const file = path.join(cfg.stateDir, 'cache', 'audio-analysis.json');
+    let data = null;
+    try { data = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return map; }
+    for (const [key, value] of Object.entries(data.items || {})) {
+        if (!value || !value.ok) continue;
+        const row = { bpm: value.bpm, key: value.key, camelot: value.camelot, energy: value.energy, duration: value.duration };
+        map.set(path.resolve(key).toLowerCase(), row);
+        if (value.relative) map.set(String(value.relative).toLowerCase(), row);
+    }
+    return map;
+}
+
+/** 同一個歌名家族：去掉 [hash] 與結尾 (n)；同家族共用基底名字，避免改名後看不出是同一首的變體。 */
+function familyKeyOf(name) {
+    return String(name || '')
+        .replace(/\.wav$/i, '')
+        .replace(/\s*\[[0-9a-f]{6,}\]\s*$/i, '')
+        .replace(/\s*\(\s*\d+\s*\)\s*$/, '')
+        .trim()
+        .toLowerCase();
+}
+
+/** 檔名裡「不是純數字」的括號描述，例：(UK Bass Dub) → UK Bass Dub；沒有回空字串。 */
+function variantLabelOf(name) {
+    const matches = [...String(name || '').matchAll(/\(([^)]+)\)/g)].map((m) => m[1].trim());
+    const meaningful = matches.filter((label) => label && !/^\d+$/.test(label));
+    return meaningful.length ? meaningful[meaningful.length - 1] : '';
+}
+
+const ROMAN = ['', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
+
 /** 算出這一批的命名計畫（不寫檔）。同名/同檔已存在時標記 skip。 */
 export function planNamedCopies({ root, cfg = config(), settings } = {}) {
     const s = settings || namingSettings(cfg);
@@ -100,8 +134,14 @@ export function planNamedCopies({ root, cfg = config(), settings } = {}) {
     const outDir = path.join(rootDir, s.outFolder);
     const covers = coverIndex(rootDir);
     const times = generationTimes(cfg);
+    const features = audioFeatures(cfg);
     const counters = new Map();
     const used = new Set();
+    const usage = new Map();
+    const families = new Map();
+    const kindCounts = new Map();
+    const sourceCounts = new Map();
+    let fallbackIndex = 0;
     const plan = [];
     let wavs = [];
     try { wavs = fs.readdirSync(srcDir).filter((n) => /\.wav$/i.test(n)); } catch { return { rootDir, srcDir, outDir, plan, missingSource: true, settings: s }; }
@@ -115,6 +155,13 @@ export function planNamedCopies({ root, cfg = config(), settings } = {}) {
         const list = covers.get(key) || [];
         const cover = list.length ? list[Math.min(ordinal, list.length - 1)] : null;
         const seed = `${name}|${size}`;
+        const ratioOf = (key, fallback) => {
+            const total = [...sourceCounts.values()].reduce((sum, value) => sum + value, 0);
+            return total ? (sourceCounts.get(key) || 0) / total : fallback;
+        };
+        const audio = features.get(path.resolve(abs).toLowerCase())
+            || features.get(path.join('ai音樂', '成品WAV', name).toLowerCase())
+            || {};
         const suffixMatch = name.match(/\[([0-9a-f]{8})\]\s*\.wav$/i);
         let generatedMs = mtimeMs;
         if (suffixMatch) {
@@ -122,19 +169,70 @@ export function planNamedCopies({ root, cfg = config(), settings } = {}) {
                 if (taskId.toLowerCase().endsWith(suffixMatch[1].toLowerCase())) { generatedMs = created; break; }
             }
         }
+        const familyKey = familyKeyOf(name);
+        const familyEntry = families.get(familyKey) || null;
         const stampFull = stampOf(generatedMs);
         const stamp = s.stamp === 'date' ? stampFull.slice(0, 10) : (s.stamp ? stampFull : '');
         let candidate = null;
-        for (let attempt = 0; attempt < 40 && !candidate; attempt++) {
-            const generated = CORPUS.generate(attempt === 0 ? seed : `${seed}#${attempt}`, { lexicon: LEXICON, used, paren: s.paren });
-            if (!generated) continue;
-            const display = stamp ? `${generated.display} ${stamp}` : generated.display;
-            const fileName = legal(display) + '.aiff';
-            if (used.has(display) || plan.some((p) => p.fileName === fileName)) continue;
-            candidate = { ...generated, display, fileName };
+        if (familyEntry) {
+            // 同家族：沿用基底名，加變體標記（原檔名的描述或羅馬序號）
+            const index = familyEntry.next ?? 2;
+            familyEntry.next = index + 1;
+            const label = variantLabelOf(name) || ROMAN[index] || String(index);
+            const zh = `${familyEntry.base.zh} · ${label}`;
+            const en = familyEntry.base.en ? `${familyEntry.base.en} · ${label}` : '';
+            const display = stamp ? (en ? `${zh} (${en}) ${stamp}` : `${zh} ${stamp}`) : (en ? `${zh} (${en})` : zh);
+            candidate = { zh, en, display, pattern: familyEntry.base.pattern + '+variant', reason: `同家族變體（${label}）`, display, fileName: legal(display) + '.aiff' };
+            familyEntry.members.push(name);
+        } else {
+            const weaponsUsed = () => kindCounts.get('short-weapon') || 0;
+            for (let attempt = 0; attempt < 60 && !candidate; attempt++) {
+                const generated = CORPUS.generateFromAudio(seed, { lexicon: LEXICON, audio, used, usage, salt: attempt * 7, nightRatio: ratioOf('night', 0.4), elecRatio: ratioOf('elec', 0.3) });
+                if (!generated) continue;
+                if (generated.pattern === 'short-weapon' && weaponsUsed() >= 60) continue;
+                const display = stamp ? `${generated.display} ${stamp}` : generated.display;
+                const fileName = legal(display) + '.aiff';
+                if (used.has(display) || plan.some((p) => p.fileName === fileName)) continue;
+                candidate = { ...generated, display, fileName };
+            }
+            if (candidate) families.set(familyKey, { base: candidate, members: [name], next: 2 });
         }
-        if (!candidate) { plan.push({ name, error: 'no-name' }); continue; }
+        if (!candidate) {
+            // 退路：概念＋音樂尾詞（不隨機洗牌，仍從詞庫概念挑，確保這一批都能命名）
+            const TAILS = ['殘響', '迴路', '底噪', '夜行', '餘燼', '斷訊', '長曝', '空轉', '低頻', '靜止', '頻段', '脈衝'];
+            const concepts = LEXICON.concepts || [];
+            for (let i = 0; i < concepts.length * TAILS.length && !candidate; i++) {
+                const concept = concepts[(fallbackIndex + i) % concepts.length];
+                const tail = TAILS[Math.floor(((fallbackIndex + i) / concepts.length)) % TAILS.length];
+                const zh = concept.zh + tail;
+                if (Array.from(zh.replace(/[^\u3400-\u9fff]/g, '')).length > 8) continue;
+                const en = concept.en ? concept.en + ' ' + tail : '';
+                const display = stamp ? (en ? `${zh} (${en}) ${stamp}` : `${zh} ${stamp}`) : (en ? `${zh} (${en})` : zh);
+                if (used.has(display)) continue;
+                candidate = { zh, en, display, pattern: 'concept+tail', reason: '退路：概念＋音樂尾詞' };
+                fallbackIndex += 1;
+                used.add(display);
+                break;
+            }
+            if (!candidate) { plan.push({ name, error: 'no-name' }); continue; }
+            continue;
+        }
+        // 檔名唯一：同一個顯示名（含時間戳）若已被占用，補羅馬序號直到不撞名
+        let suffixIndex = 2;
+        while (plan.some((p) => p.fileName === candidate.fileName)) {
+            const label = ['', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'][suffixIndex] || String(suffixIndex);
+            const baseZh = candidate.zh;
+            const zh = `${baseZh} · ${label}`;
+            const display = stamp ? `${zh} ${stamp}` : zh;
+            candidate = { ...candidate, zh, display, fileName: legal(display) + '.aiff' };
+            suffixIndex += 1;
+        }
         used.add(candidate.display);
+        kindCounts.set(candidate.pattern, (kindCounts.get(candidate.pattern) || 0) + 1);
+        const kindBase = String(candidate.pattern || '').replace(/\+variant$/, '');
+        const sourceKey = /^(place\+concept|org\+concept|short-weapon)$/.test(kindBase) ? 'night'
+            : /^(elec-core|elec\+tail)$/.test(kindBase) ? 'elec' : 'mixed';
+        sourceCounts.set(sourceKey, (sourceCounts.get(sourceKey) || 0) + 1);
         plan.push({
             name,
             source: abs,
@@ -142,6 +240,8 @@ export function planNamedCopies({ root, cfg = config(), settings } = {}) {
             display: candidate.display,
             en: candidate.en,
             pattern: candidate.pattern,
+            reason: candidate.reason || null,
+            audio: { bpm: audio.bpm || null, camelot: audio.camelot || null, key: audio.key || null, energy: audio.energy ?? null },
             seed,
             stamp,
             generatedAt: new Date(generatedMs).toISOString(),
@@ -198,6 +298,8 @@ export async function applyNamedCopies({ root, cfg = config(), force = false, dr
                 en: item.en || null,
                 artist: s.artist,
                 pattern: item.pattern,
+                reason: item.reason || null,
+                audio: item.audio || null,
                 seed: item.seed,
                 cover: item.cover,
                 bytes: fs.statSync(item.target).size,
