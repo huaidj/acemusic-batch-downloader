@@ -94,6 +94,30 @@ test('watch：自訂root傳入每個pipeline階段，成品MPEG只落指定root�
   assert.equal(stored.root, path.join(sb.cfg.downloadDir, customRoot));
 });
 
+test('watch：背景整理在收藏之後也會跑「已點讚」，新點讚的歌不會漏', async () => {
+  const sb = sandbox();
+  const calls = [];
+  const result = await runPipeline({
+    cfg: sb.cfg, rootName: 'mock',
+    services: services({
+      collectFavorites: async ({ root }) => { calls.push('favorites:' + root); return { ...emptyResult(), total: 2, copied: 1, skipped: 1, missing: 0 }; },
+      collectLikedSongs: async ({ root }) => {
+        calls.push('liked:' + root);
+        return { liked: 2, copied: 1, already: 1, renamed: 0, unlikedMoved: 0, aiNamed: 1, spentUsd: 0.0012, failed: [] };
+      },
+    }),
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, ['favorites:mock', 'liked:mock'], '已點讚要排在收藏後面');
+  const step = result.steps.find((item) => item.name === 'liked');
+  assert.equal(step.liked, 2);
+  assert.equal(step.copied, 1);
+  assert.equal(step.aiNamed, 1);
+  assert.equal(step.failed, 0);
+  const stored = JSON.parse(await fsp.readFile(sb.file, 'utf8'));
+  assert.ok(stored.lastRun.steps.some((item) => item.name === 'liked'));
+});
+
 test('appendLog：只改stateDir但繼承舊logFile時，舊log雜湊不變，只寫新stateDir', async () => {
   const sb = sandbox();
   const originalState = path.join(sb.base, 'original-state');

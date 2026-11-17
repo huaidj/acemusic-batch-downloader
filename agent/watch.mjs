@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// agent/watch.mjs — 靜默背景整理 daemon：監看 ai音樂 變化 → 補齊成品MP3 → 採樣包 → 分類搬移 → 去重
+// agent/watch.mjs — 靜默背景整理 daemon：監看 ai音樂 變化 → 補齊成品MP3 → 採樣包 → 分類搬移 → 去重 → 收藏／已點讚
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config, writeJson, readJson, sleep } from './lib/config.mjs';
-import { extractFullMp3s, collectSamples, classifyByAttributes, dedupeSongCopies, classifyByAudio, listSongs, collectFavorites } from './lib/ace.mjs';
+import { extractFullMp3s, collectSamples, classifyByAttributes, dedupeSongCopies, classifyByAudio, listSongs, collectFavorites, collectLikedSongs } from './lib/ace.mjs';
 
 const cfg = config();
 const ROOT_NAME = process.env.ACE_WATCH_ROOT || 'ai音樂';
@@ -63,7 +63,7 @@ function fingerprint() {
   return result;
 }
 
-const PIPELINE_SERVICES = { listSongs, extractFullMp3s, collectSamples, classifyByAttributes, dedupeSongCopies, classifyByAudio, collectFavorites };
+const PIPELINE_SERVICES = { listSongs, extractFullMp3s, collectSamples, classifyByAttributes, dedupeSongCopies, classifyByAudio, collectFavorites, collectLikedSongs };
 export async function runPipeline({ cfg: runCfg = cfg, rootName = ROOT_NAME, services = PIPELINE_SERVICES, reportStatus } = {}) {
   const runRoot = path.join(runCfg.downloadDir, rootName);
   const report = reportStatus || (runCfg === cfg && rootName === ROOT_NAME ? setStatus : createWatchStatusWriter({ file: path.join(runCfg.stateDir, 'watch-status.json'), root: runRoot }));
@@ -86,6 +86,14 @@ export async function runPipeline({ cfg: runCfg = cfg, rootName = ROOT_NAME, ser
     if (typeof services.collectFavorites === 'function') {
       const favorites = await services.collectFavorites({ root: rootName, cfg: runCfg });
       status.steps.push({ name: 'favorites', total: favorites.total, copied: favorites.copied, skipped: favorites.skipped, missing: favorites.missing, failed: favorites.failed.length });
+    }
+    if (typeof services.collectLikedSongs === 'function') {
+      const liked = await services.collectLikedSongs({ root: rootName, cfg: runCfg });
+      status.steps.push({
+        name: 'liked', liked: liked.liked, copied: liked.copied, already: liked.already, renamed: liked.renamed,
+        unlikedMoved: liked.unlikedMoved, aiNamed: liked.aiNamed, spentUsd: liked.spentUsd,
+        skipped: liked.error || null, failed: (liked.failed || []).length,
+      });
     }
     status.ok = !status.steps.some((step) => step.failed > 0);
     await report({ phase: 'running', startedAt, steps: status.steps });

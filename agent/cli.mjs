@@ -22,7 +22,7 @@ async function hubTry(pathname, { method = 'GET', body, timeoutMs = 1200 } = {})
     }
 }
 function usage() {
-    console.log(`ACE Music 批量下載器 CLI  v1.8.9
+    console.log(`ACE Music 批量下載器 CLI  v1.8.10
 
 用法：
   node cli.mjs create capabilities            Create 頁面完整 API 參數契約
@@ -747,6 +747,13 @@ async function main() {
         }
         const root = args.flags.root ? String(args.flags.root) : 'ai音樂';
         if (args.flags.background) {
+            const { peekTidyRun, markTidyPending } = await import('./lib/tidy-guard.mjs');
+            const running = await peekTidyRun(cfg);
+            if (running) {
+                // 已有一輪在跑：不另外開一個行程重跑整條管線，只登記「結束後補一輪」
+                const pending = await markTidyPending(cfg, { root });
+                return printJson({ ok: true, coalesced: true, background: false, runningPid: running.pid, pending, statusFile });
+            }
             const { spawn } = await import('node:child_process');
             const script = path.resolve(process.argv[1]);
             const child = spawn(process.execPath, [script, 'tidy-all', '--json', '--root', root], {
@@ -769,8 +776,13 @@ async function main() {
                 writeJson(statusFile, { phase: progress.phase, ...progress }).catch(() => {});
             },
         });
-        await writeJson(statusFile, { phase: 'done', ...result }).catch(() => {});
+        // 合併掉的那次不要寫 done：正在跑的那一輪還在更新同一個狀態檔
+        if (!result.coalesced) await writeJson(statusFile, { phase: 'done', ...result }).catch(() => {});
         if (args.flags.json) return printJson(result);
+        if (result.coalesced) {
+            console.log('已有一輪整理在跑（pid ' + (result.runningPid || '?') + '）；這次只登記，會在那一輪結束後補跑一輪。');
+            return;
+        }
         console.log('一鍵整理完成：');
         for (const step of result.steps) console.log('  ' + JSON.stringify(step));
         return;

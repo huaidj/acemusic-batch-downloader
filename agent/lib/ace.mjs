@@ -23,6 +23,7 @@ export { localDownloadIndex } from './local-index-service.mjs';
 export { startPlayer } from './player-process.mjs';
 import { assertDirectGenerationPermission } from './provider-policy.mjs';
 import * as SiteLikes from './site-likes.mjs';
+import { acquireTidyRun, releaseTidyRun, takePendingTidyRun, peekTidyRun, markTidyPending } from './tidy-guard.mjs';
 
 const { N, P, PR } = loadShared();
 const SNAPSHOT_NAME = 'library-snapshot';
@@ -2662,8 +2663,54 @@ export async function dedupeFolders({ root = 'ai音樂', commit = false, include
     return report;
 }
 
-export async function tidyAll({ root = 'ai音樂', concurrency = 4, onProgress = null, cfg = config() } = {}) {
-    if (!hasLibraryWriteLease(cfg)) return withLibraryWriteLease(cfg, () => tidyAll(...arguments));
+/**
+ * 一鍵整理：把連續到來的觸發合併成一輪（見 tidy-guard.mjs）。
+ * 已有一輪在跑時不排隊等租約、也不重跑完整管線，只登記 pending 並回傳 coalesced。
+ */
+export async function tidyAll(options = {}) {
+    const cfg = options.cfg || config();
+    const root = options.root || 'ai音樂';
+    if (!hasLibraryWriteLease(cfg)) {
+        const running = await peekTidyRun(cfg);
+        if (running) {
+            const pending = await markTidyPending(cfg, { root });
+            return { ok: true, coalesced: true, root, steps: [], pending, runningPid: running.pid, note: '已有一輪整理在跑；這次只登記，會在那一輪結束後補跑一輪。', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() };
+        }
+        try {
+            // 先短等租約：若擋住的是別種工作（下載／擷取）就照舊等它；若擋住的是整理就跑不起來，改為合併。
+            return await withLibraryWriteLease(cfg, () => tidyAll(options), { maxWaitMs: 2000 });
+        } catch (error) {
+            if (error && error.code === 'LIBRARY_BUSY') {
+                const nowRunning = await peekTidyRun(cfg);
+                if (!nowRunning) return withLibraryWriteLease(cfg, () => tidyAll(options));
+                const pending = await markTidyPending(cfg, { root });
+                return { ok: true, coalesced: true, root, steps: [], pending, runningPid: nowRunning.pid, note: '已有一輪整理在跑；這次只登記，會在那一輪結束後補跑一輪。', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() };
+            }
+            throw error;
+        }
+    }
+    const guard = await acquireTidyRun(cfg, { root });
+    if (!guard.acquired) {
+        const pending = await markTidyPending(cfg, { root });
+        return { ok: true, coalesced: true, root, steps: [], pending, runningPid: guard.owner ? guard.owner.pid : null, note: '已有一輪整理在跑；這次只登記，會在那一輪結束後補跑一輪。', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() };
+    }
+    try {
+        let result = await runTidyOnce(options);
+        if (await takePendingTidyRun(guard)) {
+            // 這一輪執行期間又有人要求整理 → 補跑一輪（只補一次，避免連續觸發造成無限循環）
+            const second = await runTidyOnce(options);
+            second.passes = 2;
+            second.firstPass = { ok: result.ok, startedAt: result.startedAt, finishedAt: result.finishedAt, steps: result.steps.map((step) => step.name) };
+            result = second;
+        }
+        return result;
+    } finally {
+        await releaseTidyRun(guard);
+    }
+}
+
+/** 真正跑一輪整理的管線（呼叫端必須已持有曲庫租約與整理權）。 */
+async function runTidyOnce({ root = 'ai音樂', concurrency = 4, onProgress = null, cfg = config() } = {}) {
     const steps = [];
     const emit = (phase, extra = {}) => {
         if (typeof onProgress === 'function') {
@@ -2809,6 +2856,9 @@ export async function tidyAll({ root = 'ai音樂', concurrency = 4, onProgress =
             skipped: favoritesResult.skipped,
             conflicts: favoritesResult.conflicts,
             missing: favoritesResult.missing,
+            noWav: favoritesResult.noWav,
+            pruned: favoritesResult.pruned,
+            prunedDirs: favoritesResult.prunedDirs,
             failed: favoritesFailed,
         });
     } catch (error) {

@@ -67,7 +67,9 @@
 
 ### 3.3 一鍵整理流程
 
-`舊檔改名 → 成品MP3 → 成品WAV（乾淨名字複製到 整理輸出\成品WAV\，來源不動）→ 採樣包／採樣包WAV → 檔案分類（MIDI／MusicXML／封面／壓縮檔／其他）→ 內容去重 → 空殼清理 → 音頻屬性分類（hardlink）→ 收藏夾 → 指紋清除`
+`舊檔改名 → 成品MP3 → 成品WAV（乾淨名字複製到 整理輸出\成品WAV\，來源不動）→ 採樣包／採樣包WAV → 檔案分類（MIDI／MusicXML／封面／壓縮檔／其他）→ 內容去重 → 空殼清理 → 音頻屬性分類（hardlink）→ 收藏夾 → 指紋清除 → 已點讚`
+
+- **不會重複跑**：連續觸發（下載完自動整理、面板按鈕、CLI、Hub、MCP 同時來）會合併成一輪。跑的那一輪持有 `%LOCALAPPDATA%\AceMusicDL\tidy-run.lock`；其他觸發只寫 `tidy-pending.json`，不會排隊等租約再跑一次完整管線，而是在那一輪結束後最多補跑一輪。持有者行程已結束留下的過期鎖會自動清掉。合併掉的那次不寫 `tidy-status.json` 的 `done`，面板進度條仍跟著真正在跑的那一輪。
 
 - **內容去重**：相同內容（size→sha256）只留一份，其餘搬到 `%LOCALAPPDATA%\AceMusicDL\organize-backups\`（不直接刪）。
 - **hardlink 不是重複**：`音頻分類` 的檔案與原檔是同一份資料，刪了也省不到空間，還會讓 BPM／Key 檢視缺檔。
@@ -152,7 +154,7 @@ CLI／Hub／MCP 的下載另外在 `%LOCALAPPDATA%\AceMusicDL\agent.log` 保存�
 | `dedupe-content [--commit]` | 內容去重（預設預覽） |
 | `classify-audio` | 音頻屬性分類 |
 | `hub --background\|--status\|--stop` | 常駐中樞 |
-| `watch --background\|--status\|--stop` | 背景自動整理 |
+| `watch --background\|--status\|--stop` | 背景自動整理（含收藏夾、已點讚） |
 | `cache [status\|clear] [--all]` | 快取（clear 預設保留音頻分析） |
 | `library [--sizes]` | 曲庫分類總覽（每類資料夾、檔數、大小） |
 | `events [--since seq] [--type t]` | 中樞事件（新歌、自動下載、下載完成） |
