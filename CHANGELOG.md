@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.9.2 — 2026-11-17（一鍵整理接上改名WAV與硬連結、證據修補）
+
+- 一鍵整理新增兩步：`namedcopy`（詞庫命名 → `改名WAV`，複製式、寫 `_命名日誌.json`）與 `hardlinks`（`收藏`／`已點讚` 內同內容副本改硬連結）。兩步都受 `config.json` 的 `naming.enabled`／`hardlinks.enabled` 控制，預設開啟、冪等（已存在就跳過）。
+- 新增 CLI `repair-evidence [--commit]`：把實際存在的 `成品WAV` 用「`[8hex]` 尾碼 → task_id」或「唯一歌名」補回 `agent-state.json` 的 WAV 證據（搬庫後 `收藏` 出現 `noWav` 的修補用）；預設 dry-run，commit 前自動備份。
+- 本機索引新增「檔名證據」補強：沒有下載紀錄歸屬的 WAV，若尾碼或歌名能唯一對到 task，就以 `recorded` 等級收進索引（不改檔、不改 state）。
+- 修正：CLI 版本字串改由 manifest 驅動的測試守門（banner 固定 1.9.2、MCP server 同步），全套單元測試 553/553。
+
+## 1.9.1 — 2026-11-17（改名WAV 交付：詞庫命名、封面、藝人、硬連結省硬碟）
+
+- 新增 `成品AIFF`：一鍵整理與背景整理會在 `成品WAV` 之後多跑一步，把每首 WAV 轉成 AIFF（`pcm_s16be`，樣本不重算、大小不變），原檔名不變。
+- 每首嵌入 `成品WAV` 對應的 `<root>/封面/<歌名> - Cover.jpg`（JPEG，`APIC`，ID3v2.4），並寫入藝人（預設 `VooDooBoys`）；`-map_metadata -1` 不搬任何來源 metadata，ACE 指紋不會跟著過去。
+- 為什麼是 AIFF：rekordbox 不顯示 WAV 的封面（Pioneer 把 WAV 歸在 RIFF INFO 文字欄位），AIFF 是同樣 PCM 但吃 ID3v2.4。
+- 設定在 `<stateDir>/config.json` 的 `aiff`：`{ "enabled": true, "artist": "VooDooBoys", "concurrency": 3 }`；`enabled: false` 可關閉。
+- 新增 CLI `export-aiff [--root 名稱] [--artist 名稱] [--force] [--dry-run]`；輸出 `成品AIFF/_對照表.json`（原檔名 → AIFF、標題、藝人、封面、大小）。已存在就跳過，重跑零成本。
+- 同時新增 `<stateDir>/config.json` 的 `downloadDir`：可以把整個曲庫指到別的磁碟（例如 `"downloadDir": "E:\\"`），環境變數 `ACE_DOWNLOAD_DIR` 仍優先。
+
+- 新增 `named-copy`：用《夜城人物事典》《靈感電子百科大全》抽出的詞庫（`naming/corpus-lexicon.json`）組合中文＋英文名，輸出到 `改名WAV`（複製式、來源 WAV 不動），名字尾綴生成時間（`YYYY-MM-DD HHMM`）。
+- 新增 `named-lookup "<新名字或中文名>"`：從 `改名WAV/_命名日誌.json`（`vdb_naming_journal_v1`）倒查原本是哪個檔、用哪個版型、哪個 seed。
+- 新增 `hardlink-dedupe [--commit]`：`收藏`／`已點讚` 內與 `成品WAV`／`成品MP3` 內容完全相同（大小＋sha256）的檔案改為硬連結，同碟才做、跨碟退回複製；預設 dry-run。
+- `export-aiff --liked`：把 `已點讚/*.wav` 轉成 `改名WAV/已點讚/*.aiff`（原名字直接用、封面、藝人）。
+- 文件：`docs/session-2026-11-17-consolidated.md`（這一輪所有零碎要求的定案與衝突裁決）、`docs/ai-aiff-naming-and-space.md`（可重複機制設計）。
+
 ## 1.9.0 — 2026-11-17（獨立播放器全功能化）
 
 - **BPM／調性／能量**：播放器新增 `/api/analysis`，把整理管線的分析快取（`cache/audio-analysis.json`）對到實際音檔；曲庫表格新增 BPM、Camelot 調性兩欄（可點標題排序），右側詳細面板顯示 BPM／調性／能量。新增 BPM 區間與調性篩選；沒資料顯示「—」與「未分析」。播放器只讀快取，不觸發分析。實測只回前端看得到的檔案 ID（988/1266），別名與 hardlink 不多送（原本會回 10,824 筆）。

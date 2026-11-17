@@ -22,7 +22,7 @@ async function hubTry(pathname, { method = 'GET', body, timeoutMs = 1200 } = {})
     }
 }
 function usage() {
-    console.log(`ACE Music 批量下載器 CLI  v1.9.0
+    console.log(`ACE Music 批量下載器 CLI  v1.9.2
 
 用法：
   node cli.mjs create capabilities            Create 頁面完整 API 參數契約
@@ -59,6 +59,10 @@ function usage() {
   node cli.mjs extract-samples                 把分軌/採樣集中到 ai音樂\\採樣包\\（按樂器類型分資料夾）
   node cli.mjs favorites [--dry-run] [--force] [--sync]  把站點點讚／面板愛心的歌 → ai音樂\\收藏\\<歌名>.wav（平鋪母帶）
   node cli.mjs wav-names [--dry-run]  成品WAV 分類後把乾淨名字複製到 整理輸出\\（來源檔不動）
+  node cli.mjs export-aiff [--liked] [--root 名稱] [--artist 名稱] [--force] [--dry-run]  成品WAV（或已點讚）→ AIFF，嵌入封面、藝人預設 VooDooBoys
+  node cli.mjs named-copy [--force] [--dry-run] [--json]  詞庫命名 → 改名WAV（複製式，寫 _命名日誌.json 可倒查）
+  node cli.mjs named-lookup "<新名字或中文名>"  用新名字倒查原本是哪個檔
+  node cli.mjs hardlink-dedupe [--commit] [--json]  收藏／已點讚 內同內容副本改硬連結（省硬碟，預設 dry-run）
   node cli.mjs strip-fingerprints [--dry-run|--restore]  就地抹掉既有檔案裡的 ACE metadata 指紋（檔長、inode 不變）
   node cli.mjs classify-files [--copy]         依檔案屬性分類 MIDI/MusicXML/封面/壓縮檔/其他（預設搬移，--copy 保留原檔）
   node cli.mjs dedupe-songs [--commit]         歌名資料夾內與分類庫相同的副本（預設預覽）
@@ -542,6 +546,94 @@ async function main() {
         return;
     }
 
+    if (cmd === 'repair-evidence') {
+        const { repairWavEvidence } = await import('./lib/evidence-repair.mjs');
+        const result = await repairWavEvidence({ cfg: config(), commit: !!args.flags.commit });
+        if (args.flags.json) return printJson(result);
+        console.log(`WAV 證據修補：掃 ${result.scanned} 檔，已對 ${result.already}、可補 ${result.repaired}、認不出 ${result.unresolved}`);
+        for (const sample of result.samples.slice(0, 6)) console.log(`  ${sample.file}  →  ${sample.task_id}`);
+        if (result.dryRun) console.log('  （dry-run：加 --commit 才會寫進 agent-state.json，會先備份）');
+        return;
+    }
+
+    if (cmd === 'named-copy' || cmd === 'rename-copy') {
+        const { applyNamedCopies } = await import('./lib/named-copy.mjs');
+        const rootFlag = args.flags.root ? String(args.flags.root) : '';
+        const result = await applyNamedCopies({
+            root: rootFlag ? (path.isAbsolute(rootFlag) ? rootFlag : path.join(config().downloadDir, rootFlag)) : undefined,
+            force: !!args.flags.force,
+            dryRun: !!args.flags['dry-run'],
+            cfg: config(),
+        });
+        if (args.flags.json) return printJson(result);
+        console.log(`改名WAV：${result.out}`);
+        console.log(`  寫出 ${result.written}、已存在 ${result.skipped}、沒有封面 ${result.noCover}、失敗 ${result.failed.length}（藝人 ${result.artist}）`);
+        if (result.journal) console.log(`  命名日誌：${result.journal}（${result.journalEntries || 0} 筆，可倒查）`);
+        if (result.dryRun) {
+            console.log('  （dry-run：沒有寫任何檔案）');
+            for (const sample of result.samples || []) console.log(`  ${sample.to}  ←  ${sample.from}`);
+        }
+        if (result.failed.length) for (const fail of result.failed.slice(0, 10)) console.log(`  ✗ ${fail.file}：${fail.error}`);
+        return;
+    }
+
+    if (cmd === 'named-lookup') {
+        const wanted = args._[0];
+        if (!wanted) throw new Error('用法：node cli.mjs named-lookup "<新名字或檔名>"');
+        const { lookupNamed } = await import('./lib/named-copy.mjs');
+        const found = await lookupNamed({ name: wanted, cfg: config() });
+        if (args.flags.json) return printJson(found || { found: false });
+        if (!found) { console.log(`找不到「${wanted}」的命名紀錄`); return; }
+        console.log(`新名字：${found.to}`);
+        console.log(`原檔案：${found.from}`);
+        console.log(`中文／英文：${found.zh}${found.en ? ' / ' + found.en : ''}｜版型 ${found.pattern}｜封面 ${found.cover || '—'}｜seed ${found.seed}`);
+        return;
+    }
+
+    if (cmd === 'hardlink-dedupe' || cmd === 'linkdup') {
+        const { hardlinkDedupe } = await import('./lib/hardlink-dedupe.mjs');
+        const result = await hardlinkDedupe({ cfg: config(), commit: !!args.flags.commit });
+        if (args.flags.json) return printJson(result);
+        console.log(`硬連結整理：掃 ${result.scanned} 個副本，可換 ${result.linked}、已是連結 ${result.alreadyLink}、找不到同內容 ${result.noMatch}`);
+        console.log(`  可省 ${(result.bytesSaved / 1e9).toFixed(2)} GB`);
+        if (result.dryRun) console.log('  （dry-run：加 --commit 才會真的換）');
+        if (result.failed.length) for (const fail of result.failed.slice(0, 10)) console.log(`  ✗ ${fail.file}：${fail.error}`);
+        return;
+    }
+
+    if (cmd === 'export-aiff' || cmd === 'aiff') {
+        const root = args.flags.root ? String(args.flags.root) : 'ai音樂';
+        const { exportAiffs, exportLikedAiffs } = await import('./lib/aiff-export.mjs');
+        if (args.flags.liked) {
+            const liked = await exportLikedAiffs({
+                root: args.flags.root && path.isAbsolute(String(args.flags.root)) ? String(args.flags.root) : undefined,
+                artist: args.flags.artist ? String(args.flags.artist) : undefined,
+                force: !!args.flags.force,
+                dryRun: !!args.flags['dry-run'],
+                cfg: config(),
+            });
+            if (args.flags.json) return printJson(liked);
+            console.log(`已點讚 AIFF：${liked.out}`);
+            console.log(`  來源 ${liked.total} 首；轉出 ${liked.converted}、已存在 ${liked.skipped}、沒有封面 ${liked.noCover}、失敗 ${liked.failed.length}`);
+            if (liked.dryRun) console.log('  （dry-run：沒有寫任何檔案）');
+            return;
+        }
+        const result = await exportAiffs({
+            root: path.isAbsolute(root) ? root : path.join(config().downloadDir, root),
+            artist: args.flags.artist ? String(args.flags.artist) : undefined,
+            force: !!args.flags.force,
+            dryRun: !!args.flags['dry-run'],
+            concurrency: args.flags.concurrency ? Number(args.flags.concurrency) : undefined,
+            cfg: config(),
+        });
+        if (args.flags.json) return printJson(result);
+        console.log(`成品AIFF：${result.out}`);
+        console.log(`  來源 ${result.total} 首；轉出 ${result.converted}、已存在 ${result.skipped}、沒有封面 ${result.noCover}、失敗 ${result.failed.length}（藝人 ${result.artist}）`);
+        if (result.dryRun) console.log('  （dry-run：沒有寫任何檔案）');
+        if (result.failed.length) for (const fail of result.failed.slice(0, 10)) console.log(`  ✗ ${fail.file}：${fail.error}`);
+        return;
+    }
+
     if (cmd === 'strip-fingerprints' || cmd === 'fingerprints') {
         const root = args.flags.root ? String(args.flags.root) : 'ai音樂';
         if (args.flags.restore) {
@@ -987,6 +1079,7 @@ main().catch((err) => {
     process.exitCode = 1;
     setTimeout(() => process.exit(1), 1500).unref();
 });
+
 
 
 

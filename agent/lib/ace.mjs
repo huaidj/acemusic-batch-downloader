@@ -5,6 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { config, readJson, writeJson, exists, toWin, sleep, appendLog, cacheRead, cacheWrite, cacheClear, cachePeek } from './config.mjs';
+import { localSettings } from './config.mjs';
 import { loadShared } from './shared.mjs';
 import { inspectAudioFile, stripWavMetadata, validateAudioBuffer } from './audio-library.mjs';
 import { hasLibraryWriteLease, withLibraryWriteLease } from './library-lease.mjs';
@@ -2768,7 +2769,12 @@ async function runTidyOnce({ root = 'ai音樂', concurrency = 4, onProgress = nu
     // 分類後把乾淨名字「複製」到 整理輸出/成品WAV；來源檔不動（插件照樣讀得到原路徑）
     emit('wavnames', { wav: steps[2] });
     let wavNamesFailed = 0;
+    const wavNamesEnabled = localSettings(cfg.stateDir).wavnames?.enabled !== false;
     try {
+        if (!wavNamesEnabled) {
+            steps.push({ name: 'wavnames', skipped: 'disabled' });
+            throw Object.assign(new Error('disabled'), { skip: true });
+        }
         const wavNames = await copyCollectedWavs({
             root,
             folder: DEFAULT_WAV_FOLDER,
@@ -2778,8 +2784,35 @@ async function runTidyOnce({ root = 'ai音樂', concurrency = 4, onProgress = nu
         wavNamesFailed = wavNames.failed.length;
         steps.push({ name: 'wavnames', total: wavNames.total, copied: wavNames.copied, already: wavNames.already, loose: wavNames.loose, failed: wavNamesFailed });
     } catch (error) {
-        wavNamesFailed = 1;
-        steps.push({ name: 'wavnames', failed: 1, error: String(error.message || error).slice(0, 300) });
+        if (!error || !error.skip) {
+            wavNamesFailed = 1;
+            steps.push({ name: 'wavnames', failed: 1, error: String(error.message || error).slice(0, 300) });
+        }
+    }
+    // 成品WAV 轉成帶封面的 AIFF（使用者 2026-11-17 指定：預設開啟，原檔名、藝人 VooDooBoys）。
+    // 只做容器轉換，來源 WAV 不動；AIFF 已存在就跳過，所以每輪整理幾乎是零成本。
+    try {
+        const { exportAiffs, aiffSettings } = await import('./aiff-export.mjs');
+        if (aiffSettings(cfg).enabled) {
+            emit('aiff', {});
+            const aiffResult = await exportAiffs({
+                root: path.join(cfg.downloadDir, root),
+                cfg,
+                onProgress: (progress) => emit('aiff', { done: progress.done, total: progress.total, current: progress.current || '' }),
+            });
+            steps.push({
+                name: 'aiff',
+                total: aiffResult.total,
+                converted: aiffResult.converted,
+                skipped: aiffResult.skipped,
+                noCover: aiffResult.noCover,
+                failed: aiffResult.failed.length,
+            });
+        } else {
+            steps.push({ name: 'aiff', skipped: 'disabled' });
+        }
+    } catch (error) {
+        steps.push({ name: 'aiff', failed: 1, error: String(error.message || error).slice(0, 300) });
     }
     emit('samples', { mp3: steps[1], wav: steps[2], wavnames: steps[3] });
     const samplesResult = await collectSamples({ root, cfg });
@@ -2904,6 +2937,42 @@ async function runTidyOnce({ root = 'ai音樂', concurrency = 4, onProgress = nu
         likedFailed = 1;
         steps.push({ name: 'liked', failed: 1, error: String(error.message || error).slice(0, 300) });
     }
+    // 改名WAV：詞庫命名 + 封面 + 藝人（複製式，來源 WAV 不動；日誌可倒查）。預設開啟，config.json naming.enabled=false 可關。
+    let namedFailed = 0;
+    try {
+        const { applyNamedCopies, namingSettings } = await import('./named-copy.mjs');
+        if (namingSettings(cfg).enabled) {
+            emit('namedcopy');
+            const namedResult = await applyNamedCopies({
+                root: path.join(cfg.downloadDir, root),
+                cfg,
+                onProgress: (progress) => emit('namedcopy', { done: progress.done, total: progress.total, current: progress.current || '' }),
+            });
+            namedFailed = namedResult.failed.length;
+            steps.push({ name: 'namedcopy', total: namedResult.total, written: namedResult.written, skipped: namedResult.skipped, noCover: namedResult.noCover, failed: namedFailed });
+        } else {
+            steps.push({ name: 'namedcopy', skipped: 'disabled' });
+        }
+    } catch (error) {
+        namedFailed = 1;
+        steps.push({ name: 'namedcopy', failed: 1, error: String(error.message || error).slice(0, 300) });
+    }
+    // 硬連結整理：收藏／已點讚 內與母帶內容完全相同的副本改硬連結，省下重複的 GB。預設開啟。
+    let hardlinkFailed = 0;
+    try {
+        const { hardlinkDedupe, hardlinkSettings } = await import('./hardlink-dedupe.mjs');
+        if (hardlinkSettings(cfg).enabled) {
+            emit('hardlinks');
+            const linkResult = await hardlinkDedupe({ root: path.join(cfg.downloadDir, root), cfg, commit: true });
+            hardlinkFailed = linkResult.failed.length;
+            steps.push({ name: 'hardlinks', linked: linkResult.linked, alreadyLink: linkResult.alreadyLink, noMatch: linkResult.noMatch, savedMB: Math.round(linkResult.bytesSaved / 1048576), failed: hardlinkFailed });
+        } else {
+            steps.push({ name: 'hardlinks', skipped: 'disabled' });
+        }
+    } catch (error) {
+        hardlinkFailed = 1;
+        steps.push({ name: 'hardlinks', failed: 1, error: String(error.message || error).slice(0, 300) });
+    }
     clearFsCaches(cfg);
     const result = {
         ok:
@@ -2915,7 +2984,7 @@ async function runTidyOnce({ root = 'ai音樂', concurrency = 4, onProgress = nu
             dedupeResult.failed.length === 0 &&
             contentResult.errors.length === 0 &&
             foldersResult.errors.length === 0 &&
-            audioResult.failed.length === 0 && indexFailed === 0 && favoritesFailed === 0 && wavNamesFailed === 0 && fingerprintsFailed === 0 && likedFailed === 0,
+            audioResult.failed.length === 0 && indexFailed === 0 && favoritesFailed === 0 && wavNamesFailed === 0 && fingerprintsFailed === 0 && likedFailed === 0 && namedFailed === 0 && hardlinkFailed === 0,
         root,
         startedAt,
         finishedAt: new Date().toISOString(),

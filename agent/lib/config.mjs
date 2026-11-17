@@ -7,9 +7,26 @@ import path from 'node:path';
 export const DEFAULT_UA =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36';
 
+/**
+ * 使用者層級設定檔：<stateDir>/config.json。
+ * 只為了讓「下載資料夾」可以指到別的磁碟（例如把曲庫搬到 E:\），
+ * 不改動其他使用者的預設行為；讀不到或格式錯誤一律當作沒設定。
+ */
+export function localSettings(stateDir) {
+    try {
+        const json = JSON.parse(fs.readFileSync(path.join(stateDir, 'config.json'), 'utf8'));
+        return json && typeof json === 'object' && !Array.isArray(json) ? json : {};
+    } catch {
+        return {};
+    }
+}
+
 export function config() {
     const stateDir = process.env.ACE_STATE_DIR || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'AceMusicDL');
-    const downloadDir = process.env.ACE_DOWNLOAD_DIR || path.join(os.homedir(), 'Downloads');
+    const settings = localSettings(stateDir);
+    const configured = typeof settings.downloadDir === 'string' && settings.downloadDir.trim() ? settings.downloadDir.trim() : '';
+    // 優先序：環境變數 > <stateDir>/config.json 的 downloadDir > 使用者 Downloads
+    const downloadDir = process.env.ACE_DOWNLOAD_DIR || configured || path.join(os.homedir(), 'Downloads');
     const baseUrl = (process.env.ACE_BASE_URL || 'https://acemusic.ai').replace(/\/+$/, '');
     return {
         stateDir,

@@ -398,6 +398,55 @@ export async function buildLocalDownloadIndex({ cfg = config(), root = 'ai音樂
             index.files.push({ key: item.key, kind: item.kind, absolute: file.absolutePath, path: 'ai音樂' === root ? root + '/' + file.path : slash(path.relative(downloadRoot, file.absolutePath)), bytes: file.bytes, fileId: file.id, confidence: item.confidence, validity: item.validity, format: file.format, evidence: item.evidence });
         }
     }
+    // 檔名證據補強：有些 WAV 在搬庫／整理後失去下載紀錄的歸屬，但檔名本身就是證據——
+    // [8hex] 尾碼對 task_id 末 8 碼，或歌名完全相符且唯一。只補 recorded，不改任何檔案。
+    try {
+        const wavDir = path.join(libraryRoot, '成品WAV');
+        const known = new Set();
+        for (const row of Object.values(byTask)) for (const item of row.files) known.add(path.resolve(item.absolute).toLowerCase());
+        const titles = new Map();
+        for (const [taskId, song] of songMap) {
+            const title = String((song.meta && song.meta.title) || '').replace(/\s*[（(]\s*\d+\s*[)）]\s*$/, '').trim().toLowerCase();
+            if (!title) continue;
+            if (!titles.has(title)) titles.set(title, []);
+            titles.get(title).push(taskId);
+        }
+        const bySuffix = new Map();
+        for (const taskId of songMap.keys()) {
+            const tail = taskId.slice(-8).toLowerCase();
+            if (!bySuffix.has(tail)) bySuffix.set(tail, []);
+            bySuffix.get(tail).push(taskId);
+        }
+        for (const name of fs.readdirSync(wavDir).filter((n) => /\.wav$/i.test(n))) {
+            const absolute = path.join(wavDir, name);
+            if (known.has(path.resolve(absolute).toLowerCase())) continue;
+            let taskId = null;
+            const suffix = name.match(/\[([0-9a-f]{8})\]\s*\.wav$/i);
+            if (suffix) {
+                const owners = bySuffix.get(suffix[1].toLowerCase()) || [];
+                if (owners.length === 1) taskId = owners[0];
+            }
+            if (!taskId) {
+                const owners = titles.get(name.replace(/\.wav$/i, '').replace(/\s*[（(]\s*\d+\s*[)）]\s*$/, '').trim().toLowerCase()) || [];
+                if (owners.length === 1) taskId = owners[0];
+            }
+            if (!taskId || !byTask[taskId]) continue;
+            let bytes = 0;
+            try { bytes = fs.statSync(absolute).size; } catch { continue; }
+            byTask[taskId].files.push({
+                key: 'wav:filename',
+                kind: 'wav',
+                absolute,
+                path: slash(path.relative(downloadRoot, absolute)),
+                bytes,
+                fileId: 'filename:' + crypto.createHash('sha1').update(path.resolve(absolute).toLowerCase()).digest('hex').slice(0, 16),
+                confidence: 'recorded',
+                validity: 'valid',
+                format: 'wav',
+                evidence: { source: 'filename-evidence' },
+            });
+        }
+    } catch { /* 沒有 成品WAV 就跳過 */ }
     const strength = { verified: 3, recorded: 2, uncertain: 1 };
     for (const [taskId, row] of Object.entries(byTask)) {
         const unique = new Map();
