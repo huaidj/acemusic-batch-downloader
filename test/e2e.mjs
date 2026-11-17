@@ -971,7 +971,11 @@ scenario('S24_existing_song_ready_stems_auto_download_persist_and_preserve_versi
     mock.updateSong('song-c', { stems: group('song-c-auto-v2') });
     deadline = Date.now() + 15000;
     const expectedNew = [stem('song-c-auto-v2-drums'), stem('song-c-auto-v2-bass')];
-    const hasNew = () => expectedNew.every((bytes) => listFiles(path.join(ROOT, 'auto-existing-stems')).some((entry) => fs.readFileSync(entry.abs).equals(bytes)));
+    // 下載中的 .crdownload 會被瀏覽器鎖住（Windows EBUSY），輪詢時只讀已落地的檔案。
+    const safeRead = (abs) => { try { return fs.readFileSync(abs); } catch { return null; } };
+    const hasNew = () => expectedNew.every((bytes) => listFiles(path.join(ROOT, 'auto-existing-stems'))
+      .filter((entry) => !/\.(crdownload|tmp)$/i.test(entry.abs))
+      .some((entry) => { const buf = safeRead(entry.abs); return buf !== null && buf.equals(bytes); }));
     while (Date.now() < deadline && !hasNew()) await new Promise((resolve) => setTimeout(resolve, 100));
     assert(hasNew(), 'S24 相同軌道數的新分軌版本仍要下載');
     await waitJobDone(page, 10000);
