@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   登入 Windows 時自動啟動 ACE Agent Hub（127.0.0.1:8788）與背景整理 watcher。
 

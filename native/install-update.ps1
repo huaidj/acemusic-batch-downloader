@@ -1,4 +1,4 @@
-param([switch]$DryRun, [string]$BackupDirectory = '')
+﻿param([switch]$DryRun, [string]$BackupDirectory = '')
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Split-Path -Parent $here

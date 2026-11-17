@@ -1,4 +1,4 @@
-# Build to an immutable, source-hashed filename. Never terminate an active host.
+﻿# Build to an immutable, source-hashed filename. Never terminate an active host.
 param([string]$OutputDirectory = '')
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
