@@ -446,7 +446,10 @@ export async function buildLocalDownloadIndex({ cfg = config(), root = 'ai音樂
                 evidence: { source: 'filename-evidence' },
             });
         }
-    } catch { /* 沒有 成品WAV 就跳過 */ }
+    } catch (error) {
+        // 沒有 成品WAV 就跳過；除錯時 ACE_DEBUG_INDEX=1 會印原因
+        if (process.env.ACE_DEBUG_INDEX) console.error('[filename-evidence]', error && error.message);
+    }
     const strength = { verified: 3, recorded: 2, uncertain: 1 };
     for (const [taskId, row] of Object.entries(byTask)) {
         const unique = new Map();
