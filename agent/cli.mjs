@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // cli.mjs — ACE Music 批量下載器 CLI（給 agent / 終端機使用）
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import * as ACE from './lib/ace.mjs';
 import { config, readJson, writeJson, exists } from './lib/config.mjs';
 import { hubJson, hubRequest } from './lib/hubclient.mjs';
@@ -22,7 +22,7 @@ async function hubTry(pathname, { method = 'GET', body, timeoutMs = 1200 } = {})
     }
 }
 function usage() {
-    console.log(`ACE Music 批量下載器 CLI  v1.9.2
+    console.log(`ACE Music 批量下載器 CLI  v1.9.3
 
 用法：
   node cli.mjs create capabilities            Create 頁面完整 API 參數契約
@@ -41,6 +41,7 @@ function usage() {
   node cli.mjs liked-folder [--dry-run] [--no-ai] [--budget 0.5]  點讚歌的成品 MP3／WAV 複製到 已點讚，DeepSeek 雙語命名（費用上限預設 US$0.50）
   node cli.mjs player [--background] [--json] 啟動獨立本機播放器
   node cli.mjs player --restart [--force]    升級後把執行中的舊播放器服務換成新版（會中斷目前播放；--force 版本號相同也重啟）
+  node cli.mjs player --tray [--show]        播放器只留托盤圖示（預設隱藏視窗；右鍵托盤可調整參數）
   node cli.mjs events [--since seq] [--type t]  中樞事件（新歌、自動下載、下載完成）
   node cli.mjs wait [--timeout 秒]             等待下一首新歌（需 Hub＋開著站點分頁）
   node cli.mjs probe                           站點健康（唯讀）
@@ -177,6 +178,14 @@ async function main() {
         }
     }
     if (cmd === 'site-likes') return printJson(args.flags.sync ? await ACE.syncSiteLikesFromSite(cfg) : await ACE.siteLikes(cfg));
+    if (cmd === 'player' && args.flags.tray) {
+        const { spawn } = await import('node:child_process');
+        const trayScript = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'player', 'tray.ps1');
+        const shell = process.env.ACE_PWSH || 'pwsh';
+        const child = spawn(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', trayScript, ...(args.flags.show ? ['-Show'] : [])], { detached: true, stdio: 'ignore', windowsHide: true });
+        child.unref();
+        return printJson({ ok: true, tray: true, script: trayScript });
+    }
     if (cmd === 'player' && args.flags.restart) { const { restartPlayer } = await import('./lib/player-process.mjs'); return printJson(await restartPlayer(cfg, { force: !!args.flags.force })); }
     if (cmd === 'player') return printJson(await ACE.startPlayer(cfg, { songId: args.flags['focus-id'] ? decodeURIComponent(String(args.flags['focus-id'])) : '' }));
 
@@ -543,6 +552,20 @@ async function main() {
             console.log('  （dry-run：沒有複製任何檔案）');
         }
         if (result.failed.length) for (const fail of result.failed.slice(0, 10)) console.log(`  ✗ ${fail.file}：${fail.error}`);
+        return;
+    }
+
+    if (cmd === 'activity') {
+        const { readActivity } = await import('./lib/activity-log.mjs');
+        const result = await readActivity({ cfg: config(), limit: args.flags.limit ? Number(args.flags.limit) : 5 });
+        if (args.flags.json) return printJson(result);
+        console.log(`摘要檔：${result.summaryPath}${result.exists ? '' : '（還沒有紀錄）'}`);
+        for (const block of result.entries) console.log(block);
+        if (args.flags.open && result.exists) {
+            const { spawn } = await import('node:child_process');
+            spawn('explorer.exe', [result.summaryPath], { detached: true, stdio: 'ignore' }).unref();
+            console.log('已開啟摘要');
+        }
         return;
     }
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.9.3 — 2026-11-17（面板重新命名這批＋白話日誌＋播放器托盤）
+
+- 面板「維護」新增 **重新命名這批**：背景跑 `named-copy`，只回一句摘要（新寫／已存在／失敗／日誌筆數），不擋操作。
+- 新增 **日誌摘要**（預設收起，只留入口與「打開摘要檔」按鈕）：每輪整理寫成一頁白話 Markdown 放在曲庫根目錄 `_整理摘要.md`（最新在最上面，保留 20 輪）；機器用的完整紀錄在 `%LOCALAPPDATA%\AceMusicDL\logs\activity.jsonl`（append-only，不刪）。
+- 一鍵整理完成訊息改成一句話（「整理完成（細節在『日誌摘要』）」），下載、分類、複製、改名全部在背景安靜跑完。
+- CLI 新增 `activity [--json] [--open] [--limit N]`；native host 升到 1.2.1，新增 `named-copy`／`activity`／`open-file`（只允許曲庫或 Downloads 內的 .md／.json／.txt）。
+- **獨立播放器改成托盤**：`player\start.ps1` 預設只留系統匣圖示（視窗隱藏），右鍵圖示可「調整參數…」（視窗大小、啟動時隱藏）／顯示、隱藏、重新啟動；`node cli.mjs player --tray [--show]` 同效果。
+
 ## 1.9.2 — 2026-11-17（一鍵整理接上改名WAV與硬連結、證據修補）
 
 - 一鍵整理新增兩步：`namedcopy`（詞庫命名 → `改名WAV`，複製式、寫 `_命名日誌.json`）與 `hardlinks`（`收藏`／`已點讚` 內同內容副本改硬連結）。兩步都受 `config.json` 的 `naming.enabled`／`hardlinks.enabled` 控制，預設開啟、冪等（已存在就跳過）。

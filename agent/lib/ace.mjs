@@ -2946,6 +2946,7 @@ async function runTidyOnce({ root = 'ai音樂', concurrency = 4, onProgress = nu
             const namedResult = await applyNamedCopies({
                 root: path.join(cfg.downloadDir, root),
                 cfg,
+                record: false,
                 onProgress: (progress) => emit('namedcopy', { done: progress.done, total: progress.total, current: progress.current || '' }),
             });
             namedFailed = namedResult.failed.length;
@@ -2991,6 +2992,23 @@ async function runTidyOnce({ root = 'ai音樂', concurrency = 4, onProgress = nu
         steps,
     };
     emit('done', { steps, result });
+    // 給人看的摘要（<root>/_整理摘要.md）＋機器紀錄（stateDir/logs/activity.jsonl）
+    try {
+        const { recordActivity, summarizeTidySteps } = await import('./activity-log.mjs');
+        const startedMs = new Date(startedAt).getTime();
+        await recordActivity({
+            root: path.join(cfg.downloadDir, root),
+            cfg,
+            entry: {
+                kind: 'tidy',
+                startedAt,
+                finishedAt: result.finishedAt,
+                durationMs: Number.isFinite(startedMs) ? Date.now() - startedMs : null,
+                lines: summarizeTidySteps(steps, { result }),
+                ok: result.ok,
+            },
+        });
+    } catch { /* 摘要失敗不影響整理結果 */ }
     return result;
 }
 

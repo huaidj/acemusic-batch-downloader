@@ -416,6 +416,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!result || !result.ok || result.exitCode !== 0) return { ok: false, error: (result && result.error) || '本機工具沒有回應' };
         return { ok: true, data: result.data };
       }, sendResponse);
+    // 重新命名這批（背景）：CLI named-copy，只回摘要
+    case 'ACE_HOST_NAMED_COPY':
+      return respondLater(async () => {
+        const result = await hostRequest({ cmd: 'named-copy' }, 600000);
+        if (!result || !result.ok || result.exitCode !== 0) return { ok: false, error: (result && result.error) || (result && result.stderr) || '本機工具沒有回應' };
+        return { ok: true, data: result.data, stderr: result.stderr };
+      }, sendResponse);
+    // 讀最近幾輪整理摘要（人看得懂的 Markdown）
+    case 'ACE_HOST_ACTIVITY':
+      return respondLater(async () => {
+        const result = await hostRequest({ cmd: 'activity' }, 60000);
+        if (!result || !result.ok || result.exitCode !== 0) return { ok: false, error: (result && result.error) || '本機工具沒有回應' };
+        return { ok: true, data: result.data };
+      }, sendResponse);
+    // 用預設程式打開摘要檔（只允許 .md／.json／.txt，且必須在曲庫或 Downloads 內）
+    case 'ACE_HOST_OPEN_FILE':
+      return respondLater(async () => {
+        const result = await hostRequest({ cmd: 'open-file', path: String(msg.path || '') }, 20000);
+        if (!result || !result.ok) return { ok: false, error: (result && result.error) || '本機工具沒有回應' };
+        return { ok: true, data: result.data };
+      }, sendResponse);
     case 'ACE_OPEN_PLAYER':
       return respondLater(async () => {
         const songId = typeof msg.songId === 'string' && msg.songId.length <= 256 ? msg.songId : '';

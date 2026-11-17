@@ -156,7 +156,7 @@ export function planNamedCopies({ root, cfg = config(), settings } = {}) {
 }
 
 /** 依計畫輸出 AIFF（複製式），並把每一筆寫進命名日誌。 */
-export async function applyNamedCopies({ root, cfg = config(), force = false, dryRun = false, concurrency, onProgress } = {}) {
+export async function applyNamedCopies({ root, cfg = config(), force = false, dryRun = false, concurrency, onProgress, record = true } = {}) {
     const planned = planNamedCopies({ root, cfg });
     const s = planned.settings;
     const report = { ok: true, out: planned.outDir, artist: s.artist, dryRun: !!dryRun, total: planned.plan.length, written: 0, skipped: 0, noCover: 0, failed: [], journal: path.join(planned.outDir, NAMING_JOURNAL), samples: [] };
@@ -224,6 +224,29 @@ export async function applyNamedCopies({ root, cfg = config(), force = false, dr
         report.ok = report.failed.length === 0;
     } else if (!report.samples.length) {
         for (const item of planned.plan.slice(0, 12)) report.samples.push({ from: item.name, to: item.fileName, pattern: item.pattern });
+    }
+    // 給人看的摘要（面板「重新命名這批」會讀這筆）；從 tidy 內部呼叫時由 tidy 統一記，不重複。
+    if (!dryRun && record !== false) {
+        try {
+            const { recordActivity } = await import('./activity-log.mjs');
+            const fresh = entries.filter((entry) => entry.batch === batch);
+            await recordActivity({
+                root: planned.rootDir,
+                cfg,
+                entry: {
+                    kind: 'namedcopy',
+                    finishedAt: new Date().toISOString(),
+                    durationMs: null,
+                    ok: report.ok,
+                    lines: [
+                        `新寫 ${report.written} 首、已存在 ${report.skipped} 首、沒有封面 ${report.noCover} 首、失敗 ${report.failed.length} 首`,
+                        `命名日誌共 ${entries.length} 筆（可用新名字倒查原始檔案）`,
+                        report.ok ? '結果：全部成功' : '結果：有失敗，請看機器紀錄',
+                    ],
+                    examples: fresh.slice(0, 5).map((entry) => ({ from: path.basename(entry.from), to: entry.to })),
+                },
+            });
+        } catch { /* 摘要失敗不影響改名 */ }
     }
     return report;
 }

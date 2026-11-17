@@ -12,7 +12,7 @@ using System.Web.Script.Serialization;
 
 internal static class Program
 {
-    private const string VERSION = "1.2.0";
+    private const string VERSION = "1.2.1";
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
     private static readonly string DownloadsRoot =
         Path.GetFullPath(Environment.GetEnvironmentVariable("ACE_DOWNLOAD_DIR") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"));
@@ -97,6 +97,9 @@ internal static class Program
                 case "extract-mp3": return RunCli("extract-mp3 --background --json", 30000, "成品 MP3");
                 case "watch": return RunCli("watch --background --json", 30000, "背景整理");
                 case "strip-fingerprints": return RunCli("strip-fingerprints --json", 180000, "指紋清除");
+                case "named-copy": return RunCli("named-copy --json", 600000, "重新命名這批");
+                case "activity": return RunCli("activity --json --limit 5", 60000, "整理摘要");
+                case "open-file": return OpenFile(request);
         case "open": return OpenFolder(request);
                 default: return Error("unknown cmd: " + cmd);
             }
@@ -107,6 +110,50 @@ internal static class Program
         }
     }
 
+    private static Dictionary<string, object> OpenFile(Dictionary<string, object> request)
+    {
+        // 只允許打開「給人看的」文字檔（摘要／對照表），而且必須在 Downloads 或曲庫根目錄內。
+        string file = request.ContainsKey("path") ? Convert.ToString(request["path"]) : "";
+        if (string.IsNullOrWhiteSpace(file)) return Error("缺少 path");
+        string target;
+        try { target = Path.GetFullPath(file); }
+        catch (Exception ex) { return Error("路徑不合法：" + ex.Message); }
+        if (!File.Exists(target)) return Error("檔案不存在：" + target);
+        string ext = Path.GetExtension(target).ToLowerInvariant();
+        if (ext != ".md" && ext != ".json" && ext != ".txt") return Error("只允許開啟 .md／.json／.txt");
+        var roots = new List<string>();
+        roots.Add(Path.GetFullPath(DownloadsRoot));
+        try
+        {
+            string cfgPath = Path.Combine(StateDir, "config.json");
+            if (File.Exists(cfgPath))
+            {
+                var cfg = Json.DeserializeObject(File.ReadAllText(cfgPath, Encoding.UTF8)) as Dictionary<string, object>;
+                if (cfg != null && cfg.ContainsKey("downloadDir"))
+                {
+                    string dir = Convert.ToString(cfg["downloadDir"]);
+                    if (!string.IsNullOrWhiteSpace(dir)) roots.Add(Path.GetFullPath(Path.Combine(dir, "ai音樂")));
+                }
+            }
+        }
+        catch { }
+        bool allowed = false;
+        foreach (string root in roots)
+        {
+            if (target.Equals(root, StringComparison.OrdinalIgnoreCase) ||
+                target.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) { allowed = true; break; }
+        }
+        if (!allowed) return Error("只能開啟曲庫或 Downloads 內的檔案");
+        try
+        {
+            Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
+            var result = new Dictionary<string, object>();
+            result["ok"] = true;
+            result["path"] = target;
+            return result;
+        }
+        catch (Exception ex) { return Error("開啟檔案失敗：" + ex.Message); }
+    }
     private static Dictionary<string, object> Ping()
     {
         var result = new Dictionary<string, object>();

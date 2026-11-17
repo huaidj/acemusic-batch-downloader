@@ -458,6 +458,10 @@ const KEY_UNAVAILABLE = 'aceUnavailable';
 .more-tools[open] { flex-basis: 100%; margin-left: 0; }
 .maintenance-menu { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 8px 0 2px; max-height: 170px; overflow-y: auto; }
 .maintenance-menu button { text-align: left; padding: 6px 9px; }
+/* 日誌摘要：預設收起，只露一個入口；內容是給人看的白話摘要 */
+.activity-log { max-width: 100%; }
+.activity-text { margin: 8px 0 6px; padding: 8px 10px; max-height: 220px; overflow: auto; white-space: pre-wrap; font-size: 12px; line-height: 1.7; color: var(--muted); background: var(--panel-2, rgba(0,0,0,.18)); border: 1px solid var(--line, rgba(255,255,255,.12)); border-radius: 8px; }
+.activity-actions { display: flex; gap: 6px; }
 @media (max-width: 420px) { .toolbar { gap: 6px; padding-left: 10px; padding-right: 10px; } .selection-toolbar button { padding-left: 7px; padding-right: 7px; font-size: 11px; } .option-group .root { margin-left: 0; } }
 .toolbar .music-hub-status { color: var(--muted); font-size: 12px; margin-left: auto; }
 
@@ -730,12 +734,24 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     const dedupeCustomBtn = el('button', { type: 'button', 'data-act': 'dedupe-custom', text: '清自訂重複' });
     const stripBtn = el('button', { type: 'button', 'data-act': 'strip-fingerprints', title: '掃描並就地抹掉既有檔案裡的 ACE metadata（WAV LIST/INFO、MP3 TSSE／COMM／WOAS）', text: '指紋清除' });
     stripBtn.addEventListener('click', () => runStripFingerprints());
+    // 重新命名這批：用命名爐詞庫重跑一次（複製到 改名WAV，日誌可倒查原檔）。背景靜默執行，只回一句摘要。
+    const namedCopyBtn = el('button', { type: 'button', 'data-act': 'named-copy', title: '用命名爐詞庫重新命名這批：複製到「改名WAV」，不覆蓋原始檔，可用新名字倒查' }, ['重新命名這批']);
+    namedCopyBtn.addEventListener('click', () => runNamedCopy());
+    // 日誌摘要：預設收起，只留一個入口。人看得懂的摘要寫在曲庫根目錄 _整理摘要.md。
+    const activityText = el('pre', { class: 'activity-text', 'data-activity': '' });
+    const activityOpenBtn = el('button', { type: 'button', 'data-act': 'open-activity', text: '打開摘要檔' });
+    activityOpenBtn.addEventListener('click', () => openActivityLog());
+    const activityBox = el('details', { class: 'more-tools activity-log', 'data-activity-box': '' }, [
+      el('summary', { text: '日誌摘要' }),
+      activityText,
+      el('div', { class: 'activity-actions' }, [activityOpenBtn]),
+    ]);
     // 整理、分類、命名、指紋全部收在同一個「維護」折疊區，工具列只留一個入口。
     const maintenanceTools = el('details', { class: 'more-tools', 'data-maintenance-tools': '' }, [
       el('summary', { text: '維護' }),
-      el('div', { class: 'maintenance-menu', role: 'group', 'aria-label': '整理、分類、命名與指紋' }, [tidyBtn, extractMp3Btn, openClassifyBtn, namingBtn, stripBtn, organizeBtn, watchBtn, dedupeCustomBtn, exportAgentBtn]),
+      el('div', { class: 'maintenance-menu', role: 'group', 'aria-label': '整理、分類、命名與指紋' }, [tidyBtn, namedCopyBtn, extractMp3Btn, openClassifyBtn, namingBtn, stripBtn, organizeBtn, watchBtn, dedupeCustomBtn, exportAgentBtn]),
     ]);
-    const toolbar2 = el('div', { class: 'toolbar library-tools', role: 'toolbar', 'aria-label': '曲庫工具' }, [el('span', { class: 'toolbar-label', text: '曲庫' }), maintenanceTools]);
+    const toolbar2 = el('div', { class: 'toolbar library-tools', role: 'toolbar', 'aria-label': '曲庫工具' }, [el('span', { class: 'toolbar-label', text: '曲庫' }), maintenanceTools, activityBox]);
 
     const songsBox = el('div', { class: 'songs', 'data-songs': '' });
     const organizeBox = el('div', { class: 'organize', 'data-organize': '', hidden: true });
@@ -1992,7 +2008,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
             failed ? `${failed} 個步驟有失敗` : '',
             data.ok === false && !failed && !skipped ? '部分步驟回報失敗' : '',
           ].filter(Boolean);
-          flash('一鍵整理完成' + (steps ? '（' + steps + '）' : '') + (notes.length ? '；' + notes.join('；') : ''));
+          flash(notes.length ? '整理完成；' + notes.join('；') : '整理完成（細節在「日誌摘要」）');
+          refreshActivity();
           refreshDownloadIndex(true)
             .then(() => renderSongs())
             .catch(() => {});
@@ -2001,6 +2018,53 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     } catch (err) {
       if (!silent) flash('啟動整理失敗：' + ((err && err.message) || err));
     }
+  }
+
+  // 重新命名這批：背景跑 CLI named-copy，只回一句摘要；細節進「日誌摘要」。
+  async function runNamedCopy() {
+    if (!S.host.ok) return flash('需要本機整理工具：請重跑 native\\install-host.ps1');
+    if (namedCopyBtn.dataset.busy === '1') return;
+    namedCopyBtn.dataset.busy = '1';
+    namedCopyBtn.classList.add('on');
+    namedCopyBtn.textContent = '命名中…';
+    try {
+      const res = await sendMessage({ type: 'ACE_HOST_NAMED_COPY' });
+      if (!res || !res.ok) return flash('重新命名失敗：' + ((res && res.error) || '本機工具沒有回應'));
+      const data = (res && res.data) || {};
+      const written = Number(data.written) || 0;
+      const skipped = Number(data.skipped) || 0;
+      const failed = Array.isArray(data.failed) ? data.failed.length : 0;
+      const total = Number(data.journalEntries) || 0;
+      flash(`重新命名這批：新寫 ${written} 首、已存在 ${skipped} 首${failed ? `、失敗 ${failed} 首` : ''}（日誌 ${total} 筆，可倒查）`);
+      refreshActivity();
+    } catch (err) {
+      flash('重新命名失敗：' + ((err && err.message) || err));
+    } finally {
+      namedCopyBtn.dataset.busy = '';
+      namedCopyBtn.classList.remove('on');
+      namedCopyBtn.textContent = '重新命名這批';
+    }
+  }
+
+  // 讀最近幾輪摘要（人看得懂的 Markdown），預設只顯示前 3 輪，整份可用「打開摘要檔」。
+  async function refreshActivity() {
+    if (!activityText) return;
+    try {
+      const res = await sendMessage({ type: 'ACE_HOST_ACTIVITY' });
+      const payload = (res && res.data) || {};
+      const entries = Array.isArray(payload.entries) ? payload.entries : [];
+      S.activityPath = payload.summaryPath || '';
+      activityText.textContent = entries.length ? entries.slice(0, 3).join('\n\n') : '還沒有整理紀錄';
+    } catch {
+      activityText.textContent = '讀不到摘要（本機工具沒有回應）';
+    }
+  }
+
+  async function openActivityLog() {
+    if (!S.activityPath) await refreshActivity();
+    if (!S.activityPath) return flash('還沒有摘要檔');
+    const res = await sendMessage({ type: 'ACE_HOST_OPEN_FILE', path: S.activityPath });
+    if (!res || !res.ok) flash('開啟失敗：' + ((res && res.error) || '本機工具沒有回應'));
   }
 
   async function runStripFingerprints() {

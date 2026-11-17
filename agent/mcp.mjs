@@ -8,7 +8,7 @@ import { hubJson, hubRequest, canFallbackHubWrite, HUB_URL } from './lib/hubclie
 import { MUSIC_CONTRACT, MUSIC_TOOLS, validateMusicInput } from './lib/music-contract.mjs';
 import { CREATE_CONTRACT, CREATE_TOOLS } from './lib/create-tools.mjs';
 
-const SERVER = { name: 'ace-music-downloader', version: '1.9.2' };
+const SERVER = { name: 'ace-music-downloader', version: '1.9.3' };
 const jobs = new Map();
 let jobSeq = 0;
 const hubJobs = new Set();
