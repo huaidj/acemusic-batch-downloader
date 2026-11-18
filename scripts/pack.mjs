@@ -96,6 +96,13 @@ function zip(fromDir, outFile) {
 const SECRET_ENV_KEYS = ['DEEPSEEK_API_KEY', 'ACE_API_KEY', 'OPENAI_API_KEY', 'GH_TOKEN', 'GITHUB_TOKEN', 'HF_TOKEN'].map((key) => process.env[key]).filter(Boolean);
 
 stage(STORE_ITEMS);
+// Chrome Web Store 不接受 manifest 內的 "key"（本機載入未封裝時才需要固定 ID）；商店包一律剝掉。
+const storeManifestPath = path.join(tmp, 'manifest.json');
+const storeManifest = JSON.parse(fs.readFileSync(storeManifestPath, 'utf8'));
+delete storeManifest.key;
+delete storeManifest.update_url;
+fs.writeFileSync(storeManifestPath, JSON.stringify(storeManifest, null, 2) + '\n');
+if (storeManifest.key) throw new Error('商店包 manifest 仍含 key');
 assertNoSecrets(tmp, { keys: SECRET_ENV_KEYS });
 const storeFile = path.join(dist, `${name}-${version}-store.zip`);
 const storeSize = zip(tmp, storeFile);

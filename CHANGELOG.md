@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.2 — 2026-11-18（商店包修正）
+
+- 修正：`npm run pack` 產生的 store zip 會剝掉 manifest 的 `key`（與 `update_url`）。Chrome Web Store 上傳時會拒絕含 `key` 欄位的清單（「清单文件中不得包含 key 字段」）；本機載入未封裝所需的固定 ID 不受影響，完整包仍保留。
+- 版本字串同步 1.10.2；單元與 e2e 全綠。
+
 ## 1.10.1 — 2026-11-18（啟動與面板更省時）
 
 - CLI 啟動：create／music 的兩份大契約（Create API、Music Agent）改為按需載入；一般命令（status／library／download／doctor…）不再為它們付啟動成本，實測 status --json 由約 290 ms 降到 190–250 ms。

@@ -43,7 +43,11 @@ Chrome extension for batch-downloading your own [acemusic.ai](https://acemusic.a
 - **命名爐（預設顯示）**：面板「維護 → 命名爐」，同首的分軌／版本共用一個名字，可直接套用改名並重建索引
 - **HuaiDJ 創作中樞**：音樂意圖、版本化詞典、提示詞編譯、有限授權生成、產物回收與人評（`music_*`、`ace_create_*`；預設不提交付費生成）
 
-### 最新版本 v1.10.1（啟動與 Hub 快取優化）
+### 最新版本 v1.10.2（商店包修正）
+
+- `npm run pack` 的 store zip 現在會剝掉 manifest 的 `key`（Chrome Web Store 不接受含 `key` 的清單）；完整包保留固定 ID。
+
+### v1.10.1（啟動與 Hub 快取優化）
 
 - **CLI 啟動更快**：`create`／`music` 兩份大契約改為按需載入，一般命令（status／library／download／doctor…）不再付啟動成本；實測 `status --json` 由約 290 ms 降到 **190–250 ms**
 - **Hub 短效快取**：`/library`、`/download-index` 4 秒內重複請求直接回上次結果；面板輪詢由每次 300–600 ms 降到 **9–35 ms**。任何 POST 或新事件立即清快取
@@ -180,7 +184,11 @@ A Chrome/Edge extension that adds a **batch download** panel to [acemusic.ai](ht
 - **Naming furnace**: bilingual naming device; variants of the same song share one name, apply-rename rebuilds the local index
 - **HuaiDJ creation hub**: music intent, versioned dictionary, prompt compilation, bounded generation, artifact recovery and human feedback (`music_*`, `ace_create_*`; paid generation is never submitted by default)
 
-### Latest: v1.10.1 (startup + Hub cache)
+### Latest: v1.10.2 (store package fix)
+
+- The store zip produced by `npm run pack` now strips the manifest `key` (the Chrome Web Store rejects manifests containing it); the full package keeps the fixed ID.
+
+### v1.10.1 (startup + Hub cache)
 
 - **Faster CLI startup**: the large Create/Music contracts are now imported on demand; `status --json` dropped from ~290 ms to **190–250 ms**
 - **Hub short-lived cache**: `/library` and `/download-index` reuse a result for 4 seconds; repeated panel polling went from 300–600 ms to **9–35 ms**. Any POST or new event invalidates immediately
