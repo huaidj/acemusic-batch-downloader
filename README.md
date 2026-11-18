@@ -1,61 +1,78 @@
-> 此隔離分支新增 HuaiDJ 音樂中樞：受控生成與回收、公開文字研究、版本化詞典、人類回饋與人工演出準備。先看 [工作流程](agent/WORKFLOW.md) 與 [完整 API](agent/CREATE-API.md)；預設不啟用供應商費用或自動播放。
+# ACE Music 批量下載器 · ACE Music Batch Downloader
 
-# ACE Music 批量下載器
+[中文](#中文) ｜ [English](#english)
 
-在 [acemusic.ai](https://acemusic.ai/create/) 的 Create 歌曲庫頁面加入一個面板，把一首或全部歌曲的**分軌（stems）、MIDI、MusicXML、MP3、WAV、封面**一次下載完，自動改名、分類；另外提供 CLI／MCP／常駐 Hub 給 agent 使用。
+把 [acemusic.ai](https://acemusic.ai/create/) 歌曲庫的歌**一次下載完**：分軌（stems）、MIDI、MusicXML、MP3、WAV、封面，自動改名與分類；同時提供 **CLI / MCP / 常駐 Hub** 給 agent 使用。
 
-[GitHub Releases](https://github.com/huaidj/acemusic-batch-downloader/releases) · [隱私政策](https://huaidj.github.io/acemusic-batch-downloader/privacy.html) · [MIT License](LICENSE)
+Chrome extension for batch-downloading your own [acemusic.ai](https://acemusic.ai/create/) library — stems, MIDI, MusicXML, MP3/WAV and covers — with auto-naming and organization, plus a CLI, MCP server and a local Agent Hub.
 
-> 只在使用者自己的登入 session 下操作自己的歌曲，不下載他人內容、不改站點資料。
+[Releases](https://github.com/huaidj/acemusic-batch-downloader/releases) · [完整功能介紹 Project guide](docs/PROJECT.md) · [隱私政策 / Privacy](https://huaidj.github.io/acemusic-batch-downloader/privacy.html) · [MIT License](LICENSE)
 
-## 功能
+> 只在自己登入的 session 下操作自己的歌曲；不下載他人內容、不改站點資料。
+> Operates only on your own songs under your own session. No third-party content, no site modification.
 
-- **批次下載**：分軌、MIDI、MusicXML、MP3、WAV、封面；可全選或單曲下載
-- **自動命名／分資料夾**：`<歌名>/<歌名> - Vocals.mp3`、`<歌名> - MIDI.mid`、`<歌名> - MusicXML.musicxml`
-- **WAV**：依站點模型能力與原始上傳音源判斷；有來源便獨立下載，不等 MIDI。原始 WAV 不冒充 MP3。
-- **一鍵整理**：舊檔整理 → 成品 MP3 → 成品 WAV（分類後把乾淨名字**複製**到 `整理輸出\成品WAV\`，來源不動、多 take 依序編號）→ 採樣包（MP3 分軌）／採樣包WAV（WAV 分軌）→ 檔案分類 → 內容去重 → 空殼清理 → 音頻屬性分類（BPM／調性／能量）→ 收藏夾（`收藏\<歌名>.wav` 母帶）→ 指紋清除 → 已點讚（AI 命名）
-- **整理不會疊羅漢**：連續觸發（自動整理＋手動按鈕）只會跑一輪；有整理在跑時，新的觸發只登記「結束後補一輪」，不會排隊各跑一次完整管線（`tidy-run.lock`／`tidy-pending.json`）
-- **收藏夾**：站點拇指點讚與面板愛心的歌，每首只留一個無損母帶，平鋪成 `ai音樂\收藏\<歌名>.wav`（不建子資料夾、不收 MP3／分軌／MIDI／封面）；只有 MP3 的歌不收。只複製、內容相同跳過、同名不覆寫，原檔不動
-- **指紋清除**：既有檔案裡的 ACE metadata（WAV `LIST/INFO`／`id3`、MP3 `TSSE`／ACE `COMM`／`WOAS`）就地抹掉；檔長不變、可 `--restore` 還原，下載時也自動清
-- **不重複下載**：比對本機檔案、下載紀錄、去重紀錄；已存在的自動跳過
-- **狀態顯示**：本機索引按歌曲 ID、來源與實存檔案判斷；分開顯示確定缺檔與待核對，整理搬移後自動刷新。同名歌曲互不繼承紀錄。
-- **即時同步＋新歌自動下載**：訂閱站點推送，新歌完成約 50 ms 出現；可選「新歌自動下載」（MIDI／MusicXML 需另勾，因可能扣 credit）
-- **老歌新增分軌**：已開啟自動分軌下載時，偵測既有歌曲新增或更新的就緒分軌並下載；不主動購買分軌。MIDI／MusicXML 僅用於該歌已主動要求分軌且已授權樂譜生成的情況。
-- **獨立播放器**：可拖動及調整大小的視窗；本機曲庫、搜尋、下載狀態、**BPM／Camelot 調性欄位與篩選**、佇列（下一首／排序）、播放清單 **M3U8 匯出／匯入**、收藏、歷史、**睡眠計時**、**鍵盤快捷鍵**（Space／Alt+←→／J L／M／F／Q／／／?）與系統媒體鍵。[播放器說明](player/README.md)
-- **命名爐（預設顯示）**：面板「維護 → 命名爐」打開雙語命名裝置；同一首歌的分軌／版本共用一個名字，可連接 ai音樂 資料夾後直接套用改名，套用後自動重建本機索引。
-- **Agent 中樞**：CLI、MCP（含 `ace_locate` 找最新歌曲真實路徑、`ace_download_index`、`ace_player`、`ace_wait_new_song` 等新歌、`ace_generate` 預覽及明確提交 v1.1）、常駐 Agent Hub（127.0.0.1:8788，既有查詢熱路徑 <2 ms）
-- **官方 MCP 兜底**：站點 session 沒了（沒匯出／過期）也不會整輪中止——歌單、mp3／wav／midi、封面改走 [官方遠端 MCP](https://acemusic.ai/mcp)（OAuth 2.1，一次授權、自動續約）；分軌與 MusicXML 仍需要站點 session，會明確標示而不是假裝成功
-- **HuaiDJ 創作中樞**：音樂意圖、版本化詞典、提示詞編譯、有限授權生成、產物回收與人評、DeepSeek 研究候選（`music_*`、`ace_create_*` 工具；預設不提交付費生成）
-- 完整說明：[docs/GUIDE.md](docs/GUIDE.md)｜開發規範：[docs/CONVENTIONS.md](docs/CONVENTIONS.md)｜設計系統：[docs/DESIGN-SYSTEM.md](docs/DESIGN-SYSTEM.md)
-- **可選本機工具**：native messaging host 負責改名／搬檔／叫用 CLI（不裝也能下載）
+---
 
-## 安裝
+## 中文
 
-### 方式 A：Chrome 線上應用程式商店
+### 這是什麼
 
-（上架流程準備中；上架後會更新此段。）
+在 ACE Music 的 Create 頁面（`https://acemusic.ai/create/`）右下角加入「批量下載」面板；勾選要的檔案類型後，一鍵下載整首或全部歌曲，並依類型改名分資料夾。另外提供三種給自動化／agent 的接入方式。
 
-### 方式 B：載入未封裝（開發版）
+### 三種接入方式
 
-1. 下載或 clone 此 repo
+| 方式 | 入口 | 適合 |
+| --- | --- | --- |
+| **① ACE 網站面板** | Chrome／Edge 擴充功能，`chrome://extensions` 載入未封裝 | 人手操作：勾選、下載、整理、命名爐、播放器 |
+| **② MCP** | 本機 `node agent\mcp.mjs`（stdio）＋**官方遠端 MCP 兜底**（OAuth 2.1） | Claude／Codex／DSH 等 agent 直接呼叫工具 |
+| **③ CLI + Hub** | `node agent\cli.mjs …`；常駐 Hub `127.0.0.1:8788` | 腳本、排程、多 agent 共用、非同步下載工作 |
+
+### 重點功能
+
+- **批次下載**：分軌、MIDI、MusicXML、MP3、WAV、封面；可全選或單曲
+- **自動命名／分資料夾**：`<歌名>/<歌名> - Vocals.mp3`、`- MIDI.mid`、`- MusicXML.musicxml`
+- **WAV 不冒充**：依站點模型能力與原始音源判斷；以 FLAC 儲存的歌判為 `WAV_UNSUPPORTED` 跳過，不會把 FLAC 存成 `.wav`
+- **一鍵整理**：舊檔 → 成品 MP3 → 成品 WAV → 採樣包（MP3／WAV 分軌）→ 檔案分類 → 內容去重 → 空殼清理 → 音頻屬性分類（BPM／調性／能量）→ 收藏夾 → 指紋清除 → 已點讚（AI 命名）
+- **整理不會疊羅漢**：連續觸發只跑一輪；跑動時的新觸發只登記「結束後補一輪」（`tidy-run.lock`／`tidy-pending.json`）
+- **收藏夾**：站點拇指點讚與面板愛心，每首只留一個無損母帶，平鋪 `ai音樂\收藏\<歌名>.wav`
+- **指紋清除**：就地抹掉 ACE metadata（WAV `LIST/INFO`、MP3 `TSSE`／`COMM`／`WOAS`）；檔長不變、可 `--restore` 還原
+- **不重複下載**：比對本機檔案、下載紀錄、去重紀錄；同名歌曲互不繼承紀錄
+- **即時同步＋新歌自動下載**：訂閱站點推送，新歌完成約 50 ms 出現
+- **老歌新增分軌**：偵測既有歌曲新增／更新的就緒分軌並下載（不主動購買；MIDI／MusicXML 僅在已授權樂譜生成時）
+- **獨立播放器**：BPM／Camelot 欄位與篩選、佇列、M3U8 匯出／匯入、收藏、歷史、睡眠計時、鍵盤快捷鍵、系統媒體鍵
+- **命名爐（預設顯示）**：面板「維護 → 命名爐」，同首的分軌／版本共用一個名字，可直接套用改名並重建索引
+- **HuaiDJ 創作中樞**：音樂意圖、版本化詞典、提示詞編譯、有限授權生成、產物回收與人評（`music_*`、`ace_create_*`；預設不提交付費生成）
+
+### 最新版本 v1.10.1（啟動與 Hub 快取優化）
+
+- **CLI 啟動更快**：`create`／`music` 兩份大契約改為按需載入，一般命令（status／library／download／doctor…）不再付啟動成本；實測 `status --json` 由約 290 ms 降到 **190–250 ms**
+- **Hub 短效快取**：`/library`、`/download-index` 4 秒內重複請求直接回上次結果；面板輪詢由每次 300–600 ms 降到 **9–35 ms**。任何 POST 或新事件立即清快取
+- 測試：單元 **563/563**、e2e **31/31**
+
+完整版本紀錄：[CHANGELOG.md](CHANGELOG.md)。
+
+### 安裝
+
+**方式 A：Chrome 線上應用程式商店**（上架流程準備中）
+
+**方式 B：載入未封裝（開發版）**
+
+1. Clone 或下載此 repo
 2. Chrome／Edge 開 `chrome://extensions`（Edge：`edge://extensions`）
 3. 開啟「開發人員模式」
 4. 「載入未封裝項目」→ 選 **repo 根目錄**（含 `manifest.json` 的那一層）
-5. 開 <https://acemusic.ai/create/> 並登入；右下角會出現「批量下載」按鈕
+5. 開 <https://acemusic.ai/create/> 並登入；右下角出現「批量下載」按鈕
 
 > 更新版本後到 `chrome://extensions` 按「重新載入」，並重新整理站點分頁。
+> 完整包可執行 `更新本機工具.cmd` 同步本機 Hub／Native／播放器（先備份並驗證雜湊，不強停下載）。
 
-1.7.5 完整包可執行 `更新本機工具.cmd` 同步本機 Hub／Native／播放器。它先備份並驗證雜湊，不強停下載或覆寫正在執行的 Native EXE；仍需重新載入擴充功能及刷新 ACE 分頁。
+### 使用
 
-## 使用
-
-1. 面板勾選要的檔案類型（分軌／MIDI／MusicXML／MP3／封面），選歌或全選
+1. 面板勾選檔案類型（分軌／MIDI／MusicXML／MP3／封面），選歌或全選
 2. 按「下載選中」；面板顯示目前檔案與完成／跳過／失敗數
-3. 完成後檔案在 `<downloadDir>\ai音樂\<歌名>\`（預設 `%USERPROFILE%\Downloads`；本機用 `<stateDir>\config.json` 的 `"downloadDir": "E:\\"` 指到 `E:\ai音樂\`，硬連結檢視也建在同一顆磁碟）
+3. 檔案在 `<downloadDir>\ai音樂\<歌名>\`（預設 `%USERPROFILE%\Downloads`；可用 `<stateDir>\config.json` 的 `"downloadDir": "D:\\"` 指到別的磁碟，硬連結檢視也會建在同一顆碟）
 
-進階選項：強制重下、依類型分層、根資料夾、下載完自動整理、背景自動整理、只看未下載、清自訂重複。
-
-## Agent 接入（CLI／MCP／Hub）
+### Agent 接入（CLI／MCP／Hub）
 
 ```powershell
 # 先讓面板按「同步 Agent」匯出登入狀態（%LOCALAPPDATA%\AceMusicDL\session.json）
@@ -63,36 +80,14 @@ node agent\cli.mjs doctor
 node agent\cli.mjs list --undownloaded
 node agent\cli.mjs download --all --types stems,midi,cover
 node agent\cli.mjs tidy-all
-node agent\cli.mjs favorites --dry-run   # 點讚／愛心歌的 WAV 母帶 → ai音樂\收藏\<歌名>.wav
+node agent\cli.mjs favorites --dry-run
 ```
 
-MCP（stdio）：`node <repo>\agent\mcp.mjs`，工具包含 `ace_overview`、`ace_list_songs`、`ace_download`、`ace_job_status`、`ace_organize`、`ace_warm`、`ace_hub_status` 等。
+**本機 MCP（stdio）**：`node <repo>\agent\mcp.mjs`
 
-### 官方 MCP 兜底（站點 session 失效時）
+主要工具：`ace_overview`、`ace_list_songs`、`ace_download`、`ace_job_status`、`ace_download_index`、`ace_organize`、`ace_warm`、`ace_locate`、`ace_player`、`ace_wait_new_song`、`ace_events`、`ace_favorites`、`ace_site_likes`、`ace_tidy`、`ace_backups`、`ace_masters`、`ace_probe`、`ace_hub_status`、`ace_generate`、`ace_generation_status`，以及 HuaiDJ 創作中樞的 `music_*`／`ace_create_*` 系列。
 
-站點登入（面板「同步 Agent」匯出的 cookie）失效時，能走的就改走 [官方遠端 MCP](https://acemusic.ai/mcp)：OAuth 2.1 授權一次，之後自動續約（token 存在 `<stateDir>\official-auth.json`）。
-
-```powershell
-node agent\cli.mjs official login      # 瀏覽器按一次同意
-node agent\cli.mjs official status     # 授權、方案、額度
-node agent\cli.mjs official list       # 不用瀏覽器 session 也能列歌
-node agent\cli.mjs official download --song so_xxx --format mp3
-```
-
-| 能力 | 站點 session | 官方 MCP | 兩邊都沒有時 |
-|---|---|---|---|
-| 歌單／單曲狀態 | ✅ | ✅（兜底） | 用頁面快照／舊快取，仍失敗才報錯 |
-| mp3／wav／midi | ✅ | ✅（兜底） | 該項失敗並記原因 |
-| 分軌（stems） | ✅ | ❌ | 明確標「需要站點 session」 |
-| MusicXML | ✅ | ❌ | 同上 |
-| 生成（v1.1） | ✅ | ✅（`official create`） | — |
-
-以 FLAC 儲存的歌，官方與站點都會回 FLAC，下載器會判定成 `WAV_UNSUPPORTED` 跳過（不會把 FLAC 存成 `.wav`）。官方通道可用 `ACE_OFFICIAL=0` 關閉。
-
-
-本機直接生成 v1.1：`ace_generate` 預設只預覽；實際提交需明確額度上限、防重送 key 與支援生成的 Hub。`ace_generation_status` 查詢音訊進度與實際模型。沿用已同步的本機登入，不使用第三方代理；參數與驗證邊界見 [直接生成說明](agent/DIRECT-GENERATION.md)。
-
-常駐 Hub（多 agent 共用、單一寫入者、job 佇列、SSE）：
+**常駐 Hub**（多 agent 共用、單一寫入者、job 佇列、SSE）：
 
 ```powershell
 node agent\cli.mjs hub --background   # http://127.0.0.1:8788
@@ -102,42 +97,190 @@ node agent\cli.mjs hub --stop
 
 設計與 API：[agent/HUB.md](agent/HUB.md)；Agent 詳細文件：[agent/README-AGENT.md](agent/README-AGENT.md)。
 
-## 開發
+### MCP：官方遠端兜底（站點 session 失效時）
+
+站點登入（面板「同步 Agent」匯出的 cookie）失效時，能走的改走 [官方遠端 MCP](https://acemusic.ai/mcp)：OAuth 2.1 授權一次，之後自動續約（token 在 `<stateDir>\official-auth.json`）。
+
+```powershell
+node agent\cli.mjs official login      # 瀏覽器按一次同意
+node agent\cli.mjs official status     # 授權、方案、額度
+node agent\cli.mjs official list       # 不用瀏覽器 session 也能列歌
+node agent\cli.mjs official download --song so_xxx --format mp3
+```
+
+| 能力 | 站點 session | 官方 MCP | 兩邊都沒有時 |
+| --- | --- | --- | --- |
+| 歌單／單曲狀態 | ✅ | ✅（兜底） | 用頁面快照／舊快取，仍失敗才報錯 |
+| mp3／wav／midi | ✅ | ✅（兜底） | 該項失敗並記原因 |
+| 分軌（stems） | ✅ | ❌ | 明確標「需要站點 session」 |
+| MusicXML | ✅ | ❌ | 同上 |
+| 生成（v1.1） | ✅ | ✅（`official create`） | — |
+
+官方通道可用 `ACE_OFFICIAL=0` 關閉。本機直接生成 v1.1：`ace_generate` 預設只預覽；實際提交需明確額度上限、防重送 key 與支援生成的 Hub；`ace_generation_status` 查詢實際模型與音訊進度。參數見 [agent/DIRECT-GENERATION.md](agent/DIRECT-GENERATION.md)。
+
+### 開發
 
 ```
 src/naming.js      命名純函式
 src/planner.js     下載清單純函式
 src/content.js     面板 UI／站點 API／排程
-naming/            命名爐頁面（引擎、分組、File System Access 套用改名）
+naming/            命名爐頁面
 src/background.js  service worker（chrome.downloads）
 agent/             CLI／MCP／Hub／watcher／音訊分析
 native/            native messaging host（C#，選用）
-mixdesk/           AI 電台混音台（獨立子系統）
 test/              單元測試＋Playwright e2e（mock 站）
 ```
 
 ```powershell
-npm i -D playwright          # e2e 需要（或設定 PLAYWRIGHT_PATH 指向既有安裝）
+npm i -D playwright          # 或設定 PLAYWRIGHT_PATH 指向既有安裝
 npm run test:unit
 npm run test:e2e             # 會開一個測試用 Chromium 視窗
 npm run pack                 # 產生 dist/ store 與完整包
 ```
 
-## 隱私
+### 隱私
 
-- 只在 `acemusic.ai` 頁面執行；只讀取自己的歌曲與登入 Cookie
-- 不連任何第三方伺服器、不外傳歌單或 Cookie（詳見 [PRIVACY.md](PRIVACY.md)）
+- 只在 `acemusic.ai` 頁面執行；只讀自己的歌曲與登入 Cookie
+- 不連第三方伺服器、不外傳歌單或 Cookie（見 [PRIVACY.md](PRIVACY.md)）
 - 設定與紀錄存在 `chrome.storage.local` 與 `%LOCALAPPDATA%\AceMusicDL\`
 
-## 授權
+### 授權
 
-[MIT](LICENSE)。本專案與 ACE Music／ACE Studio 無隸屬關係，為非官方工具；使用時請遵守站點服務條款。
+[MIT](LICENSE)。本專案與 ACE Music／ACE Studio 無隸屬關係，為非官方工具。
 
+---
 
+## English
 
-# 此分支：HuaiDJ 音樂 Agent
+### What it is
 
-復用既有 Hub 的自然語言工作台與完整 Create API 參數契約，三模型／Idea／Custom／Step／HD 控件均有條件驗證。預設只本機準備與唯讀報價，真實生成需獨立有限授權，未作音樂或演出驗收。
+A Chrome/Edge extension that adds a **batch download** panel to [acemusic.ai](https://acemusic.ai/create/): pick your own songs, choose file types, and download everything — then auto-rename and organize. Three ways to use it: the browser panel, an **MCP server** (local stdio, plus the official remote MCP as a fallback), and a **CLI + local Hub** for agents and scripts.
 
-[開啟工作台與上手](agent/MUSIC-AGENT.md) · [API 全參數與門禁](agent/CREATE-API.md)。沒有修改宿主 MCP 或部署原有服務。
+### Three ways to use it
 
+| Way | Entry point | Best for |
+| --- | --- | --- |
+| **① ACE website panel** | Chrome/Edge extension loaded unpacked from this repo | Hands-on work: select, download, tidy, naming furnace, player |
+| **② MCP** | Local `node agent\mcp.mjs` (stdio) + **official remote MCP fallback** (OAuth 2.1) | Claude / Codex / DSH agents calling tools |
+| **③ CLI + Hub** | `node agent\cli.mjs …`; resident Hub at `127.0.0.1:8788` | Scripts, schedules, shared async download jobs |
+
+### Highlights
+
+- **Batch download**: stems, MIDI, MusicXML, MP3, WAV and covers — one song or all songs
+- **Auto-naming / folders**: `<Song Title>/<Song Title> - Vocals.mp3`, `- MIDI.mid`, `- MusicXML.musicxml`
+- **No fake WAVs**: respects site capabilities and source audio; songs stored as FLAC are reported as `WAV_UNSUPPORTED` and skipped
+- **One-click tidy**: legacy files → MP3 output → WAV output → sample packs → file classification → content dedupe → empty-folder cleanup → audio classification (BPM/key/energy) → favorites → fingerprint stripping → liked songs (AI naming)
+- **Tidy never stacks**: repeated triggers collapse into one run plus at most one queued rerun (`tidy-run.lock` / `tidy-pending.json`)
+- **Favorites**: one lossless master per liked song, flattened as `ai音樂\收藏\<Song Title>.wav`
+- **Fingerprint stripping**: removes ACE metadata in place (WAV `LIST/INFO`, MP3 `TSSE`/`COMM`/`WOAS`), file length unchanged, `--restore` supported
+- **Resume-safe**: skips what already exists by comparing local files, download history and dedupe records
+- **Live sync + auto-download**: subscribes to the site push; new songs appear in ~50 ms
+- **New stems for existing songs**: downloads newly ready stems when auto-stem download is enabled (never purchases; MIDI/MusicXML only after score generation is authorized)
+- **Standalone player**: BPM/Camelot columns and filters, queue, M3U8 import/export, favorites, history, sleep timer, keyboard shortcuts, media keys
+- **Naming furnace**: bilingual naming device; variants of the same song share one name, apply-rename rebuilds the local index
+- **HuaiDJ creation hub**: music intent, versioned dictionary, prompt compilation, bounded generation, artifact recovery and human feedback (`music_*`, `ace_create_*`; paid generation is never submitted by default)
+
+### Latest: v1.10.1 (startup + Hub cache)
+
+- **Faster CLI startup**: the large Create/Music contracts are now imported on demand; `status --json` dropped from ~290 ms to **190–250 ms**
+- **Hub short-lived cache**: `/library` and `/download-index` reuse a result for 4 seconds; repeated panel polling went from 300–600 ms to **9–35 ms**. Any POST or new event invalidates immediately
+- Tests: **563/563** unit, **31/31** e2e
+
+Full history: [CHANGELOG.md](CHANGELOG.md).
+
+### Install
+
+**Option A: Chrome Web Store** (submission in progress)
+
+**Option B: Load unpacked (development)**
+
+1. Clone or download this repo
+2. Open `chrome://extensions` (Edge: `edge://extensions`)
+3. Enable **Developer mode**
+4. **Load unpacked** → select the **repo root** (the folder containing `manifest.json`)
+5. Open <https://acemusic.ai/create/>, sign in, and use the **Batch download** button at the bottom right
+
+> After updating, press **Reload** on `chrome://extensions` and refresh the site tab.
+> The full package ships `更新本機工具.cmd` to sync the local Hub/native host/player (backs up and verifies hashes first; never force-stops active downloads).
+
+### Usage
+
+1. Tick the file types in the panel (stems / MIDI / MusicXML / MP3 / covers), pick songs or select all
+2. Click **Download selected**; the panel shows the current file and done/skipped/failed counts
+3. Files land in `<downloadDir>\ai音樂\<Song Title>\` (default `%USERPROFILE%\Downloads`; set `"downloadDir": "D:\\"` in `<stateDir>\config.json` to use another drive — hardlink views are created on the same drive)
+
+### Agent access (CLI / MCP / Hub)
+
+```powershell
+# First click "Sync Agent" in the panel to export the session (%LOCALAPPDATA%\AceMusicDL\session.json)
+node agent\cli.mjs doctor
+node agent\cli.mjs list --undownloaded
+node agent\cli.mjs download --all --types stems,midi,cover
+node agent\cli.mjs tidy-all
+node agent\cli.mjs favorites --dry-run
+```
+
+**Local MCP (stdio)**: `node <repo>\agent\mcp.mjs`
+
+Main tools: `ace_overview`, `ace_list_songs`, `ace_download`, `ace_job_status`, `ace_download_index`, `ace_organize`, `ace_warm`, `ace_locate`, `ace_player`, `ace_wait_new_song`, `ace_events`, `ace_favorites`, `ace_site_likes`, `ace_tidy`, `ace_backups`, `ace_masters`, `ace_probe`, `ace_hub_status`, `ace_generate`, `ace_generation_status`, plus the `music_*` / `ace_create_*` creation-hub family.
+
+**Resident Hub** (shared by agents, single writer, job queue, SSE):
+
+```powershell
+node agent\cli.mjs hub --background   # http://127.0.0.1:8788
+node agent\cli.mjs hub --status
+node agent\cli.mjs hub --stop
+```
+
+Design and API: [agent/HUB.md](agent/HUB.md); agent docs: [agent/README-AGENT.md](agent/README-AGENT.md).
+
+### MCP: official remote fallback (when the site session is gone)
+
+When the exported site session expires, whatever can be served moves to the [official remote MCP](https://acemusic.ai/mcp): authorize once with OAuth 2.1, tokens refresh automatically (stored in `<stateDir>\official-auth.json`).
+
+```powershell
+node agent\cli.mjs official login      # approve once in the browser
+node agent\cli.mjs official status     # authorization, plan, credits
+node agent\cli.mjs official list       # list songs without a browser session
+node agent\cli.mjs official download --song so_xxx --format mp3
+```
+
+| Capability | Site session | Official MCP | Neither available |
+| --- | --- | --- | --- |
+| Song list / status | ✅ | ✅ (fallback) | page snapshot / old cache, then error |
+| mp3 / wav / midi | ✅ | ✅ (fallback) | that item fails with a reason |
+| Stems | ✅ | ❌ | reported as "site session required" |
+| MusicXML | ✅ | ❌ | same |
+| Generation (v1.1) | ✅ | ✅ (`official create`) | — |
+
+Disable the official channel with `ACE_OFFICIAL=0`. Local v1.1 generation: `ace_generate` previews by default; submission requires an explicit credit cap, an anti-resend key and a Hub that supports generation. See [agent/DIRECT-GENERATION.md](agent/DIRECT-GENERATION.md).
+
+### Development
+
+```
+src/naming.js      naming pure functions
+src/planner.js     download plan pure functions
+src/content.js     panel UI / site API / scheduling
+naming/            naming furnace page
+src/background.js  service worker (chrome.downloads)
+agent/             CLI / MCP / Hub / watcher / audio analysis
+native/            native messaging host (C#, optional)
+test/              unit tests + Playwright e2e (mock site)
+```
+
+```powershell
+npm i -D playwright          # or set PLAYWRIGHT_PATH to an existing install
+npm run test:unit
+npm run test:e2e             # opens a test Chromium window
+npm run pack                 # builds dist/ store and full packages
+```
+
+### Privacy
+
+- Runs only on `acemusic.ai` pages; reads only your own songs and session cookie
+- No third-party servers; no playlist or cookie upload (see [PRIVACY.md](PRIVACY.md))
+- Settings and logs live in `chrome.storage.local` and `%LOCALAPPDATA%\AceMusicDL\`
+
+### License
+
+[MIT](LICENSE). Not affiliated with ACE Music / ACE Studio; unofficial tool.
