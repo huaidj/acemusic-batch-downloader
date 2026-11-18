@@ -104,9 +104,25 @@ const EVENTS = [];
 const waiters = new Set();
 let lastPageEventAt = 0;
 let knownSongIds = null;
+
+/* 短效快取：面板常輪詢 /library、/download-index，重算一次要掃上千個檔。
+ * TTL 內直接回上次結果；任何 POST（下載／整理／改名…）或新事件都會清掉。 */
+const SHORT_MEMO = new Map();
+function memoGet(key, ttlMs, fn) {
+  const hit = SHORT_MEMO.get(key);
+  if (hit && Date.now() - hit.at < ttlMs) return Promise.resolve(hit.data);
+  return Promise.resolve(fn()).then((data) => {
+    SHORT_MEMO.set(key, { at: Date.now(), data });
+    return data;
+  });
+}
+function memoClear() {
+  SHORT_MEMO.clear();
+}
 function pushEvent(evt) {
   const event = { ...evt, at: Number(evt.at) || Date.now(), seq: (EVENTS.length ? EVENTS[EVENTS.length - 1].seq : 0) + 1 };
   EVENTS.push(event);
+  memoClear();
   if (EVENTS.length > 200) EVENTS.splice(0, EVENTS.length - 200);
   broadcast('event', event);
   for (const waiter of [...waiters]) {
@@ -543,6 +559,7 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
   if (!authorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
+  if (req.method === 'POST') memoClear();
   try {
     const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
     const pathname = url.pathname;
@@ -598,7 +615,9 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, result);
     }
     if (pathname === '/download-index' && req.method === 'GET') {
-      return json(res, 200, await ACE.localDownloadIndex(cfg, { root: url.searchParams.get('root') || 'ai音樂', full: url.searchParams.get('full') === '1' }));
+      const root = url.searchParams.get('root') || 'ai音樂';
+      const full = url.searchParams.get('full') === '1';
+      return json(res, 200, await memoGet(`dlidx:${root}:${full}`, 4000, () => ACE.localDownloadIndex(cfg, { root, full })));
     }
     if (pathname === '/player' && req.method === 'POST') return json(res, 200, await ACE.startPlayer(cfg));
 
@@ -645,7 +664,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/library' && req.method === 'GET') {
-      return json(res, 200, await ACE.libraryOverview(cfg, { withSizes: url.searchParams.get('sizes') === '1' }));
+      const withSizes = url.searchParams.get('sizes') === '1';
+      return json(res, 200, await memoGet(`library:${withSizes}`, 4000, () => ACE.libraryOverview(cfg, { withSizes })));
     }
 
     if (pathname === '/songs' && req.method === 'GET') {

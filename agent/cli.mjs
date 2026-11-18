@@ -7,8 +7,6 @@ import * as Official from './lib/official.mjs';
 import { config, readJson, writeJson, exists } from './lib/config.mjs';
 import { hubJson, hubRequest } from './lib/hubclient.mjs';
 import fs from 'node:fs/promises';
-import { MUSIC_CONTRACT, validateMusicInput } from './lib/music-contract.mjs';
-import { CREATE_CONTRACT } from './lib/create-tools.mjs';
 
 let hubSkipUntil = 0;
 
@@ -23,7 +21,7 @@ async function hubTry(pathname, { method = 'GET', body, timeoutMs = 1200 } = {})
     }
 }
 function usage() {
-    console.log(`ACE Music 批量下載器 CLI  v1.10.0
+    console.log(`ACE Music 批量下載器 CLI  v1.10.1
 
 用法：
   node cli.mjs create capabilities            Create 頁面完整 API 參數契約
@@ -200,6 +198,7 @@ async function main() {
 
     if (cmd === 'create') {
         const action = args._[0] || 'capabilities';
+        const { CREATE_CONTRACT } = await import('./lib/create-tools.mjs');
         const route = CREATE_CONTRACT.find(item => item.action === action);
         if (!route) throw new Error('未知 Create API 操作。');
         const input = args.flags.input ? JSON.parse(await fs.readFile(String(args.flags.input), 'utf8')) : {};
@@ -211,6 +210,7 @@ async function main() {
 
     if (cmd === 'music') {
         const action = args._[0] || 'capabilities';
+        const { MUSIC_CONTRACT, validateMusicInput } = await import('./lib/music-contract.mjs');
         const contract = MUSIC_CONTRACT.find(item => item.action === action || item.name === action);
         if (!contract) throw new Error('未知音樂操作；可用：' + MUSIC_CONTRACT.map(item => item.action).join(', '));
         const input = args.flags.input ? JSON.parse(await fs.readFile(String(args.flags.input), 'utf8')) : {};

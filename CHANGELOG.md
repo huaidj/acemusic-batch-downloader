@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.1 — 2026-11-18（啟動與面板更省時）
+
+- CLI 啟動：create／music 的兩份大契約（Create API、Music Agent）改為按需載入；一般命令（status／library／download／doctor…）不再為它們付啟動成本，實測 status --json 由約 290 ms 降到 190–250 ms。
+- Hub 短效快取：/library、/download-index 4 秒內重複請求直接回上次結果；面板輪詢時不用每次重掃上千個檔案。任何 POST（下載／整理／改名／去重）或新事件都會立即清快取，資料不會過期太久。
+- 版本字串同步：CLI／MCP server 版本 1.10.1。
+
 ## 1.10.0 — 2026-11-18（官方遠端 MCP 兜底：session 失效也能列歌／下載 mp3-wav-midi）
 
 - 新增官方通道 `agent/lib/official.mjs`：接 [acemusic.ai 官方 MCP](https://acemusic.ai/mcp)（Streamable HTTP + OAuth 2.1）。用 Dynamic Client Registration + PKCE S256 + 127.0.0.1 回呼取得授權，token 存 `<stateDir>\official-auth.json`（只存本機），access token 快到期時用 refresh_token 自動續約，不需要盯著重登。
